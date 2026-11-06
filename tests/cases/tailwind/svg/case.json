@@ -1,0 +1,9 @@
+{
+  "spec": "crates/valle-engine/src/style/tailwind.rs",
+  "assertion": "SVG with classes: fills and strokes of the palette, at an opacity, written, of the text color and none; stroke widths; opacity on shapes and groups; paint on a group its shapes inherit and shapes that put it back; and an <svg> sized, turned, shadowed and rounded by classes.",
+  "at": [0.0],
+  "valle": {
+    "reason": "Restored product regression PNGs from the verified 2026-11-05 backup and its base commit 5d1fb918; resource paths adapted without changing the expected pixels.",
+    "maxDifference": 1
+  }
+}

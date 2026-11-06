@@ -1,0 +1,32 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/svg/stroke-caps-joins/inline/scene.html": "810c807cf16a275fc23e22e535084312fdf338c13428ad5fedf7998ad7af1f32"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "drawing",
+        "border": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "padding": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "content": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        }
+      }
+    ],
+    "lines": []
+  }
+}

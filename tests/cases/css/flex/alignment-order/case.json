@@ -1,0 +1,74 @@
+{
+  "spec": "https://www.w3.org/TR/css-flexbox-1/#justify-content-property",
+  "assertion": "Order rearranges items to widths 60/80/40; 120px remaining width forms two 60px gaps. align-self overrides the centered cross-axis alignment.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed against the cited rule and all three browser captures. Explicit box expectations agree in all three where present; the Chrome image matches Valle exactly, so pixel comparison remains exact."
+  },
+  "layout": [
+    {
+      "key": "row/first",
+      "border": {
+        "x": 20,
+        "y": 50,
+        "width": 60,
+        "height": 60
+      },
+      "padding": {
+        "x": 20,
+        "y": 50,
+        "width": 60,
+        "height": 60
+      },
+      "content": {
+        "x": 20,
+        "y": 50,
+        "width": 60,
+        "height": 60
+      }
+    },
+    {
+      "key": "row/middle",
+      "border": {
+        "x": 140,
+        "y": 60,
+        "width": 80,
+        "height": 80
+      },
+      "padding": {
+        "x": 140,
+        "y": 60,
+        "width": 80,
+        "height": 80
+      },
+      "content": {
+        "x": 140,
+        "y": 60,
+        "width": 80,
+        "height": 80
+      }
+    },
+    {
+      "key": "row/last",
+      "border": {
+        "x": 280,
+        "y": 60,
+        "width": 40,
+        "height": 40
+      },
+      "padding": {
+        "x": 280,
+        "y": 60,
+        "width": 40,
+        "height": 40
+      },
+      "content": {
+        "x": 280,
+        "y": 60,
+        "width": 40,
+        "height": 40
+      }
+    }
+  ]
+}

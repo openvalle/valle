@@ -1,0 +1,57 @@
+{
+  "spec": "https://www.w3.org/TR/css-text-3/#spacing",
+  "assertion": "Letter spacing adds 2px per glyph slot and word spacing adds 4px to the preserved space. The 20px indent applies to the first line only.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed the first-line 20px indent, 2px letter spacing and 4px additional word spacing in all three captures. Chrome agrees with the independent line positions; WebKit has a 0.281px baseline offset. The 964 differences against Chrome are confined to glyph contours; every pixel outside the contour mask remains exact.",
+    "textEdges": {
+      "key": "text",
+      "pixels": {
+        "maxDifference": 110,
+        "maxPixels": 1000
+      }
+    }
+  },
+  "layout": [
+    {
+      "key": "text",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 260,
+        "height": 110
+      },
+      "padding": {
+        "x": 20,
+        "y": 20,
+        "width": 260,
+        "height": 110
+      },
+      "content": {
+        "x": 24,
+        "y": 24,
+        "width": 252,
+        "height": 102
+      }
+    }
+  ],
+  "lines": [
+    {
+      "key": "text",
+      "text": ["MM MM", "MM"],
+      "geometry": [
+        {
+          "x": 44,
+          "baseline": 49,
+          "height": 32
+        },
+        {
+          "x": 24,
+          "baseline": 81,
+          "height": 32
+        }
+      ]
+    }
+  ]
+}

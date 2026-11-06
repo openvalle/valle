@@ -1,0 +1,10 @@
+{
+  "size": [360, 180],
+  "sources": {
+    "tests/baselines/browser/css/color/srgb-alpha/scene.html": "1bd6749b44063a54e96840201c9681c5302264751027b3c53e5db1a8c17076f2"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

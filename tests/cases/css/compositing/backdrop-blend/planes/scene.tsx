@@ -1,0 +1,114 @@
+export const composition = { width: 500, height: 180, fps: 1, duration: 1 };
+
+export default function Scene() {
+  return (
+    <View style={{ position: "relative", width: 500, height: 180, backgroundColor: "white" }}>
+      <View
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          width: 500,
+          height: 180,
+          backgroundColor: "#4080c0",
+        }}
+      />
+      <View
+        style={{
+          position: "absolute",
+          left: 20,
+          top: 20,
+          width: 140,
+          height: 140,
+          backgroundColor: "rgb(255 128 0 / 50%)",
+          backdropFilter: "invert(1)",
+          mixBlendMode: "multiply",
+        }}
+      >
+        <View
+          style={{
+            position: "absolute",
+            left: 30,
+            top: 30,
+            width: 80,
+            height: 70,
+            backgroundColor: "#00ff80",
+          }}
+        />
+      </View>
+      <View
+        style={{
+          position: "absolute",
+          left: 180,
+          top: 20,
+          width: 140,
+          height: 140,
+          backgroundColor: "transparent",
+          transformStyle: "preserve-3d",
+        }}
+      >
+        <View
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: 140,
+            height: 140,
+            backgroundColor: "rgb(255 128 0 / 50%)",
+            backdropFilter: "invert(1)",
+            mixBlendMode: "multiply",
+            transform: "translateZ(1px)",
+          }}
+        >
+          <View
+            style={{
+              position: "absolute",
+              left: 30,
+              top: 30,
+              width: 80,
+              height: 70,
+              backgroundColor: "#00ff80",
+            }}
+          />
+        </View>
+      </View>
+      <View
+        style={{
+          position: "absolute",
+          left: 340,
+          top: 20,
+          width: 140,
+          height: 140,
+          backgroundColor: "transparent",
+          transformStyle: "preserve-3d",
+        }}
+      >
+        <View
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: 140,
+            height: 140,
+            backgroundColor: "rgb(255 128 0 / 50%)",
+            backdropFilter: "invert(1)",
+            mixBlendMode: "multiply",
+            transform: "translateZ(1px)",
+            opacity: 0.5,
+          }}
+        >
+          <View
+            style={{
+              position: "absolute",
+              left: 30,
+              top: 30,
+              width: 80,
+              height: 70,
+              backgroundColor: "#00ff80",
+            }}
+          />
+        </View>
+      </View>
+    </View>
+  );
+}

@@ -1,0 +1,60 @@
+{
+  "canvas": { "width": 320, "height": 180, "fps": 4, "background": "#1e293b" },
+  "resources": { "pop": "/tests/resources/timeline/pop.motion.tsx" },
+  "tracks": {
+    "visual": [
+      {
+        "clips": [
+          {
+            "kind": "solid",
+            "color": "#0f766e",
+            "start": 0,
+            "duration": 2.5,
+            "size": [320, 90],
+            "position": [160, 45]
+          }
+        ]
+      }
+    ],
+    "caption": [
+      {
+        "id": "C1",
+        "style": {
+          "fontSize": 20,
+          "margin": 12,
+          "maxWidth": 280,
+          "animation": "karaoke",
+          "highlight": "#facc15",
+          "strokeWidth": 1,
+          "transition": 0.25
+        },
+        "clips": [
+          {
+            "start": 0,
+            "duration": 1.25,
+            "runs": [
+              { "text": "Every ", "start": 0, "end": 0.4 },
+              { "text": "word ", "start": 0.4, "end": 0.8 },
+              { "text": "lights", "start": 0.8, "end": 1.25 }
+            ]
+          },
+          { "start": 1.25, "duration": 1.25, "text": "Two lines\nof text" }
+        ]
+      },
+      {
+        "id": "C2",
+        "presenter": { "component": "pop", "props": { "accent": "#a855f7" } },
+        "clips": [
+          {
+            "start": 0.5,
+            "duration": 1.75,
+            "runs": [
+              { "text": "pop", "start": 0, "end": 0.75 },
+              { "text": "goes", "start": 0.75, "end": 1.5 }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/css/shadow/outer-inset/scene.html": "9ff90eaa727e2e383684954bad85663e4b3908390d3c793b8999f1183f6a167e"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

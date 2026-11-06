@@ -1,0 +1,32 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/coords.html#PreserveAspectRatioAttribute",
+  "assertion": "A symbol viewBox with meet letterboxes the 2:1 drawing inside a square use viewport. A surrounding group clips the second instance in outer user space and applies opacity after clipping.",
+  "at": [0],
+  "browser": {
+    "selected": "webkit",
+    "reason": "Reviewed clip boundaries, visible child regions and the half-opacity control in all three engines. Geometry agrees; Chrome and Firefox differ from Valle only by one output channel level in translucent regions. WebKit matches exactly, so no pixel allowance is needed."
+  },
+  "layout": [
+    {
+      "key": "drawing",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      }
+    }
+  ]
+}

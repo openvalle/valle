@@ -1,0 +1,116 @@
+{
+  "size": [320, 200],
+  "sources": {
+    "tests/baselines/browser/css/flex/wrap-gap/scene.html": "933c8980545c4d5e7ef55b1dc705c7b7d358d91a698142d89fbd82e21aa8fe86"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "wrap",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 220,
+          "height": 160
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 220,
+          "height": 160
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 220,
+          "height": 160
+        }
+      },
+      {
+        "key": "wrap/0",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 100,
+          "height": 40
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 100,
+          "height": 40
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 100,
+          "height": 40
+        }
+      },
+      {
+        "key": "wrap/1",
+        "border": {
+          "x": 140,
+          "y": 20,
+          "width": 100,
+          "height": 40
+        },
+        "padding": {
+          "x": 140,
+          "y": 20,
+          "width": 100,
+          "height": 40
+        },
+        "content": {
+          "x": 140,
+          "y": 20,
+          "width": 100,
+          "height": 40
+        }
+      },
+      {
+        "key": "wrap/2",
+        "border": {
+          "x": 20,
+          "y": 72,
+          "width": 100,
+          "height": 40
+        },
+        "padding": {
+          "x": 20,
+          "y": 72,
+          "width": 100,
+          "height": 40
+        },
+        "content": {
+          "x": 20,
+          "y": 72,
+          "width": 100,
+          "height": 40
+        }
+      },
+      {
+        "key": "wrap/3",
+        "border": {
+          "x": 140,
+          "y": 72,
+          "width": 100,
+          "height": 40
+        },
+        "padding": {
+          "x": 140,
+          "y": 72,
+          "width": 100,
+          "height": 40
+        },
+        "content": {
+          "x": 140,
+          "y": 72,
+          "width": 100,
+          "height": 40
+        }
+      }
+    ],
+    "lines": []
+  }
+}

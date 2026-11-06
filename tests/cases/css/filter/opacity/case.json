@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/filter-effects-1/#FilterProperty",
+  "assertion": "Children composite before their parent invert filter and group opacity. A translucent child changes the overlap before filtering, rather than applying parent opacity twice.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed the paired controls, all three browser captures and Valle difference images. Chrome matches the stated geometry, ordering and colors exactly. Keep an exact baseline; the Firefox filter-opacity control has up to two levels of compositing rounding difference."
+  }
+}

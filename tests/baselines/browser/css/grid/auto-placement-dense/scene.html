@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/grid/auto-placement-dense</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 500px;
+      height: 160px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <div style="position: relative; width: 500px; height: 160px; background-color: white">
+      <div
+        data-key="sparse"
+        style="
+          position: absolute;
+          left: 20px;
+          top: 20px;
+          width: 200px;
+          height: 120px;
+          background-color: #eef2f7;
+          display: grid;
+          grid-template-columns: repeat(3, 60px);
+          grid-auto-rows: 40px;
+          grid-auto-flow: row;
+          gap: 10px;
+        "
+      >
+        <div data-key="sparse/first" style="grid-column: span 2; background-color: #176bba"></div>
+        <div data-key="sparse/second" style="grid-column: span 2; background-color: #16a085"></div>
+        <div data-key="sparse/small" style="background-color: #ffb74d"></div>
+      </div>
+      <div
+        data-key="dense"
+        style="
+          position: absolute;
+          left: 270px;
+          top: 20px;
+          width: 200px;
+          height: 120px;
+          background-color: #eef2f7;
+          display: grid;
+          grid-template-columns: repeat(3, 60px);
+          grid-auto-rows: 40px;
+          grid-auto-flow: row dense;
+          gap: 10px;
+        "
+      >
+        <div data-key="dense/first" style="grid-column: span 2; background-color: #176bba"></div>
+        <div data-key="dense/second" style="grid-column: span 2; background-color: #16a085"></div>
+        <div data-key="dense/small" style="background-color: #ffb74d"></div>
+      </div>
+    </div>
+  </div>
+</html>

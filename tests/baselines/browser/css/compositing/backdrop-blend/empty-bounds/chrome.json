@@ -1,0 +1,10 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/css/compositing/backdrop-blend/empty-bounds/scene.html": "49977f1382b3117a9d747cfd8dab299c2c56b461ecd0fdae40c2c9c7cb1da008"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

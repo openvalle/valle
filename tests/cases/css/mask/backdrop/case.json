@@ -1,0 +1,9 @@
+{
+  "spec": "https://drafts.csswg.org/filter-effects-2/#BackdropFilterProperty",
+  "assertion": "A clip and binary alpha mask limit both the filtered backdrop and foreground content; the control at half opacity reveals the unfiltered page beneath.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed clipped/masked bounds and both opacity controls. Chrome and Valle agree exactly. Current Firefox/WebKit captures omit the backdrop inversion even in the isolated backdrop-controls case, so they are retained diagnostically, not used as this property baseline."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/css-images-3/#gradients",
+  "assertion": "Continuous, hard-stop, repeating and radial gradients preserve stop positions and sRGB interpolation.",
+  "at": [0],
+  "browser": {
+    "selected": "firefox",
+    "reason": "The three browser images agree on stop placement and shape. Only 8-bit gradient quantization differs; Firefox permits the tightest one-level comparison.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 1000
+    }
+  }
+}

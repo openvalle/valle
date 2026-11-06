@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/flex/percentage-basis</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 380px;
+      height: 240px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <div style="position: relative; width: 380px; height: 240px; background-color: white">
+      <div
+        data-key="row0"
+        style="
+          position: absolute;
+          left: 20px;
+          top: 20px;
+          width: 320px;
+          height: 80px;
+          background-color: #eef2f7;
+          display: flex;
+          padding: 10px;
+          gap: 20px;
+        "
+      >
+        <div
+          data-key="row0/item0"
+          style="flex-basis: 50%; flex-shrink: 1; height: 60px; background-color: #176bba"
+        ></div>
+        <div
+          data-key="row0/item1"
+          style="flex-basis: 50%; flex-shrink: 1; height: 60px; background-color: #16a085"
+        ></div>
+      </div>
+      <div
+        data-key="row1"
+        style="
+          position: absolute;
+          left: 20px;
+          top: 130px;
+          width: 320px;
+          height: 80px;
+          background-color: #eef2f7;
+          display: flex;
+          padding: 10px;
+          gap: 20px;
+        "
+      >
+        <div
+          data-key="row1/item0"
+          style="flex-basis: 50%; flex-shrink: 0; height: 60px; background-color: #176bba"
+        ></div>
+        <div
+          data-key="row1/item1"
+          style="flex-basis: 50%; flex-shrink: 0; height: 60px; background-color: #16a085"
+        ></div>
+      </div>
+    </div>
+  </div>
+</html>

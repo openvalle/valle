@@ -1,0 +1,13 @@
+{
+  "spec": "https://drafts.csswg.org/filter-effects-2/#BackdropFilterProperty",
+  "assertion": "Isolated controls for the backdrop/blend combination: invert alone filters the page before normal source-over content, while multiply alone blends foreground content with the original page.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed invert-only and multiply-only controls. Chrome shows both effects; Valle differs by only one output channel level in the translucent invert-only background (16000 pixels). Firefox/WebKit omit the backdrop inversion in this environment even without blending; see the backdrop-blend case README.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 16000
+    }
+  }
+}

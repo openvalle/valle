@@ -1,0 +1,32 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/svg/gradient-coordinates/inline/scene.html": "d6e06bc20e01d7eb09b4ff83fd414471d3f77995edea188ae433e3273579018d"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "drawing",
+        "border": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "padding": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "content": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        }
+      }
+    ],
+    "lines": []
+  }
+}

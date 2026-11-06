@@ -1,81 +1,54 @@
-//! d3 baselines: what d3 of `package.json` gives for each check of `tests/cases/d3/checks.js`,
-//! kept as `tests/baselines/d3/checks.json`. `web/tests/d3.ts` runs them when they are missing or
-//! out of date, which CI never does. The case `d3/checks` runs the same checks on the built-in
-//! charts and holds each result to d3's: numbers, and the numbers in text such as path data,
-//! within a rounding of the last digit d3 writes.
-
-use std::collections::BTreeMap;
-use std::path::Path;
+//! Compare Valle chart helpers with recorded results from the pinned official D3.
 
 use indoc::indoc;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
+use std::path::Path;
 use valle_engine::front::{Front, Inputs};
 use valle_engine::template::{Kind, Piece, Prop, V};
 use valle_engine::time::Tick;
 
-use crate::chrome;
-
-pub const CASE: &str = "d3/checks";
-
 /// A scene that runs the checks and writes their results as JSON text.
 const SCENE: &str = indoc! {r#"
-    import { checks } from "./checks.js";
+    import { cases } from "./cases.ts";
 
     export const composition = { width: 8, height: 8, fps: 1, duration: 1 };
 
     export default function Scene() {
       const results = {};
-      for (const name of Object.keys(checks)) results[name] = checks[name]();
+      for (const name of Object.keys(cases)) results[name] = cases[name]();
       return <Text>{JSON.stringify(results)}</Text>;
     }
 "#};
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 struct Baseline {
     d3: String,
     /// The checks the results are of.
-    source: String,
+    source_sha256: String,
     results: BTreeMap<String, Value>,
 }
 
-/// What `web/tests/d3.ts` writes.
-#[derive(Deserialize)]
-struct Ran {
-    d3: String,
-    results: BTreeMap<String, Value>,
-}
-
-/// The d3 version `package.json` pins.
-fn version(repo: &Path) -> Result<String, String> {
-    let path = repo.join("package.json");
-    let bad = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
-    let text = std::fs::read_to_string(&path).map_err(|e| bad(&e))?;
-    let json: Value = serde_json::from_str(&text).map_err(|e| bad(&e))?;
-    (json["devDependencies"]["d3"].as_str())
-        .map(str::to_string)
-        .ok_or_else(|| bad(&"no devDependencies.d3"))
-}
-
-/// Holds the built-in charts to the baselines, made first when they are missing or out of date.
-pub fn case(repo: &Path, ci: bool) -> Result<(), String> {
-    let checks = repo.join("tests/cases/d3/checks.js");
+pub fn check(repo: &Path) -> Result<usize, String> {
     let source =
-        std::fs::read_to_string(&checks).map_err(|e| format!("{}: {e}", checks.display()))?;
-    let path = repo.join("tests/baselines/d3/checks.json");
-    let version = version(repo)?;
-    let baseline = match chrome::read::<Baseline>(&path)? {
-        Some(b) if b.d3 == version && b.source == source => b,
-        _ if ci => {
-            return Err(format!(
-                "the d3 {version} baselines are missing or out of date, and CI never makes them: \
-                 `cargo xtask test` makes them on a machine that can run bun"
-            ));
-        }
-        _ => make(repo, &version, &source, &path)?,
-    };
+        std::fs::read_to_string(repo.join("tests/cases/d3/cases.ts")).map_err(|e| e.to_string())?;
+    let bytes =
+        std::fs::read(repo.join("tests/baselines/d3/results.json")).map_err(|e| e.to_string())?;
+    let baseline: Baseline = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if baseline.d3 != crate::version(repo, "d3")?
+        || baseline.source_sha256 != crate::browser::sha256(source.as_bytes())
+    {
+        return Err(
+            "D3 baseline is stale; generate and review candidates with bun tests/tools/d3.ts"
+                .into(),
+        );
+    }
     let ours = run(repo, &source)?;
     let mut problems = Vec::new();
+    if !ours.keys().eq(baseline.results.keys()) {
+        problems.push("D3 result names differ from the expected set".into());
+    }
     for (name, theirs) in &baseline.results {
         match ours.get(name) {
             None => problems.push(format!("{name}: no result")),
@@ -87,43 +60,9 @@ pub fn case(repo: &Path, ci: bool) -> Result<(), String> {
         }
     }
     match problems.is_empty() {
-        true => Ok(()),
+        true => Ok(baseline.results.len()),
         false => Err(problems.join("\n")),
     }
-}
-
-/// Runs the checks with d3 through `web/tests/d3.ts`, and keeps the results.
-fn make(repo: &Path, version: &str, source: &str, path: &Path) -> Result<Baseline, String> {
-    let out = repo.join("target/d3/results.json");
-    let dir = out.parent().expect("a file in a folder");
-    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    println!("\nrunning the checks with d3 {version}");
-    let checks = repo.join("tests/cases/d3/checks.js");
-    crate::bun(
-        repo,
-        &[
-            "web/tests/d3.ts".as_ref(),
-            checks.as_os_str(),
-            out.as_os_str(),
-        ],
-    )?;
-    let ran = chrome::read::<Ran>(&out)?.ok_or("web/tests/d3.ts wrote nothing")?;
-    if ran.d3 != version {
-        return Err(format!(
-            "package.json pins d3 {version}, and {} is installed",
-            ran.d3
-        ));
-    }
-    let baseline = Baseline {
-        d3: ran.d3,
-        source: source.to_string(),
-        results: ran.results,
-    };
-    let text = serde_json::to_string_pretty(&baseline).map_err(|e| e.to_string())? + "\n";
-    let dir = path.parent().expect("a file in a folder");
-    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(baseline)
 }
 
 /// The checks' results on the built-in charts.
@@ -131,7 +70,7 @@ fn run(repo: &Path, source: &str) -> Result<BTreeMap<String, Value>, String> {
     let root = repo.join("tests/cases");
     let read = |p: &str| match p {
         "d3/run.tsx" => Some(SCENE.to_string()),
-        "d3/checks.js" => Some(source.to_string()),
+        "d3/cases.ts" => Some(source.to_string()),
         _ => std::fs::read_to_string(root.join(p)).ok(),
     };
     let mut front = Front::load("d3/run.tsx", &read, &Inputs::default())?;

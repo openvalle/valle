@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <title>ViewBox, normalized dashes and evenodd fill</title>
+  <style>
+    body {
+      margin: 0;
+    }
+    #canvas {
+      position: relative;
+      width: 340px;
+      height: 260px;
+      background: white;
+    }
+    svg {
+      position: absolute;
+      left: 20px;
+      top: 20px;
+      width: 240px;
+      height: 120px;
+    }
+    .variant {
+      top: 180px;
+      width: 60px;
+      height: 60px;
+      background: #eef2f7;
+      overflow: hidden;
+    }
+  </style>
+  <div id="canvas">
+    <svg data-key="drawing" viewBox="0 0 120 60">
+      <rect width="120" height="60" fill="#eef2f7" />
+      <path
+        d="M10 16H110"
+        pathLength="10"
+        stroke="#176bba"
+        stroke-width="4"
+        stroke-dasharray="1 1"
+      />
+      <g transform="translate(10 32)">
+        <path d="M0 0H100V16H0Z M10 4H90V12H10Z" fill="#16a085" fill-rule="evenodd" />
+      </g>
+    </svg>
+    <svg
+      class="variant"
+      data-key="meet-center"
+      style="left: 20px"
+      viewBox="0 0 40 20"
+      preserveAspectRatio="xMidYMid meet"
+    >
+      <rect width="40" height="20" fill="#176bba" />
+      <rect x="8" y="4" width="24" height="12" fill="#ffb74d" />
+    </svg>
+    <svg
+      class="variant"
+      data-key="slice"
+      style="left: 100px"
+      viewBox="0 0 40 20"
+      preserveAspectRatio="xMinYMin slice"
+    >
+      <rect width="40" height="20" fill="#176bba" />
+      <rect x="8" y="4" width="24" height="12" fill="#ffb74d" />
+    </svg>
+    <svg
+      class="variant"
+      data-key="stretch"
+      style="left: 180px"
+      viewBox="0 0 40 20"
+      preserveAspectRatio="none"
+    >
+      <rect width="40" height="20" fill="#176bba" />
+      <rect x="8" y="4" width="24" height="12" fill="#ffb74d" />
+    </svg>
+    <svg
+      class="variant"
+      data-key="meet-end"
+      style="left: 260px"
+      viewBox="0 0 40 20"
+      preserveAspectRatio="xMaxYMax meet"
+    >
+      <rect width="40" height="20" fill="#176bba" />
+      <rect x="8" y="4" width="24" height="12" fill="#ffb74d" />
+    </svg>
+  </div>
+</html>

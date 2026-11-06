@@ -1,0 +1,14 @@
+{
+  "capturedAt": "2026-11-06T06:38:05.036Z",
+  "platform": "darwin",
+  "arch": "arm64",
+  "os": "27.0.0",
+  "playwright": "1.65.0",
+  "deviceScaleFactor": 1,
+  "colorScheme": "light",
+  "browsers": {
+    "chrome": "156.0.8078.80",
+    "firefox": "159.0",
+    "webkit": "27.2"
+  }
+}

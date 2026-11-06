@@ -1,0 +1,53 @@
+{
+  "spec": "https://www.w3.org/TR/css-sizing-3/#box-sizing",
+  "assertion": "The 120x100 border box includes 8px of border and 20px of padding; the 80x60 content box expands to 108x88.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed against the cited rule and all three browser captures. Explicit box expectations agree in all three where present; the Chrome image matches Valle exactly, so pixel comparison remains exact."
+  },
+  "layout": [
+    {
+      "key": "border",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 120,
+        "height": 100
+      },
+      "padding": {
+        "x": 24,
+        "y": 24,
+        "width": 112,
+        "height": 92
+      },
+      "content": {
+        "x": 34,
+        "y": 34,
+        "width": 92,
+        "height": 72
+      }
+    },
+    {
+      "key": "content",
+      "border": {
+        "x": 170,
+        "y": 20,
+        "width": 108,
+        "height": 88
+      },
+      "padding": {
+        "x": 174,
+        "y": 24,
+        "width": 100,
+        "height": 80
+      },
+      "content": {
+        "x": 184,
+        "y": 34,
+        "width": 80,
+        "height": 60
+      }
+    }
+  ]
+}

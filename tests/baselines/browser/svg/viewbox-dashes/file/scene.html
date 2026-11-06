@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <title>SVG files: viewBox, normalized dashes and evenodd fill</title>
+  <style>
+    body {
+      margin: 0;
+    }
+    #canvas {
+      position: relative;
+      width: 340px;
+      height: 260px;
+      background: white;
+    }
+    img {
+      position: absolute;
+      left: 20px;
+      top: 20px;
+      width: 240px;
+      height: 120px;
+    }
+    .variant {
+      top: 180px;
+      width: 60px;
+      height: 60px;
+      background: #eef2f7;
+    }
+  </style>
+  <div id="canvas">
+    <img data-key="drawing" src="/tests/cases/svg/viewbox-dashes/file/source.svg" />
+    <img
+      class="variant"
+      data-key="meet-center"
+      style="left: 20px"
+      src="/tests/cases/svg/viewbox-dashes/file/meet-center.svg"
+    />
+    <img
+      class="variant"
+      data-key="slice"
+      style="left: 100px"
+      src="/tests/cases/svg/viewbox-dashes/file/slice.svg"
+    />
+    <img
+      class="variant"
+      data-key="stretch"
+      style="left: 180px"
+      src="/tests/cases/svg/viewbox-dashes/file/stretch.svg"
+    />
+    <img
+      class="variant"
+      data-key="meet-end"
+      style="left: 260px"
+      src="/tests/cases/svg/viewbox-dashes/file/meet-end.svg"
+    />
+  </div>
+</html>

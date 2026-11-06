@@ -1,0 +1,10 @@
+{
+  "size": [360, 220],
+  "sources": {
+    "tests/baselines/browser/css/background/gradients/scene.html": "70a6ddaafaec281095cf880c31716e2542f5c4a89330cb4e41f9bd910e477247"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "spec": "https://www.w3.org/TR/css-text-3/#overflow-wrap-property",
+  "assertion": "overflow-wrap:anywhere breaks an otherwise unbreakable word into two four-glyph lines inside a 100px content width.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed the two four-glyph lines in all three browsers. Chrome and Firefox agree exactly with independent line positions; WebKit has a 0.281px baseline offset. Differences against Chrome are glyph rasterization: 1244 contour pixels and two pixels inside M diagonals differing by 5/255. Only those two low-delta pixels are allowed outside the contour.",
+    "textEdges": {
+      "key": "text",
+      "pixels": {
+        "maxDifference": 110,
+        "maxPixels": 1300
+      }
+    },
+    "pixels": {
+      "maxDifference": 5,
+      "maxPixels": 2
+    }
+  },
+  "layout": [
+    {
+      "key": "text",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 108,
+        "height": 108
+      },
+      "padding": {
+        "x": 20,
+        "y": 20,
+        "width": 108,
+        "height": 108
+      },
+      "content": {
+        "x": 24,
+        "y": 24,
+        "width": 100,
+        "height": 100
+      }
+    }
+  ],
+  "lines": [
+    {
+      "key": "text",
+      "text": ["MMMM", "MMMM"],
+      "geometry": [
+        {
+          "x": 24,
+          "baseline": 49,
+          "height": 32
+        },
+        {
+          "x": 24,
+          "baseline": 81,
+          "height": 32
+        }
+      ]
+    }
+  ]
+}

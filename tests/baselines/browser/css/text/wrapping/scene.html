@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/text/wrapping</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 180px;
+      height: 180px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <div style="position: relative; width: 180px; height: 180px; background-color: white">
+      <!-- prettier-ignore -->
+      <div data-key="text" style="position: absolute; left: 20px; top: 20px; width: 100px; height: 120px; background-color: #f4f7fa; font-family: &quot;Test Sans&quot;; font-size: 24px; line-height: 32px; color: #17324d; word-break: break-all" data-text="">MMMMMMMMMMMM</div>
+    </div>
+  </div>
+</html>

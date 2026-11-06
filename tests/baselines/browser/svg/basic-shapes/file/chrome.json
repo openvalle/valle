@@ -1,0 +1,33 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/svg/basic-shapes/file/scene.html": "fa635252d27f7d7264008000f3ef3392792fcdbdff5b2d6068f62361cbd9fa75",
+    "tests/cases/svg/basic-shapes/file/source.svg": "5ff82b066000e8f0caafd9a2b626d7e7668c64eea68c7639419f2bc86e6e30fd"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "drawing",
+        "border": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "padding": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "content": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        }
+      }
+    ],
+    "lines": []
+  }
+}

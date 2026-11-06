@@ -1,0 +1,36 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/painting.html",
+  "assertion": "Butt caps end at the endpoint, round/square extend half a stroke width; miter, round and bevel joins differ at the vertex.",
+  "at": [0],
+  "browser": {
+    "selected": "webkit",
+    "reason": "Reviewed endpoint extents, round/square caps and the three join silhouettes. Only edge coverage differs; WebKit permits the lowest maximum-channel allowance.",
+    "pixels": {
+      "maxDifference": 40,
+      "maxPixels": 850
+    }
+  },
+  "layout": [
+    {
+      "key": "drawing",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      }
+    }
+  ]
+}

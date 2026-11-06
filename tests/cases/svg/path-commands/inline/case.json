@@ -1,0 +1,36 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/paths.html",
+  "assertion": "Relative lines/close, quadratic and smooth quadratic, cubic and smooth cubic, and elliptical arcs render as separate paths.",
+  "at": [0],
+  "browser": {
+    "selected": "webkit",
+    "reason": "Reviewed each curve, smooth continuation and arc against all three browsers. Their geometry agrees; WebKit provides the strictest maximum-channel allowance for antialiased edges.",
+    "pixels": {
+      "maxDifference": 40,
+      "maxPixels": 1350
+    }
+  },
+  "layout": [
+    {
+      "key": "drawing",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 220
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 220
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 220
+      }
+    }
+  ]
+}

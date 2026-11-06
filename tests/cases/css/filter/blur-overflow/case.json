@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/filter-effects-1/#FilterProperty",
+  "assertion": "Blur extends beyond child geometry. The ancestor overflow clip truncates the filtered pixels at its padding box, while the visible control preserves them.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed blur extents and the ancestor clipping edge in all three browsers. Chrome differs from Valle only within the blur ramps: 19158 pixels, at most 3 channel levels; flat regions agree. Firefox/WebKit blur approximation reaches 7 levels. A mutation check removes overflow clipping and must still fail this allowance.",
+    "pixels": {
+      "maxDifference": 3,
+      "maxPixels": 19200
+    }
+  }
+}

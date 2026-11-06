@@ -1,0 +1,32 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/embedded.html#ImageElement",
+  "assertion": "An embedded 4x2 PNG scales by an integer factor of 40 with pixelated rendering; its four 40px color stripes retain sharp boundaries.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed against the cited rule and all three browser captures. Explicit box expectations agree in all three where present; the Chrome image matches Valle exactly, so pixel comparison remains exact."
+  },
+  "layout": [
+    {
+      "key": "image",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 160,
+        "height": 80
+      },
+      "padding": {
+        "x": 20,
+        "y": 20,
+        "width": 160,
+        "height": 80
+      },
+      "content": {
+        "x": 20,
+        "y": 20,
+        "width": 160,
+        "height": 80
+      }
+    }
+  ]
+}

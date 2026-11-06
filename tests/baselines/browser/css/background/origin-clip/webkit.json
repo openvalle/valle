@@ -1,0 +1,74 @@
+{
+  "size": [500, 170],
+  "sources": {
+    "tests/baselines/browser/css/background/origin-clip/scene.html": "f9fe639d8e0a0343e70cdf8c541115f6c83cf15b9808023ad6a4f29447862339"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "border-box",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 140,
+          "height": 110
+        },
+        "padding": {
+          "x": 24,
+          "y": 24,
+          "width": 132,
+          "height": 102
+        },
+        "content": {
+          "x": 32,
+          "y": 32,
+          "width": 116,
+          "height": 86
+        }
+      },
+      {
+        "key": "padding-box",
+        "border": {
+          "x": 180,
+          "y": 20,
+          "width": 140,
+          "height": 110
+        },
+        "padding": {
+          "x": 184,
+          "y": 24,
+          "width": 132,
+          "height": 102
+        },
+        "content": {
+          "x": 192,
+          "y": 32,
+          "width": 116,
+          "height": 86
+        }
+      },
+      {
+        "key": "content-box",
+        "border": {
+          "x": 340,
+          "y": 20,
+          "width": 140,
+          "height": 110
+        },
+        "padding": {
+          "x": 344,
+          "y": 24,
+          "width": 132,
+          "height": 102
+        },
+        "content": {
+          "x": 352,
+          "y": 32,
+          "width": 116,
+          "height": 86
+        }
+      }
+    ],
+    "lines": []
+  }
+}

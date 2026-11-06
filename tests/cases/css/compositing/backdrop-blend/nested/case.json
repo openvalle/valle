@@ -1,0 +1,13 @@
+{
+  "spec": "https://drafts.csswg.org/filter-effects-2/#BackdropFilterProperty",
+  "assertion": "A filtered child reads its isolated parent background. Parent opacity is applied after the child blend; the last control also applies child opacity, so parent opacity must not be folded into the backdrop twice.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed PNGs and difference images. Chrome preserves the filtered backdrop and applies foreground blending before final source-over; Firefox/WebKit captures omit invert even in the standalone control in this environment. See ../backdrop-blend/README.md. Only one output channel level differs across 14400 translucent pixels; geometry and opaque regions were reviewed.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 14400
+    }
+  }
+}

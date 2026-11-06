@@ -1,0 +1,10 @@
+{
+  "size": [660, 180],
+  "sources": {
+    "tests/baselines/browser/css/compositing/scene-blend-isolation/scene.html": "7617e6e3d8ed962d54043a29dd1cefb20f0ff84ef13adbd8dd9b06eccc6b9612"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

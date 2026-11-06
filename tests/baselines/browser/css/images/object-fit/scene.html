@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/images/object-fit</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 360px;
+      height: 150px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <img
+      data-key="contain"
+      src="/tests/resources/svg/pixels.png"
+      style="
+        position: absolute;
+        left: 20px;
+        top: 20px;
+        width: 100px;
+        height: 100px;
+        object-fit: contain;
+        image-rendering: pixelated;
+        background: #eef2f7;
+      "
+    /><img
+      data-key="cover"
+      src="/tests/resources/svg/pixels.png"
+      style="
+        position: absolute;
+        left: 130px;
+        top: 20px;
+        width: 100px;
+        height: 100px;
+        object-fit: cover;
+        image-rendering: pixelated;
+        background: #eef2f7;
+      "
+    /><img
+      data-key="fill"
+      src="/tests/resources/svg/pixels.png"
+      style="
+        position: absolute;
+        left: 240px;
+        top: 20px;
+        width: 100px;
+        height: 100px;
+        object-fit: fill;
+        image-rendering: pixelated;
+        background: #eef2f7;
+      "
+    />
+  </div>
+</html>

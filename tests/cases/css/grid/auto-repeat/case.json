@@ -1,0 +1,95 @@
+{
+  "spec": "https://www.w3.org/TR/css-grid-1/#repeat-notation",
+  "assertion": "auto-fill retains three 100px tracks after gaps; auto-fit collapses the unoccupied third track and gap, producing two 155px tracks.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three captures against retained auto-fill tracks versus collapsed auto-fit tracks. Their geometry and pixels agree; use an exact Chrome baseline."
+  },
+  "layout": [
+    {
+      "key": "auto-fill/first",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 100,
+        "height": 60
+      },
+      "padding": {
+        "x": 20,
+        "y": 20,
+        "width": 100,
+        "height": 60
+      },
+      "content": {
+        "x": 20,
+        "y": 20,
+        "width": 100,
+        "height": 60
+      }
+    },
+    {
+      "key": "auto-fill/second",
+      "border": {
+        "x": 130,
+        "y": 20,
+        "width": 100,
+        "height": 60
+      },
+      "padding": {
+        "x": 130,
+        "y": 20,
+        "width": 100,
+        "height": 60
+      },
+      "content": {
+        "x": 130,
+        "y": 20,
+        "width": 100,
+        "height": 60
+      }
+    },
+    {
+      "key": "auto-fit/first",
+      "border": {
+        "x": 20,
+        "y": 110,
+        "width": 155,
+        "height": 60
+      },
+      "padding": {
+        "x": 20,
+        "y": 110,
+        "width": 155,
+        "height": 60
+      },
+      "content": {
+        "x": 20,
+        "y": 110,
+        "width": 155,
+        "height": 60
+      }
+    },
+    {
+      "key": "auto-fit/second",
+      "border": {
+        "x": 185,
+        "y": 110,
+        "width": 155,
+        "height": 60
+      },
+      "padding": {
+        "x": 185,
+        "y": 110,
+        "width": 155,
+        "height": 60
+      },
+      "content": {
+        "x": 185,
+        "y": 110,
+        "width": 155,
+        "height": 60
+      }
+    }
+  ]
+}

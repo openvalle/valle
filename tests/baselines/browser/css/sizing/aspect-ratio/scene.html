@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/sizing/aspect-ratio</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 340px;
+      height: 160px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <div style="position: relative; width: 340px; height: 160px; background-color: white">
+      <div
+        data-key="width"
+        style="
+          position: absolute;
+          left: 20px;
+          top: 20px;
+          width: 160px;
+          aspect-ratio: 2 / 1;
+          background-color: #176bba;
+        "
+      ></div>
+      <div
+        data-key="height"
+        style="
+          position: absolute;
+          left: 220px;
+          top: 20px;
+          height: 90px;
+          aspect-ratio: 1 / 1;
+          background-color: #16a085;
+        "
+      ></div>
+    </div>
+  </div>
+</html>

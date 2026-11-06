@@ -1,0 +1,10 @@
+{
+  "size": [660, 180],
+  "sources": {
+    "tests/baselines/browser/css/mask/composite/scene.html": "c216477dc307147e896e1c3364ffd25136cfc78caa91a76ac76c3229b3dc040a"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

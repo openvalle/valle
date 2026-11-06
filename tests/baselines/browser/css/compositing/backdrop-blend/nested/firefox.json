@@ -1,0 +1,10 @@
+{
+  "size": [500, 180],
+  "sources": {
+    "tests/baselines/browser/css/compositing/backdrop-blend/nested/scene.html": "fe3c39fbe1d81a6ab6f238a3bfba0ef541d8900a396f6ec696f267af92c73495"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

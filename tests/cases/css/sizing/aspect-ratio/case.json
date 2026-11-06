@@ -1,0 +1,53 @@
+{
+  "spec": "https://www.w3.org/TR/css-sizing-4/#aspect-ratio",
+  "assertion": "A definite width determines auto height at 2:1, and a definite height determines auto width at 1:1.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed against the cited rule and all three browser captures. Explicit box expectations agree in all three where present; the Chrome image matches Valle exactly, so pixel comparison remains exact."
+  },
+  "layout": [
+    {
+      "key": "width",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 160,
+        "height": 80
+      },
+      "padding": {
+        "x": 20,
+        "y": 20,
+        "width": 160,
+        "height": 80
+      },
+      "content": {
+        "x": 20,
+        "y": 20,
+        "width": 160,
+        "height": 80
+      }
+    },
+    {
+      "key": "height",
+      "border": {
+        "x": 220,
+        "y": 20,
+        "width": 90,
+        "height": 90
+      },
+      "padding": {
+        "x": 220,
+        "y": 20,
+        "width": 90,
+        "height": 90
+      },
+      "content": {
+        "x": 220,
+        "y": 20,
+        "width": 90,
+        "height": 90
+      }
+    }
+  ]
+}

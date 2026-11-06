@@ -1,0 +1,32 @@
+{
+  "size": [340, 220],
+  "sources": {
+    "tests/baselines/browser/svg/path-commands/inline/scene.html": "b16dbae4961633edd57250ab5843f53401d45efc9c72b670deb88051d91c2e1e"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "drawing",
+        "border": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 220
+        },
+        "padding": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 220
+        },
+        "content": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 220
+        }
+      }
+    ],
+    "lines": []
+  }
+}

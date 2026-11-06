@@ -1,0 +1,33 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/svg/clip-mask-opacity/file/scene.html": "4e4b1890d6d8e5145552a2fb7e084a91245b501ac396457def05eaf619de3b3e",
+    "tests/cases/svg/clip-mask-opacity/file/source.svg": "7a6b74026063d1d4a7a2c74df6007641e6fd57c627824a6d95c27a145b8e2223"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "drawing",
+        "border": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "padding": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "content": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        }
+      }
+    ],
+    "lines": []
+  }
+}

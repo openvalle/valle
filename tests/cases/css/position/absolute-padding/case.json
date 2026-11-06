@@ -1,0 +1,74 @@
+{
+  "spec": "https://www.w3.org/TR/css-position-3/#containing-block",
+  "assertion": "A static intermediate box does not become the containing block. Absolute percentage sizes and right/bottom offsets use the positioned ancestor padding box (232 by 152).",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three captures and the paired controls against the stated rule. Geometry, layer order and solid colors agree exactly; retain an exact Chrome baseline."
+  },
+  "layout": [
+    {
+      "key": "outer",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 240,
+        "height": 160
+      },
+      "padding": {
+        "x": 24,
+        "y": 24,
+        "width": 232,
+        "height": 152
+      },
+      "content": {
+        "x": 44,
+        "y": 44,
+        "width": 192,
+        "height": 112
+      }
+    },
+    {
+      "key": "outer/static",
+      "border": {
+        "x": 44,
+        "y": 44,
+        "width": 100,
+        "height": 80
+      },
+      "padding": {
+        "x": 44,
+        "y": 44,
+        "width": 100,
+        "height": 80
+      },
+      "content": {
+        "x": 54,
+        "y": 54,
+        "width": 80,
+        "height": 60
+      }
+    },
+    {
+      "key": "outer/static/placed",
+      "border": {
+        "x": 130,
+        "y": 90,
+        "width": 116,
+        "height": 76
+      },
+      "padding": {
+        "x": 130,
+        "y": 90,
+        "width": 116,
+        "height": 76
+      },
+      "content": {
+        "x": 130,
+        "y": 90,
+        "width": 116,
+        "height": 76
+      }
+    }
+  ]
+}

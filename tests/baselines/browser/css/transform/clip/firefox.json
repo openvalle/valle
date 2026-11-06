@@ -1,0 +1,10 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/css/transform/clip/scene.html": "d22bed0dbd85c3383698684a3e0260f6c6dd9a796bb4b8fbb770be3e1be11333"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

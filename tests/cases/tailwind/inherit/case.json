@@ -1,0 +1,9 @@
+{
+  "spec": "crates/valle-engine/src/style/tailwind.rs",
+  "assertion": "Colors as the parent has them, over classes Tailwind sorts before these: a text color and SVG paints.",
+  "at": [0.0],
+  "valle": {
+    "reason": "Restored product regression PNGs from the verified 2026-11-05 backup and its base commit 5d1fb918; resource paths adapted without changing the expected pixels.",
+    "maxDifference": 1
+  }
+}

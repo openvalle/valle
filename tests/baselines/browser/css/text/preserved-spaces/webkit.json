@@ -1,0 +1,50 @@
+{
+  "size": [360, 140],
+  "sources": {
+    "tests/baselines/browser/css/text/preserved-spaces/scene.html": "a7d9f4b95ab04f30b13100660a92d0e1033a5de99a255d69cf6c8aa917ffb6bd",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "text",
+        "border": {
+          "x": 20,
+          "y": 24,
+          "width": 320,
+          "height": 88
+        },
+        "padding": {
+          "x": 22,
+          "y": 26,
+          "width": 316,
+          "height": 84
+        },
+        "content": {
+          "x": 30,
+          "y": 34,
+          "width": 300,
+          "height": 68
+        }
+      }
+    ],
+    "lines": [
+      {
+        "key": "text",
+        "text": ["Valle  motion", "Frame  by  frame"],
+        "geometry": [
+          {
+            "x": 30,
+            "baseline": 59.281494140625,
+            "height": 32
+          },
+          {
+            "x": 30,
+            "baseline": 91.281494140625,
+            "height": 32
+          }
+        ]
+      }
+    ]
+  }
+}

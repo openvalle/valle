@@ -1,0 +1,33 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/svg/group-paint-opacity/file/scene.html": "f40df7057a4b9399eb593e833f32880e6e92e24d79413c7935f941a9420eaa1a",
+    "tests/cases/svg/group-paint-opacity/file/source.svg": "40ed7fdb0910048049d96a28e5a4290a50b9ae2386e68423197c1e23ffdc4ea5"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "drawing",
+        "border": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "padding": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "content": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        }
+      }
+    ],
+    "lines": []
+  }
+}

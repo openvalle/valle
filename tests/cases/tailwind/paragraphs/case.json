@@ -1,0 +1,287 @@
+{
+  "spec": "crates/valle-engine/src/style/tailwind.rs",
+  "assertion": "Paragraph classes: indents of the scale, negative and written; justified lines; a clamp taken back; and smoothing, which changes nothing here. Explicit checks cover 16px line heights, 256px paragraph widths, 16px/-8px/10% first-line indents, and four lines after removing the clamp. Line breaks were independently verified with official Tailwind CSS in Chrome, Firefox and WebKit using the pinned Noto Sans. Baselines use rounded font metrics as documented by the text renderer; browser subpixel baseline differences are not line-break errors.",
+  "at": [0.0],
+  "valle": {
+    "reason": "Restored product regression PNGs from the verified 2026-11-05 backup and its base commit 5d1fb918; resource paths adapted without changing the expected pixels.",
+    "maxDifference": 1
+  },
+  "layout": [
+    {
+      "key": "indent",
+      "border": {
+        "x": 8,
+        "y": 8,
+        "width": 256,
+        "height": 32
+      },
+      "padding": {
+        "x": 8,
+        "y": 8,
+        "width": 256,
+        "height": 32
+      },
+      "content": {
+        "x": 8,
+        "y": 8,
+        "width": 256,
+        "height": 32
+      }
+    },
+    {
+      "key": "negative",
+      "border": {
+        "x": 16,
+        "y": 44,
+        "width": 256,
+        "height": 32
+      },
+      "padding": {
+        "x": 16,
+        "y": 44,
+        "width": 256,
+        "height": 32
+      },
+      "content": {
+        "x": 16,
+        "y": 44,
+        "width": 256,
+        "height": 32
+      }
+    },
+    {
+      "key": "percentage",
+      "border": {
+        "x": 8,
+        "y": 80,
+        "width": 256,
+        "height": 32
+      },
+      "padding": {
+        "x": 8,
+        "y": 80,
+        "width": 256,
+        "height": 32
+      },
+      "content": {
+        "x": 8,
+        "y": 80,
+        "width": 256,
+        "height": 32
+      }
+    },
+    {
+      "key": "justify",
+      "border": {
+        "x": 8,
+        "y": 116,
+        "width": 256,
+        "height": 32
+      },
+      "padding": {
+        "x": 8,
+        "y": 116,
+        "width": 256,
+        "height": 32
+      },
+      "content": {
+        "x": 8,
+        "y": 116,
+        "width": 256,
+        "height": 32
+      }
+    },
+    {
+      "key": "unclamped",
+      "border": {
+        "x": 8,
+        "y": 152,
+        "width": 256,
+        "height": 64
+      },
+      "padding": {
+        "x": 8,
+        "y": 152,
+        "width": 256,
+        "height": 64
+      },
+      "content": {
+        "x": 8,
+        "y": 152,
+        "width": 256,
+        "height": 64
+      }
+    },
+    {
+      "key": "smooth",
+      "border": {
+        "x": 8,
+        "y": 220,
+        "width": 256,
+        "height": 32
+      },
+      "padding": {
+        "x": 8,
+        "y": 220,
+        "width": 256,
+        "height": 32
+      },
+      "content": {
+        "x": 8,
+        "y": 220,
+        "width": 256,
+        "height": 32
+      }
+    },
+    {
+      "key": "subpixel",
+      "border": {
+        "x": 8,
+        "y": 252,
+        "width": 256,
+        "height": 32
+      },
+      "padding": {
+        "x": 8,
+        "y": 252,
+        "width": 256,
+        "height": 32
+      },
+      "content": {
+        "x": 8,
+        "y": 252,
+        "width": 256,
+        "height": 32
+      }
+    }
+  ],
+  "lines": [
+    {
+      "key": "indent",
+      "text": ["The quick brown fox jumps over the lazy ", "dog and runs into the woods"],
+      "geometry": [
+        {
+          "x": 24,
+          "baseline": 20,
+          "height": 16
+        },
+        {
+          "x": 8,
+          "baseline": 36,
+          "height": 16
+        }
+      ]
+    },
+    {
+      "key": "negative",
+      "text": ["The quick brown fox jumps over the lazy dog ", "and runs into the woods"],
+      "geometry": [
+        {
+          "x": 8,
+          "baseline": 56,
+          "height": 16
+        },
+        {
+          "x": 16,
+          "baseline": 72,
+          "height": 16
+        }
+      ]
+    },
+    {
+      "key": "percentage",
+      "text": ["The quick brown fox jumps over the lazy ", "dog and runs into the woods"],
+      "geometry": [
+        {
+          "x": 33.6,
+          "baseline": 92,
+          "height": 16
+        },
+        {
+          "x": 8,
+          "baseline": 108,
+          "height": 16
+        }
+      ]
+    },
+    {
+      "key": "justify",
+      "text": ["The quick brown fox jumps over the lazy dog ", "and runs into the woods"],
+      "geometry": [
+        {
+          "x": 8,
+          "baseline": 128,
+          "height": 16
+        },
+        {
+          "x": 8,
+          "baseline": 144,
+          "height": 16
+        }
+      ]
+    },
+    {
+      "key": "unclamped",
+      "text": [
+        "The quick brown fox jumps over the lazy dog ",
+        "and runs into the woods The quick brown fox ",
+        "jumps over the lazy dog and runs into the ",
+        "woods"
+      ],
+      "geometry": [
+        {
+          "x": 8,
+          "baseline": 164,
+          "height": 16
+        },
+        {
+          "x": 8,
+          "baseline": 180,
+          "height": 16
+        },
+        {
+          "x": 8,
+          "baseline": 196,
+          "height": 16
+        },
+        {
+          "x": 8,
+          "baseline": 212,
+          "height": 16
+        }
+      ]
+    },
+    {
+      "key": "smooth",
+      "text": ["The quick brown fox jumps over the lazy dog ", "and runs into the woods"],
+      "geometry": [
+        {
+          "x": 8,
+          "baseline": 232,
+          "height": 16
+        },
+        {
+          "x": 8,
+          "baseline": 248,
+          "height": 16
+        }
+      ]
+    },
+    {
+      "key": "subpixel",
+      "text": ["The quick brown fox jumps over the lazy dog ", "and runs into the woods"],
+      "geometry": [
+        {
+          "x": 8,
+          "baseline": 264,
+          "height": 16
+        },
+        {
+          "x": 8,
+          "baseline": 280,
+          "height": 16
+        }
+      ]
+    }
+  ]
+}

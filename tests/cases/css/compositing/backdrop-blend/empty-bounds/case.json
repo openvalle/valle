@@ -1,0 +1,9 @@
+{
+  "spec": "https://drafts.csswg.org/filter-effects-2/#BackdropFilterProperty",
+  "assertion": "A zero-width backdrop has no pixels to filter but still isolates its overflowing foreground. The multiply-only control sees the blue page, while the filtered control keeps the original green.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Chrome retains isolation even when the backdrop filter region has zero width. Valle matches both controls exactly. Firefox omits filtering; WebKit also differs on the zero-width multiply-only control. See ../backdrop-blend/README.md; no pixel allowance."
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/css-transforms-1/#transform-rendering",
+  "assertion": "Translation moves a box by 20/40px; top-left scaling doubles both axes; a 90-degree rotation swaps extents around the top-left origin.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed against the cited rule and all three browser captures. Explicit box expectations agree in all three where present; the Chrome image matches Valle exactly, so pixel comparison remains exact."
+  }
+}

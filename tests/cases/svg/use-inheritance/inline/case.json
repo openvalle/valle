@@ -1,0 +1,32 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/struct.html#UseElement",
+  "assertion": "Nested use instances inherit color and fill independently. currentColor resolves at each instance, explicit fills override inheritance, and use offsets compose through the reference chain.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three captures against currentColor and fill inheritance through nested references. Their geometry and pixels agree; use an exact Chrome baseline."
+  },
+  "layout": [
+    {
+      "key": "drawing",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      }
+    }
+  ]
+}

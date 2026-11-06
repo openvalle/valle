@@ -1,0 +1,35 @@
+export const composition = { width: 340, height: 180, fps: 1, duration: 1 };
+
+export default function Scene() {
+  return (
+    <View style={{ width: 340, height: 180, backgroundColor: "white" }}>
+      <svg key="drawing" width={340} height={180}>
+        <defs>
+          <mask
+            id="region"
+            maskUnits="objectBoundingBox"
+            x="0.25"
+            y="0.25"
+            width="0.5"
+            height="0.5"
+          >
+            <rect width="340" height="180" fill="white" />
+          </mask>
+          <mask
+            id="content"
+            maskUnits="userSpaceOnUse"
+            x="0"
+            y="0"
+            width="340"
+            height="180"
+            maskContentUnits="objectBoundingBox"
+          >
+            <rect x="0.25" y="0.25" width="0.5" height="0.5" fill="white" />
+          </mask>
+        </defs>
+        <rect x="20" y="20" width="120" height="140" fill="#176bba" mask="url(#region)" />
+        <rect x="180" y="40" width="140" height="100" fill="#16a085" mask="url(#content)" />
+      </svg>
+    </View>
+  );
+}

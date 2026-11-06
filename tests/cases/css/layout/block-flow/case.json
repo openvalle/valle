@@ -1,0 +1,95 @@
+{
+  "spec": "https://www.w3.org/TR/CSS22/visudet.html#blockwidth",
+  "assertion": "Block children fill the 256px content width, stack vertically and split horizontal auto margins equally.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed against the cited rule and all three browser captures. Explicit box expectations agree in all three where present; the Chrome image matches Valle exactly, so pixel comparison remains exact."
+  },
+  "layout": [
+    {
+      "key": "flow",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 280,
+        "height": 160
+      },
+      "padding": {
+        "x": 22,
+        "y": 22,
+        "width": 276,
+        "height": 156
+      },
+      "content": {
+        "x": 32,
+        "y": 32,
+        "width": 256,
+        "height": 136
+      }
+    },
+    {
+      "key": "flow/full",
+      "border": {
+        "x": 32,
+        "y": 32,
+        "width": 256,
+        "height": 30
+      },
+      "padding": {
+        "x": 32,
+        "y": 32,
+        "width": 256,
+        "height": 30
+      },
+      "content": {
+        "x": 32,
+        "y": 32,
+        "width": 256,
+        "height": 30
+      }
+    },
+    {
+      "key": "flow/center",
+      "border": {
+        "x": 110,
+        "y": 62,
+        "width": 100,
+        "height": 40
+      },
+      "padding": {
+        "x": 110,
+        "y": 62,
+        "width": 100,
+        "height": 40
+      },
+      "content": {
+        "x": 110,
+        "y": 62,
+        "width": 100,
+        "height": 40
+      }
+    },
+    {
+      "key": "flow/last",
+      "border": {
+        "x": 32,
+        "y": 102,
+        "width": 256,
+        "height": 30
+      },
+      "padding": {
+        "x": 32,
+        "y": 102,
+        "width": 256,
+        "height": 30
+      },
+      "content": {
+        "x": 32,
+        "y": 102,
+        "width": 256,
+        "height": 30
+      }
+    }
+  ]
+}

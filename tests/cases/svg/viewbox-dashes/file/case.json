@@ -1,0 +1,116 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/paths.html#PathLengthAttribute",
+  "assertion": "SVG files preserve a 2x viewBox scale, pathLength-normalized dashes and an evenodd hole in a translated group. Four separate 60x60 SVG documents exercise centered meet, clipped slice, none and bottom-aligned meet from their XML attributes.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all five SVG file viewports. Valle, Chrome, Firefox and WebKit match exactly, including the existing inline baseline. The 2x dash geometry, evenodd hole and all four preserveAspectRatio variants agree; pixel tolerance remains zero."
+  },
+  "layout": [
+    {
+      "key": "drawing",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 240,
+        "height": 120
+      },
+      "padding": {
+        "x": 20,
+        "y": 20,
+        "width": 240,
+        "height": 120
+      },
+      "content": {
+        "x": 20,
+        "y": 20,
+        "width": 240,
+        "height": 120
+      }
+    },
+    {
+      "key": "meet-center",
+      "border": {
+        "x": 20,
+        "y": 180,
+        "width": 60,
+        "height": 60
+      },
+      "padding": {
+        "x": 20,
+        "y": 180,
+        "width": 60,
+        "height": 60
+      },
+      "content": {
+        "x": 20,
+        "y": 180,
+        "width": 60,
+        "height": 60
+      }
+    },
+    {
+      "key": "slice",
+      "border": {
+        "x": 100,
+        "y": 180,
+        "width": 60,
+        "height": 60
+      },
+      "padding": {
+        "x": 100,
+        "y": 180,
+        "width": 60,
+        "height": 60
+      },
+      "content": {
+        "x": 100,
+        "y": 180,
+        "width": 60,
+        "height": 60
+      }
+    },
+    {
+      "key": "stretch",
+      "border": {
+        "x": 180,
+        "y": 180,
+        "width": 60,
+        "height": 60
+      },
+      "padding": {
+        "x": 180,
+        "y": 180,
+        "width": 60,
+        "height": 60
+      },
+      "content": {
+        "x": 180,
+        "y": 180,
+        "width": 60,
+        "height": 60
+      }
+    },
+    {
+      "key": "meet-end",
+      "border": {
+        "x": 260,
+        "y": 180,
+        "width": 60,
+        "height": 60
+      },
+      "padding": {
+        "x": 260,
+        "y": 180,
+        "width": 60,
+        "height": 60
+      },
+      "content": {
+        "x": 260,
+        "y": 180,
+        "width": 60,
+        "height": 60
+      }
+    }
+  ]
+}

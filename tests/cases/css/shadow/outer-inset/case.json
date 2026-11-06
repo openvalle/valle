@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/css-backgrounds-3/#box-shadow",
+  "assertion": "An 8x10 offset and 4px spread shadow expands outside one box and clips inside the other; zero blur makes boundaries exact.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed against the cited rule and all three browser captures. Explicit box expectations agree in all three where present; the Chrome image matches Valle exactly, so pixel comparison remains exact."
+  }
+}

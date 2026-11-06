@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/transform/clip</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 340px;
+      height: 180px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <div style="position: relative; width: 340px; height: 180px; background-color: white">
+      <div
+        style="
+          position: absolute;
+          left: 20px;
+          top: 20px;
+          width: 140px;
+          height: 140px;
+          background-color: #eef2f7;
+          overflow: hidden;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 20px;
+            top: 20px;
+            width: 140px;
+            height: 80px;
+            background-color: #176bba;
+            transform: rotate(90deg);
+            transform-origin: 0 0;
+          "
+        >
+          <div
+            style="
+              position: absolute;
+              left: 40px;
+              top: 10px;
+              width: 100px;
+              height: 60px;
+              background-color: #ffb74d;
+            "
+          ></div>
+        </div>
+      </div>
+      <div
+        style="
+          position: absolute;
+          left: 180px;
+          top: 20px;
+          width: 140px;
+          height: 140px;
+          background-color: #eef2f7;
+          overflow: hidden;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 20px;
+            top: 20px;
+            width: 140px;
+            height: 80px;
+            background-color: #176bba;
+            transform: rotate(90deg);
+            transform-origin: 0 0;
+            clip-path: inset(10px 20px);
+          "
+        >
+          <div
+            style="
+              position: absolute;
+              left: 40px;
+              top: 10px;
+              width: 100px;
+              height: 60px;
+              background-color: #ffb74d;
+            "
+          ></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</html>

@@ -1,0 +1,32 @@
+{
+  "size": [240, 200],
+  "sources": {
+    "tests/baselines/browser/css/compositing/rounded-blend/scene.html": "8d4b602ff8362503eed3d0c29a1366065b28d1d5c6c22e063344dbcf02b3f33f"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "parent/clip",
+        "border": {
+          "x": 40,
+          "y": 20,
+          "width": 160,
+          "height": 160
+        },
+        "padding": {
+          "x": 40,
+          "y": 20,
+          "width": 160,
+          "height": 160
+        },
+        "content": {
+          "x": 40,
+          "y": 20,
+          "width": 160,
+          "height": 160
+        }
+      }
+    ],
+    "lines": []
+  }
+}

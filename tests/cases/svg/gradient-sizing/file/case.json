@@ -1,0 +1,57 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/conform.html",
+  "assertion": "An SVG file retains linear gradient paint through natural sizing and contain fitting, without curved clips; the white center stroke remains sharp.",
+  "at": [0],
+  "browser": {
+    "selected": "firefox",
+    "reason": "Reviewed both file-image placements and continuous gradient endpoints. Differences from Firefox are one-level gradient quantization; no rounded edge allowance applies to this case.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 2300
+    }
+  },
+  "layout": [
+    {
+      "key": "natural",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 120,
+        "height": 80
+      },
+      "padding": {
+        "x": 20,
+        "y": 20,
+        "width": 120,
+        "height": 80
+      },
+      "content": {
+        "x": 20,
+        "y": 20,
+        "width": 120,
+        "height": 80
+      }
+    },
+    {
+      "key": "fit",
+      "border": {
+        "x": 180,
+        "y": 20,
+        "width": 120,
+        "height": 120
+      },
+      "padding": {
+        "x": 180,
+        "y": 20,
+        "width": 120,
+        "height": 120
+      },
+      "content": {
+        "x": 180,
+        "y": 20,
+        "width": 120,
+        "height": 120
+      }
+    }
+  ]
+}

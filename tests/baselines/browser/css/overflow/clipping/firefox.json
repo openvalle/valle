@@ -1,0 +1,53 @@
+{
+  "size": [340, 160],
+  "sources": {
+    "tests/baselines/browser/css/overflow/clipping/scene.html": "06f2de64fa75ff46a91b752ff55359ffd8a510094b7be73853f9dbf0b800072e"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "hidden",
+        "border": {
+          "x": 30,
+          "y": 30,
+          "width": 120,
+          "height": 100
+        },
+        "padding": {
+          "x": 30,
+          "y": 30,
+          "width": 120,
+          "height": 100
+        },
+        "content": {
+          "x": 30,
+          "y": 30,
+          "width": 120,
+          "height": 100
+        }
+      },
+      {
+        "key": "visible",
+        "border": {
+          "x": 190,
+          "y": 30,
+          "width": 120,
+          "height": 100
+        },
+        "padding": {
+          "x": 190,
+          "y": 30,
+          "width": 120,
+          "height": 100
+        },
+        "content": {
+          "x": 190,
+          "y": 30,
+          "width": 120,
+          "height": 100
+        }
+      }
+    ],
+    "lines": []
+  }
+}

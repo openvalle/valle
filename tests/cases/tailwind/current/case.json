@@ -1,0 +1,9 @@
+{
+  "spec": "crates/valle-engine/src/style/tailwind.rs",
+  "assertion": "A background of the text color, inherited and the box's own.",
+  "at": [0.0],
+  "valle": {
+    "reason": "Restored product regression PNGs from the verified 2026-11-05 backup and its base commit 5d1fb918; resource paths adapted without changing the expected pixels.",
+    "maxDifference": 1
+  }
+}

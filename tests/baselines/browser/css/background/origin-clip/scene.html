@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/background/origin-clip</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 500px;
+      height: 170px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <div style="position: relative; width: 500px; height: 170px; background-color: white">
+      <div
+        data-key="border-box"
+        style="
+          position: absolute;
+          left: 20px;
+          top: 20px;
+          width: 140px;
+          height: 110px;
+          background-color: #eef2f7;
+          padding: 8px;
+          border: 4px solid #102a43;
+          background-image: linear-gradient(#176bba, #176bba);
+          background-size: 40px 30px;
+          background-repeat: no-repeat;
+          background-position: right bottom;
+          background-origin: border-box;
+          background-clip: content-box;
+        "
+      ></div>
+      <div
+        data-key="padding-box"
+        style="
+          position: absolute;
+          left: 180px;
+          top: 20px;
+          width: 140px;
+          height: 110px;
+          background-color: #eef2f7;
+          padding: 8px;
+          border: 4px solid #102a43;
+          background-image: linear-gradient(#176bba, #176bba);
+          background-size: 40px 30px;
+          background-repeat: no-repeat;
+          background-position: right bottom;
+          background-origin: padding-box;
+          background-clip: content-box;
+        "
+      ></div>
+      <div
+        data-key="content-box"
+        style="
+          position: absolute;
+          left: 340px;
+          top: 20px;
+          width: 140px;
+          height: 110px;
+          background-color: #eef2f7;
+          padding: 8px;
+          border: 4px solid #102a43;
+          background-image: linear-gradient(#176bba, #176bba);
+          background-size: 40px 30px;
+          background-repeat: no-repeat;
+          background-position: right bottom;
+          background-origin: content-box;
+          background-clip: content-box;
+        "
+      ></div>
+    </div>
+  </div>
+</html>

@@ -1,0 +1,50 @@
+{
+  "size": [220, 140],
+  "sources": {
+    "tests/baselines/browser/css/text/word-wrap/scene.html": "13bc808027467233b97a3e872cb45f04f45fd6081c8fc86d10cb83842054b0c2",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "text",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 160,
+          "height": 100
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 160,
+          "height": 100
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 160,
+          "height": 100
+        }
+      }
+    ],
+    "lines": [
+      {
+        "key": "text",
+        "text": ["Alpha beta ", "gamma delta"],
+        "geometry": [
+          {
+            "x": 20,
+            "baseline": 45,
+            "height": 32
+          },
+          {
+            "x": 20,
+            "baseline": 77,
+            "height": 32
+          }
+        ]
+      }
+    ]
+  }
+}

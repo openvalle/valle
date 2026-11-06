@@ -1,992 +1,354 @@
-//! The case runner: every scene under `tests/cases` is a case, and so is each scene the support
-//! table makes (see `properties.rs`). Cases run in parallel.
-//!
-//! - A case is a scene, `.tsx`, or a Timeline document, `.timeline.json`; the components the
-//!   documents play are in `components/` folders, which are not cases.
-//! - A case in `errors/` names the error it must fail with on its first line, as `// error: …`,
-//!   or a document in its metadata, `"error": "…"`; a `…` in it stands for any text.
-//! - A case in `css/`, `svg/` or `tailwind/` is standard CSS, SVG or Tailwind: each frame is
-//!   printed as HTML, and its boxes and lines must be where Chrome puts them, each box edge within
-//!   1/32 px. The Chrome baselines are drawn here when missing or out of date (see `chrome.rs`),
-//!   never on CI.
-//! - The case `tailwind/classes` compares the CSS of every Tailwind class the engine expands with
-//!   the Tailwind compiler's (see `tailwind.rs`), and `d3/checks` the built-in charts' results
-//!   with d3's (see `d3.rs`).
-//! - Any other case is drawn on the GPU, every frame, and each frame compared with its Valle
-//!   baseline, `tests/baselines/valle/<case>.<frame>.png`, within one level a channel. Frames that
-//!   differ or have no baseline go to `target/review` with a page to compare them, and
-//!   `cargo xtask accept <case>` takes what was drawn as the new baselines.
-//!
-//! `cargo test -p valle-engine --test cases [-- <case>…]` runs the cases, or those under the
-//! given paths (`errors`, `errors/style.tsx`). The GPU cases run only when `VALLE_TEST_LAYERS`
-//! names `gpu`, as `cargo xtask test` does unless told to skip them.
+//! Scene cases with explicit expectations, run with `cargo xtask cases [path]`.
 
-use std::collections::BTreeMap;
-use std::fmt::Write as _;
-use std::io::BufReader;
-use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
-
-use valle_engine::front::Inputs;
-use valle_engine::gpu::{Gpu, Renderer};
-use valle_engine::image::Image;
-use valle_engine::scene::{Scene, Video};
-use valle_engine::text::{BUILT_IN, Blob, BuiltIn, Fonts};
-use valle_engine::time::Tick;
-use valle_engine::timeline;
-use valle_native::media::{self, Decoding};
-use valle_native::urls::UrlCache;
-
-mod chrome;
+mod browser;
+mod case;
 mod d3;
-mod html;
-mod properties;
+mod fonts;
+mod pixels;
+mod result;
+mod scene;
+mod seek;
 mod tailwind;
 
-/// The largest canvas, px a side, and the most frames a case may have.
-/// The fonts the format cases read from the web, pinned as the built-in ones are: Source Sans 3,
-/// release 3.052R, in each format.
-const TEST_FONTS: [BuiltIn; 7] = [
-    // OpenType, CFF outlines.
-    BuiltIn {
-        name: "Source Sans 3 OTF/SourceSans3-Regular.otf",
-        file: "SourceSans3-Regular.otf",
-        url: "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/OTF/SourceSans3-Regular.otf",
-        sha256: "08df266400933d3178d081a45f94a08814c3e55b4b7dd2e0ff69cb1329f13ab6",
-        size: 334_924,
-    },
-    // TrueType.
-    BuiltIn {
-        name: "Source Sans 3 TTF/SourceSans3-Regular.ttf",
-        file: "SourceSans3-Regular.ttf",
-        url: "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/TTF/SourceSans3-Regular.ttf",
-        sha256: "4644c81b86ec9caaa76b634889968ed3c4f4f52f054855933acc7c2b21e53b0f",
-        size: 431_196,
-    },
-    // Variable, CFF2 outlines.
-    BuiltIn {
-        name: "Source Sans 3 VF/SourceSans3VF-Upright.otf",
-        file: "SourceSans3VF-Upright.otf",
-        url: "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/VF/SourceSans3VF-Upright.otf",
-        sha256: "3d0dfd6a3a644ab3d462a737923ffac41fb0ae007ce9ba83c24e6bfa76aa56c7",
-        size: 538_164,
-    },
-    // WOFF of TrueType.
-    BuiltIn {
-        name: "Source Sans 3 WOFF/TTF/SourceSans3-Regular.ttf.woff",
-        file: "SourceSans3-Regular.ttf.woff",
-        url: "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/WOFF/TTF/SourceSans3-Regular.ttf.woff",
-        sha256: "56413337e96f5764882f3e18eaa654eec27515ec7c3de3520eec9e36b25371b9",
-        size: 188_176,
-    },
-    // WOFF2 of CFF outlines.
-    BuiltIn {
-        name: "Source Sans 3 WOFF2/OTF/SourceSans3-Regular.otf.woff2",
-        file: "SourceSans3-Regular.otf.woff2",
-        url: "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/WOFF2/OTF/SourceSans3-Regular.otf.woff2",
-        sha256: "63de0da0cc05298e2e9c6e5cef506d8454ca665f6e668a99d94f51174b9256ed",
-        size: 153_800,
-    },
-    // WOFF2 of TrueType, its glyphs transformed.
-    BuiltIn {
-        name: "Source Sans 3 WOFF2/TTF/SourceSans3-Regular.ttf.woff2",
-        file: "SourceSans3-Regular.ttf.woff2",
-        url: "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/WOFF2/TTF/SourceSans3-Regular.ttf.woff2",
-        sha256: "53492fb3a0def77354f166a55d09b63a10855e91c206c7620a81cf56e97f8ec3",
-        size: 109_632,
-    },
-    // WOFF2 of a variable font of CFF2 outlines.
-    BuiltIn {
-        name: "Source Sans 3 WOFF2/VF/SourceSans3VF-Upright.otf.woff2",
-        file: "SourceSans3VF-Upright.otf.woff2",
-        url: "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/WOFF2/VF/SourceSans3VF-Upright.otf.woff2",
-        sha256: "f9e4eac0e8f8ffdae91cf6eff3962b96e81417cba5c728bc1c89efe9510e7653",
-        size: 164_736,
-    },
-];
+use std::path::{Path, PathBuf};
+use valle_engine::gpu::Gpu;
 
-/// The fonts cases read from the web: the built-in ones and the test fonts.
-fn pinned() -> impl Iterator<Item = &'static BuiltIn> {
-    BUILT_IN.iter().chain(&TEST_FONTS)
+#[test]
+fn scene_cases() {
+    with_stack(run).unwrap_or_else(|error| panic!("{error}"));
 }
 
-const MAX_SIZE: u32 = 512;
-const MAX_FRAMES: i64 = 10;
-/// Scene code needs a stack of more than 12 MiB.
-const STACK: usize = 32 << 20;
-
-struct Runner {
-    repo: PathBuf,
-    root: PathBuf,
-    /// The cases made from the support table, by path, and their source.
-    made: BTreeMap<String, String>,
-    baselines: PathBuf,
-    chrome_baselines: PathBuf,
-    /// The Chrome version the Chrome baselines are drawn by.
-    chrome: Result<String, String>,
-    /// The Tailwind version `package.json` pins.
-    tailwind: Result<String, String>,
-    /// On CI, which never draws baselines.
-    ci: bool,
-    review: PathBuf,
-    gpu_layer: bool,
-    gpu: OnceLock<Result<Gpu, String>>,
-    /// Frames that went to review.
-    reviewed: Mutex<Vec<Reviewed>>,
-    /// The most any channel of a frame differed from its baseline.
-    largest: AtomicU8,
+fn with_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    // QuickJS reserves a 12 MiB stack; use the same allowance as the scene unit tests.
+    std::thread::Builder::new()
+        .name("scene cases".into())
+        .stack_size(32 << 20)
+        .spawn(f)
+        .expect("start scene cases")
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
 }
 
-/// A frame that went to review: its name, what was wrong, and when there was something to
-/// compare it with, the captions of that and of the image marking where they differ.
-type Reviewed = (String, String, Option<(&'static str, &'static str)>);
-
-/// What a frame in review was compared with, and an image marking where they differ.
-struct Against<'a> {
-    image: &'a Path,
-    marked: &'a [u8],
-    captions: (&'static str, &'static str),
-}
-
-enum Outcome {
-    Passed,
-    Failed(String),
-    Skipped,
-    /// Chrome baselines to draw before the case can run.
-    Stale(Vec<chrome::Job>),
-}
-
-/// Why a case's frames stopped: its scene failed, or the case breaks the runner's rules.
-enum Failure {
-    Scene(String),
-    Case(String),
-}
-
-fn main() -> ExitCode {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let repo = manifest
-        .ancestors()
-        .nth(2)
-        .expect("the crate is in crates/");
-    let layers = std::env::var("VALLE_TEST_LAYERS").unwrap_or_default();
-    let version = repo.join("tests/baselines/chrome/version");
-    let mut runner = Runner {
-        repo: repo.to_path_buf(),
-        root: repo.join("tests/cases"),
-        made: BTreeMap::new(),
-        baselines: repo.join("tests/baselines/valle"),
-        chrome_baselines: repo.join("tests/baselines/chrome"),
-        chrome: std::fs::read_to_string(&version)
-            .map(|v| v.trim().to_string())
-            .map_err(|e| format!("{}: {e}", version.display())),
-        tailwind: tailwind::version(repo),
-        ci: std::env::var_os("CI").is_some(),
-        review: repo.join("target/review"),
-        gpu_layer: layers.split(',').any(|l| l == "gpu"),
-        gpu: OnceLock::new(),
-        reviewed: Mutex::new(Vec::new()),
-        largest: AtomicU8::new(0),
-    };
-    // The fonts from the web, which Chrome's pages name, downloaded before the cases run.
-    for font in pinned() {
-        if let Err(e) =
-            UrlCache::global().and_then(|c| c.fetch_pinned(font.url, font.sha256, font.file))
-        {
-            eprintln!("cases: the font {}: {e}", font.name);
-            return ExitCode::FAILURE;
+fn run() -> Result<(), String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let cases = root.join("tests/cases");
+    let filter = std::env::var("VALLE_CASE").unwrap_or_default();
+    let filter = filter.trim_end_matches('/');
+    let selected =
+        |name: &str| filter.is_empty() || name == filter || name.starts_with(&format!("{filter}/"));
+    let mut paths = Vec::new();
+    discover(&cases, &mut paths)?;
+    paths.sort();
+    let mut count = 0;
+    let mut checks = 0;
+    let mut failures = Vec::new();
+    let mut dependencies = 0;
+    for (name, check) in [
+        ("d3/cases", d3::check as fn(&Path) -> Result<usize, String>),
+        ("tailwind/classes", tailwind::check),
+    ] {
+        if !selected(name) {
+            continue;
+        }
+        dependencies += 1;
+        let result = check(&root);
+        let out = root.join("target/test-results").join(name);
+        std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+        let report = serde_json::json!({
+            "case": name, "status": if result.is_ok() { "PASS" } else { "FAIL" },
+            "checks": result.as_ref().ok(), "error": result.as_ref().err(),
+        });
+        std::fs::write(
+            out.join("result.json"),
+            serde_json::to_string_pretty(&report).unwrap(),
+        )
+        .map_err(|e| e.to_string())?;
+        match result {
+            Ok(n) => println!("PASS {name}: {n} dependency checks"),
+            Err(error) => failures.push(format!("FAIL {name}\n{error}")),
         }
     }
-    let made = (runner.chrome_properties()).and_then(|known| properties::cases(&known));
-    runner.made = match made {
-        Ok(made) => made,
-        Err(e) => {
-            eprintln!("cases: {e}");
-            return ExitCode::FAILURE;
+    let gpu_enabled = std::env::var("VALLE_TEST_LAYERS")
+        .unwrap_or_default()
+        .split(',')
+        .any(|layer| layer == "gpu");
+    let mut gpu = None;
+    for path in paths {
+        let name = path
+            .strip_prefix(&cases)
+            .expect("a case under tests/cases")
+            .to_string_lossy()
+            .replace('\\', "/");
+        if !selected(&name) {
+            continue;
         }
-    };
-    let filters: Vec<String> = std::env::args().skip(1).collect();
-    let checks = [tailwind::CASE.to_string(), d3::CASE.to_string()];
-    let cases = match select(&runner.root, runner.made.keys().chain(&checks), &filters) {
-        Ok(cases) => cases,
-        Err(e) => {
-            eprintln!("cases: {e}");
-            return ExitCode::FAILURE;
+        count += 1;
+        let result: Result<usize, String> = (|| {
+            let out = root.join("target/test-results").join(&name);
+            if out.exists() {
+                std::fs::remove_dir_all(&out).map_err(|e| e.to_string())?;
+            }
+            std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+            let case = case::Case::read(&path.join("case.json"))?;
+            let n = run_case(&root, &path, &name, &case, gpu_enabled, &mut gpu)?;
+            let mut modes = Vec::new();
+            if !case.layout.is_empty() {
+                modes.push("boxes");
+            }
+            if !case.lines.is_empty() {
+                modes.push("lines");
+            }
+            if case.visual() {
+                modes.push(if gpu_enabled {
+                    "pixels"
+                } else {
+                    "pixels skipped"
+                });
+            }
+            if case.at.len() > 1 {
+                modes.push("seek");
+            }
+            let status = if case.visual() && !gpu_enabled {
+                "PARTIAL"
+            } else {
+                "PASS"
+            };
+            println!(
+                "{status} {name}: {}; {n} numerical assertions, {} sampled frames",
+                modes.join(", "),
+                case.at.len()
+            );
+            Ok(n)
+        })();
+        match result {
+            Ok(n) => {
+                checks += n;
+            }
+            Err(error) => failures.push(format!("FAIL {name}\n{error}")),
         }
-    };
-    // Review holds only the last run's frames, which are what `accept` takes.
-    let _ = std::fs::remove_dir_all(&runner.review);
-    let code = runner.run_all(&cases);
-    if let Err(e) = runner.write_review() {
-        eprintln!("cases: review: {e}");
-        return ExitCode::FAILURE;
     }
-    code
+    if count + dependencies == 0 {
+        return Err(format!("no scene cases match {filter:?}"));
+    }
+    if !failures.is_empty() {
+        return Err(format!(
+            "{}\n{} cases failed",
+            failures.join("\n\n"),
+            failures.len()
+        ));
+    }
+    println!(
+        "{count} scene cases and {dependencies} dependency suites checked; {checks} layout/line assertions passed{}",
+        if gpu_enabled {
+            ""
+        } else {
+            "; image checks skipped"
+        }
+    );
+    Ok(())
 }
 
-/// The cases under `root` and those made, as `/`-separated paths from it, sorted; only those the
-/// filters name when there are any.
-fn select<'a>(
+fn run_case(
     root: &Path,
-    made: impl Iterator<Item = &'a String>,
-    filters: &[String],
-) -> Result<Vec<String>, String> {
-    if let Some(flag) = filters.iter().find(|f| f.starts_with('-')) {
-        return Err(format!("unknown flag {flag}"));
-    }
-    let mut cases = Vec::new();
-    walk(root, "", &mut cases)?;
-    cases.extend(made.cloned());
-    cases.sort();
-    let named = |case: &str, filter: &str| {
-        let f = filter.trim_end_matches('/');
-        case == f || stem(case) == f || case.starts_with(&format!("{f}/"))
-    };
-    for f in filters {
-        if !cases.iter().any(|c| named(c, f)) {
-            return Err(format!("no case is at {f}"));
+    dir: &Path,
+    name: &str,
+    case: &case::Case,
+    gpu_enabled: bool,
+    gpu: &mut Option<Gpu>,
+) -> Result<usize, String> {
+    let out = root.join("target/test-results").join(name);
+    let times = case.times()?;
+    let mut snapshots = Vec::new();
+    let mut failures = Vec::new();
+    let mut checks = 0;
+    let mut records = Vec::new();
+    for at in times {
+        let sample = scene::load(root, &case.input(dir), at)?;
+        let number = sample.number();
+        let sample_out = if case.at.len() == 1 {
+            out.clone()
+        } else {
+            out.join(number.to_string())
+        };
+        if case.at.len() > 1 {
+            // Multiple samples in one frame would overwrite the same output and baseline.
+            std::fs::create_dir(&sample_out)
+                .map_err(|e| format!("frame {number}: cannot create sample directory: {e}"))?;
         }
+        let checked = run_sample(root, dir, case, &sample, gpu_enabled, gpu, &sample_out);
+        records
+            .push(serde_json::json!({ "frame": number, "at": at.seconds_text(), "error": checked.as_ref().err() }));
+        match checked {
+            Ok(n) => checks += n,
+            Err(error) => failures.push(format!(
+                "frame {number}, at={}s: {error}",
+                at.seconds_text()
+            )),
+        }
+        snapshots.push(sample.frame);
     }
-    if !filters.is_empty() {
-        cases.retain(|c| filters.iter().any(|f| named(c, f)));
+    let seek = if case.at.len() > 1 {
+        Some(seek::check(
+            root,
+            dir,
+            case,
+            &snapshots,
+            gpu.as_ref().filter(|_| gpu_enabled && case.visual()),
+            &out,
+        ))
+    } else {
+        None
+    };
+    if let Some(Err(error)) = &seek {
+        failures.push(error.clone());
     }
-    Ok(cases)
+    if case.at.len() > 1 {
+        let seek_report = match &seek {
+            Some(Ok(visits)) => {
+                serde_json::json!({ "status": "passed", "visits": visits, "pixels": gpu_enabled && case.visual() })
+            }
+            Some(Err(error)) => serde_json::json!({ "status": "failed", "error": error }),
+            None => serde_json::Value::Null,
+        };
+        let report = serde_json::json!({
+            "case": name, "status": if !failures.is_empty() { "FAIL" } else if !gpu_enabled && case.visual() { "PARTIAL" } else { "PASS" },
+            "samples": records, "seek": seek_report,
+        });
+        std::fs::write(
+            out.join("result.json"),
+            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    println!("results: {}", out.display());
+    if failures.is_empty() {
+        Ok(checks)
+    } else {
+        Err(failures.join("\n"))
+    }
 }
 
-/// A case's path without its extension, which its baselines are named by.
-fn stem(case: &str) -> &str {
-    (case.strip_suffix(".timeline.json"))
-        .or_else(|| case.strip_suffix(".tsx"))
-        .unwrap_or(case)
+fn run_sample(
+    root: &Path,
+    dir: &Path,
+    case: &case::Case,
+    sample: &scene::Sample,
+    gpu_enabled: bool,
+    gpu: &mut Option<Gpu>,
+    out: &Path,
+) -> Result<usize, String> {
+    let layout = scene::layout(&sample.frame, case);
+    let pixels = (|| {
+        if !case.visual() || !gpu_enabled {
+            return Ok(None);
+        }
+        if gpu.is_none() {
+            *gpu = Some(Gpu::new()?);
+        }
+        pixels::run(root, dir, case, sample, gpu.as_ref().unwrap(), out).map(Some)
+    })();
+    result::write(
+        out,
+        &dir.strip_prefix(root.join("tests/cases"))
+            .map_err(|e| e.to_string())?
+            .to_string_lossy(),
+        case,
+        sample,
+        &layout,
+        &pixels,
+    )?;
+    let mut errors = Vec::new();
+    if let Err(error) = &layout {
+        errors.push(error.clone());
+    }
+    match pixels {
+        Ok(Some(p)) => {
+            for check in &p.checks {
+                if check.required && !check.passed {
+                    errors.push(format!("{}: {} image pixels (max {}), {} text-edge pixels (max {}); measurements: {}", check.source, check.pixels.changed, check.pixels.max, check.text_edges.changed, check.text_edges.max, check.measurement_error.as_deref().unwrap_or("passed")));
+                }
+            }
+        }
+        Ok(None) => {}
+        Err(error) => errors.push(error),
+    }
+    if errors.is_empty() {
+        layout
+    } else {
+        Err(errors.join("\n"))
+    }
 }
 
-fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) -> Result<(), String> {
+fn discover(dir: &Path, cases: &mut Vec<PathBuf>) -> Result<(), String> {
+    if dir.join("case.json").is_file() {
+        cases.push(dir.to_path_buf());
+        return Ok(());
+    }
     let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     for entry in entries {
-        let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let path = entry.path();
-        // Components the timeline cases play are not cases of their own.
-        if path.is_dir() && name != "components" {
-            walk(&path, &format!("{prefix}{name}/"), out)?;
-        } else if name.ends_with(".tsx") || name.ends_with(".timeline.json") {
-            out.push(format!("{prefix}{name}"));
+        let entry = entry.map_err(|e| e.to_string())?;
+        if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+            discover(&entry.path(), cases)?;
         }
     }
     Ok(())
 }
 
-impl Runner {
-    fn run_all(&self, cases: &[String]) -> ExitCode {
-        println!("\nrunning {} cases", cases.len());
-        let start = Instant::now();
-        let mut done = self.each(cases, &(0..cases.len()).collect::<Vec<_>>());
-        // Cases whose Chrome baselines are out of date run again once they are drawn.
-        let stale: Vec<usize> = (done.iter())
-            .filter(|(.., o)| matches!(o, Outcome::Stale(_)))
-            .map(|&(i, ..)| i)
-            .collect();
-        if !stale.is_empty() {
-            let mut jobs = Vec::new();
-            for (.., outcome) in &mut done {
-                if let Outcome::Stale(j) = outcome {
-                    jobs.append(j);
-                }
-            }
-            done.retain(|(i, ..)| !stale.contains(i));
-            match self.draw_chrome(&jobs) {
-                Ok(()) => {
-                    for (i, took, outcome) in self.each(cases, &stale) {
-                        let outcome = match outcome {
-                            Outcome::Stale(_) => {
-                                println!("case {} ... FAILED", cases[i]);
-                                Outcome::Failed("its Chrome baseline is out of date again".into())
-                            }
-                            outcome => outcome,
-                        };
-                        done.push((i, took, outcome));
-                    }
-                }
-                Err(e) => {
-                    for &i in &stale {
-                        println!("case {} ... FAILED", cases[i]);
-                        done.push((i, Duration::ZERO, Outcome::Failed(e.clone())));
-                    }
-                }
-            }
-        }
-        done.sort_by_key(|&(i, ..)| i);
-        let failed = (done.iter())
-            .filter(|(.., o)| matches!(o, Outcome::Failed(_)))
-            .count();
-        let skipped = (done.iter())
-            .filter(|(.., o)| matches!(o, Outcome::Skipped))
-            .count();
-        if failed > 0 {
-            println!("\nfailures:");
-            for (i, _, outcome) in &done {
-                if let Outcome::Failed(why) = outcome {
-                    println!("\n---- {}\n{why}", cases[*i]);
-                }
-            }
-            if !self.reviewed().is_empty() {
-                let page = self.review.join("index.html");
-                println!("\ncompare the frames in {}", page.display());
-            }
-        }
-        done.sort_by_key(|&(_, took, _)| std::cmp::Reverse(took));
-        println!("\nslowest:");
-        for (i, took, _) in done.iter().take(10) {
-            println!("  {:>8.3} s  {}", took.as_secs_f64(), cases[*i]);
-        }
-        // Which GPU drew and how close it came: whether baselines hold on other GPUs.
-        if let Some(Ok(gpu)) = self.gpu.get() {
-            let largest = self.largest.load(Ordering::Relaxed);
-            println!(
-                "\ndrawn on {}, at most {largest} levels from the baselines",
-                gpu.name()
-            );
-        }
-        let skips = match skipped {
-            0 => String::new(),
-            n => format!("; {n} skipped, the gpu layer being off"),
-        };
-        println!(
-            "\ncase result: {}. {} passed; {failed} failed{skips}; finished in {:.2}s\n",
-            if failed == 0 { "ok" } else { "FAILED" },
-            cases.len() - failed - skipped,
-            start.elapsed().as_secs_f64()
+fn version(root: &Path, name: &str) -> Result<String, String> {
+    let bytes = std::fs::read(root.join("package.json")).map_err(|e| e.to_string())?;
+    let package: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    package["devDependencies"][name]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| format!("package.json does not pin {name}"))
+}
+
+#[test]
+fn incorrect_expectations_fail_against_a_real_scene() {
+    with_stack(|| {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let dir = root.join("tests/cases/css/box-model/content-box");
+        let mut case = case::Case::read(&dir.join("case.json")).unwrap();
+
+        case.layout[0].border.width = 129.0;
+        let error = scene::check(&root, &dir, &case).unwrap_err();
+        assert!(
+            error.contains("box.border.width: expected 129, actual 128"),
+            "{error}"
         );
-        if failed == 0 {
-            ExitCode::SUCCESS
-        } else {
-            ExitCode::FAILURE
-        }
-    }
 
-    /// Runs the cases at `todo`, in parallel, and reports each but those with baselines to draw.
-    fn each(&self, cases: &[String], todo: &[usize]) -> Vec<(usize, Duration, Outcome)> {
-        let next = AtomicUsize::new(0);
-        let done: Mutex<Vec<(usize, Duration, Outcome)>> = Mutex::new(Vec::new());
-        let workers = std::thread::available_parallelism().map_or(1, |n| n.get());
-        std::thread::scope(|s| {
-            for _ in 0..workers.min(todo.len()) {
-                std::thread::Builder::new()
-                    .stack_size(STACK)
-                    .spawn_scoped(s, || {
-                        while let Some(&i) = todo.get(next.fetch_add(1, Ordering::Relaxed)) {
-                            let case = &cases[i];
-                            let began = Instant::now();
-                            let outcome = self.run(case);
-                            let took = began.elapsed();
-                            let mut done = done.lock().unwrap_or_else(|e| e.into_inner());
-                            match outcome {
-                                Outcome::Passed => println!("case {case} ... ok"),
-                                Outcome::Failed(_) => println!("case {case} ... FAILED"),
-                                Outcome::Skipped | Outcome::Stale(_) => {}
-                            }
-                            done.push((i, took, outcome));
-                        }
-                    })
-                    .expect("a worker thread");
-            }
-        });
-        done.into_inner().unwrap_or_else(|e| e.into_inner())
-    }
+        case.layout[0].border.width = 128.0;
+        case.layout[0].key = "missing".into();
+        let error = scene::check(&root, &dir, &case).unwrap_err();
+        assert!(error.contains("key \"missing\": no node"), "{error}");
 
-    fn run(&self, case: &str) -> Outcome {
-        let checked = match case {
-            tailwind::CASE => Some(tailwind::case(&self.repo, self.ci)),
-            d3::CASE => Some(d3::case(&self.repo, self.ci)),
-            _ => None,
-        };
-        if let Some(checked) = checked {
-            return match checked {
-                Ok(()) => Outcome::Passed,
-                Err(e) => Outcome::Failed(e),
-            };
-        }
-        let standard = ["css/", "svg/", "tailwind/"]
-            .iter()
-            .any(|d| case.starts_with(d));
-        let drawn = !standard && !case.starts_with("errors/");
-        if drawn && !self.gpu_layer {
-            return Outcome::Skipped;
-        }
-        let run = std::panic::AssertUnwindSafe(|| {
-            self.check(case)?;
-            if standard {
-                self.chrome(case)
-            } else if drawn {
-                self.pixels(case).map(|()| Vec::new())
-            } else {
-                self.error(case).map(|()| Vec::new())
-            }
-        });
-        match std::panic::catch_unwind(run) {
-            Ok(Ok(jobs)) if jobs.is_empty() => Outcome::Passed,
-            Ok(Ok(jobs)) => Outcome::Stale(jobs),
-            Ok(Err(why)) => Outcome::Failed(why),
-            Err(panic) => {
-                let why = (panic.downcast_ref::<String>().cloned())
-                    .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
-                    .unwrap_or_default();
-                Outcome::Failed(format!("panicked: {why}"))
-            }
-        }
-    }
-
-    /// A case's source, or that of a file it reads.
-    fn source(&self, path: &str) -> Option<String> {
-        match self.made.get(path) {
-            Some(source) => Some(source.clone()),
-            None => std::fs::read_to_string(self.root.join(path)).ok(),
-        }
-    }
-
-    /// The bytes of a case or of a file it reads: from the web, only a pinned font's, from the
-    /// cache.
-    fn bytes(&self, path: &str) -> Option<Vec<u8>> {
-        if let Some(source) = self.made.get(path) {
-            return Some(source.clone().into_bytes());
-        }
-        if path.starts_with("https://") {
-            let font = pinned().find(|f| f.url == path)?;
-            return std::fs::read(cached(font).ok()?).ok();
-        }
-        std::fs::read(self.root.join(path)).ok()
-    }
-
-    fn error(&self, case: &str) -> Result<(), String> {
-        let source = self.source(case).ok_or("cannot read the case")?;
-        let named = match case.ends_with(".timeline.json") {
-            // A document names it in its metadata, which playback ignores.
-            true => (serde_json::from_str::<serde_json::Value>(&source).ok())
-                .and_then(|d| d["metadata"]["error"].as_str().map(String::from)),
-            false => (source.lines().next())
-                .and_then(|l| l.strip_prefix("// error: "))
-                .map(String::from),
-        };
-        let expected = named.ok_or(
-            "an errors/ case names its error on its first line, // error: …, or a document in \
-             its metadata, \"error\": \"…\"",
-        )?;
-        let expected = expected.as_str();
-        let failed = match self.frames(case, &mut |scene, _, at| scene.frame(at).map(drop)) {
-            Ok(()) => None,
-            Err(Failure::Scene(e)) => Some(e),
-            Err(Failure::Case(e)) => return Err(e),
-        };
-        match failed {
-            None => Err(format!("no error; expected: {expected}")),
-            Some(e) if fits(&e, expected) => Ok(()),
-            Some(e) => Err(format!("error:    {e}\nexpected: {expected}")),
-        }
-    }
-
-    fn gpu(&self) -> Result<&Gpu, String> {
-        self.gpu.get_or_init(Gpu::new).as_ref().map_err(|e| {
-            format!("{e}; the gpu layer needs a GPU (`cargo xtask test --skip gpu` skips it)")
-        })
-    }
-
-    fn pixels(&self, case: &str) -> Result<(), String> {
-        let gpu = self.gpu()?;
-        let stem = stem(case);
-        let mut renderer = None;
-        let mut problems = Vec::new();
-        let mut review = Ok(());
-        let drawn = self.frames(case, &mut |scene, i, at| {
-            let c = scene.composition();
-            let renderer = renderer.get_or_insert_with(|| Renderer::new(gpu, c.width, c.height));
-            let frame = scene.frame(at)?;
-            let (items, pictures) = (&frame.items, &frame.pictures);
-            let pixels = renderer.render(items, pictures, scene.faces(), scene.images())?;
-            match self.compare(&format!("{stem}.{i}.png"), [c.width, c.height], &pixels) {
-                Ok(Some(problem)) => problems.push(format!("frame {i}: {problem}")),
-                Ok(None) => {}
-                Err(e) => review = Err(e),
-            }
-            Ok(())
-        });
-        match drawn {
-            Ok(()) => review?,
-            Err(Failure::Scene(e) | Failure::Case(e)) => return Err(e),
-        }
-        if problems.is_empty() {
-            Ok(())
-        } else {
-            Err(problems.join("\n"))
-        }
-    }
-
-    /// Compares the case's frames with their Chrome baselines, boxes and lines and on the GPU
-    /// pixels, or gives the baselines to draw when any is missing or was drawn from other HTML or
-    /// by another Chrome.
-    fn chrome(&self, case: &str) -> Result<Vec<chrome::Job>, String> {
-        let version = self.chrome.as_ref().map_err(String::clone)?;
-        let gpu = if self.gpu_layer {
-            Some(self.gpu()?)
-        } else {
-            None
-        };
-        let stem = stem(case);
-        let mut renderer = None;
-        let mut jobs = Vec::new();
-        let mut problems = Vec::new();
-        let drawn = self.frames(case, &mut |scene, i, at| {
-            let frame = scene.frame(at)?;
-            let c = scene.composition();
-            let size = [c.width, c.height];
-            let tailwind = self.tailwind.as_deref().map_err(|e| e.to_string())?;
-            let fonts = scene.font_files();
-            let html = html::print(&frame, c, scene.resources(), fonts, tailwind)?;
-            let out = self.chrome_baselines.join(format!("{stem}.{i}"));
-            let png = self.chrome_baselines.join(format!("{stem}.{i}.png"));
-            let json = self.chrome_baselines.join(format!("{stem}.{i}.json"));
-            match chrome::read::<chrome::Baseline>(&json)? {
-                Some(b) if b.chrome == *version && b.html == html && png.exists() => {
-                    let off = chrome::compare(&frame, &b);
-                    problems.extend(off.into_iter().map(|p| format!("frame {i}: {p}")));
-                    if let Some(gpu) = gpu {
-                        let renderer =
-                            renderer.get_or_insert_with(|| Renderer::new(gpu, size[0], size[1]));
-                        let items = chrome::glyphless(&frame, scene.pictures());
-                        let drawn = renderer.render(&items, &[], scene.faces(), scene.images())?;
-                        let name = format!("{stem}.{i}.png");
-                        if let Some(p) = self.against_chrome(&name, size, &drawn, &png)? {
-                            problems.push(format!("frame {i}: {p}"));
-                        }
-                    }
-                }
-                _ => jobs.push(chrome::Job {
-                    page: page(&html)?,
-                    html,
-                    size,
-                    out: out.to_string_lossy().into_owned(),
-                }),
-            }
-            Ok(())
-        });
-        if let Err(Failure::Scene(e) | Failure::Case(e)) = drawn {
-            return Err(e);
-        }
-        if !jobs.is_empty() {
-            Ok(jobs)
-        } else if problems.is_empty() {
-            Ok(Vec::new())
-        } else {
-            Err(problems.join("\n"))
-        }
-    }
-
-    /// Draws Chrome baselines with `web/tests/chrome.ts`, which CI never does.
-    fn draw_chrome(&self, jobs: &[chrome::Job]) -> Result<(), String> {
-        let version = self.chrome.as_ref().map_err(String::clone)?;
-        if self.ci {
-            return Err(format!(
-                "the Chrome {version} baselines are missing or out of date, and CI never draws \
-                 them: `cargo xtask test` draws them on a machine that can run Chrome"
-            ));
-        }
-        let dir = self.repo.join("target/chrome");
-        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        let list = dir.join("jobs.json");
-        let text = serde_json::to_string(jobs).map_err(|e| e.to_string())?;
-        std::fs::write(&list, text).map_err(|e| format!("{}: {e}", list.display()))?;
-        match jobs.len() {
-            0 => println!("\nlisting the CSS properties Chrome knows"),
-            n => println!("\ndrawing {n} Chrome baselines"),
-        }
-        bun(
-            &self.repo,
-            &["web/tests/chrome.ts".as_ref(), list.as_os_str()],
-        )
-    }
-
-    /// The CSS properties the pinned Chrome knows, which `web/tests/chrome.ts` lists whenever it
-    /// draws.
-    fn chrome_properties(&self) -> Result<Vec<String>, String> {
-        let version = self.chrome.as_ref().map_err(String::clone)?;
-        let path = self.chrome_baselines.join("properties.json");
-        let listed = || {
-            let list = chrome::read::<chrome::Properties>(&path)?;
-            let drawn = list.filter(|l| {
-                l.chrome == *version
-                    && !l.easings.is_empty()
-                    && !l.formats.is_empty()
-                    && !l.paths.is_empty()
-            });
-            Ok::<_, String>(drawn.map(|l| l.properties))
-        };
-        if let Some(known) = listed()? {
-            return Ok(known);
-        }
-        self.draw_chrome(&[])?;
-        listed()?.ok_or_else(|| format!("{}: Chrome {version} listed nothing", path.display()))
-    }
-
-    /// The standalone checker must report the same frame errors as the rendering path. This
-    /// also exercises the generated CSS/SVG matrices, including recovery after an invalid frame.
-    fn check(&self, case: &str) -> Result<(), String> {
-        let mut scene = match self.scene(case) {
-            Ok(scene) => scene,
-            // Loading is shared, and the regular error case below checks this diagnostic.
-            Err(Failure::Scene(_)) => return Ok(()),
-            Err(Failure::Case(e)) => return Err(e),
-        };
-        let mut checker = self
-            .scene(case)
-            .map_err(|e| match e {
-                Failure::Scene(e) | Failure::Case(e) => e,
-            })?
-            .into_checker();
-        let c = scene.composition();
-        for i in 0..c.fps.frames_in(c.duration) {
-            let at = c.fps.frame_start(i)?;
-            let checked = checker.check(at);
-            let drawn = scene.frame(at).map(drop);
-            if checked != drawn {
-                return Err(format!("frame {i}: check {checked:?}, render {drawn:?}"));
-            }
-        }
-        Ok(())
-    }
-
-    /// Runs `each` on the case's frames in order, with the scene, the frame and its time.
-    fn frames(
-        &self,
-        case: &str,
-        each: &mut dyn FnMut(&mut Scene, i64, Tick) -> Result<(), String>,
-    ) -> Result<(), Failure> {
-        let mut scene = self.scene(case)?;
-        let c = scene.composition();
-        for i in 0..c.fps.frames_in(c.duration) {
-            let at = c.fps.frame_start(i).map_err(Failure::Case)?;
-            each(&mut scene, i, at).map_err(Failure::Scene)?;
-        }
-        Ok(())
-    }
-
-    /// Load a case and its video decoders, shared by checking and drawing tests.
-    fn scene(&self, case: &str) -> Result<Scene, Failure> {
-        let lowered = match case.ends_with(".timeline.json") {
-            true => Some(self.lower(case).map_err(Failure::Scene)?),
-            false => None,
-        };
-        let read = |path: &str| match &lowered {
-            Some(l) if l.files.contains_key(path) => Some(l.files[path].clone().into_bytes()),
-            _ => self.bytes(path),
-        };
-        let (entry, inputs) = match &lowered {
-            Some(l) => (l.entry.as_str(), l.inputs.clone()),
-            None => (case, Inputs::default()),
-        };
-        let mut scene = Scene::load(entry, &read, &inputs, fonts()).map_err(Failure::Scene)?;
-        // Its videos, decoded by FFmpeg's own decoder, which every machine has.
-        for (name, file) in scene.video_files(&inputs) {
-            let path = self.root.join(&file);
-            let reader = media::reader(&path, Some(Decoding::Software))
-                .map_err(|e| Failure::Scene(format!("video resource {name}: {e}")))?;
-            (scene.set_video(&name, Box::new(Decoded(reader)))).map_err(Failure::Scene)?;
-        }
-        let c = scene.composition();
-        if c.width > MAX_SIZE || c.height > MAX_SIZE {
-            let e = format!("cases are at most {MAX_SIZE} × {MAX_SIZE} px");
-            return Err(Failure::Case(e));
-        }
-        let n = c.fps.frames_in(c.duration);
-        if n > MAX_FRAMES {
-            let e = format!("cases have at most {MAX_FRAMES} frames, not {n}");
-            return Err(Failure::Case(e));
-        }
-        Ok(scene)
-    }
-
-    /// The scene a timeline case plays as.
-    fn lower(&self, case: &str) -> Result<timeline::Lowered, String> {
-        let text = self.source(case).ok_or("cannot read the case")?;
-        let doc = valle_timeline::parse(&text).map_err(|e| format!("{case}: {e}"))?;
-        let read = |path: &str| self.source(path);
-        let length = |path: &str| media::length(&self.root.join(path)).ok().map(Tick);
-        let host = timeline::Host {
-            read: &read,
-            length: &length,
-        };
-        timeline::lower(case, &doc, &host).map_err(|e| format!("{case}: {e}"))
-    }
-
-    /// What is wrong with a drawn frame against its baseline, if anything; a frame that is wrong
-    /// goes to review.
-    fn compare(&self, name: &str, size: [u32; 2], drawn: &[u8]) -> Result<Option<String>, String> {
-        let baseline = self.baselines.join(name);
-        let (problem, diff) = if baseline.exists() {
-            let (got, expected) = read_png(&baseline)?;
-            if got != size {
-                let [w, h] = got;
-                let problem = format!("the baseline is {w} × {h} px, the frame is not");
-                (Some(problem), None)
-            } else {
-                let mut diff = Vec::with_capacity(drawn.len());
-                let (mut off, mut most) = (0, 0);
-                for (a, b) in drawn.chunks(4).zip(expected.chunks(4)) {
-                    let d = (a.iter().zip(b)).map(|(x, y)| x.abs_diff(*y)).max();
-                    let d = d.unwrap_or(0);
-                    most = most.max(d);
-                    off += usize::from(d > 1);
-                    diff.extend(if d > 1 { [255, 0, 0, 255] } else { [255; 4] });
-                }
-                self.largest.fetch_max(most, Ordering::Relaxed);
-                let problem = (off > 0)
-                    .then(|| format!("{off} pixels are off by more than 1 level, by up to {most}"));
-                (problem, Some(diff))
-            }
-        } else {
-            (Some(format!("no baseline {name}")), None)
-        };
-        let Some(problem) = problem else {
-            return Ok(None);
-        };
-        let against = diff.as_ref().map(|marked| Against {
-            image: &baseline,
-            marked,
-            captions: ("baseline", "off by more than 1 level"),
-        });
-        self.to_review(name, size, drawn, against, &problem)?;
-        Ok(Some(problem))
-    }
-
-    /// What is wrong with a frame drawn without its glyphs against Chrome's, if anything; a frame
-    /// that is wrong goes to review.
-    fn against_chrome(
-        &self,
-        name: &str,
-        size: [u32; 2],
-        drawn: &[u8],
-        png: &Path,
-    ) -> Result<Option<String>, String> {
-        let (got, theirs) = read_png(png)?;
-        if got != size {
-            let [w, h] = got;
-            let problem = format!("Chrome's frame is {w} × {h} px, the frame is not");
-            self.to_review(name, size, drawn, None, &problem)?;
-            return Ok(Some(problem));
-        }
-        let (far, marked) = chrome::far(drawn, &theirs, size);
-        // A thousandth of the pixels.
-        let most = (size[0] * size[1]) as usize / 1000;
-        if far <= most {
-            return Ok(None);
-        }
-        let problem = format!(
-            "{far} pixels are more than 8 levels outside what Chrome has around them; at most \
-             {most} may be"
+        case.layout[0].key = "box".into();
+        case.at = vec![1.into()];
+        let error = scene::check(&root, &dir, &case).unwrap_err();
+        assert!(
+            error.contains("at=1s is outside the scene duration"),
+            "{error}"
         );
-        let against = Against {
-            image: png,
-            marked: &marked,
-            captions: ("Chrome, without text", "far from Chrome"),
-        };
-        self.to_review(name, size, drawn, Some(against), &problem)?;
-        Ok(Some(problem))
-    }
+    });
+}
 
-    /// Puts a frame in review: what was drawn, and what it was compared with.
-    fn to_review(
-        &self,
-        name: &str,
-        size: [u32; 2],
-        drawn: &[u8],
-        against: Option<Against>,
-        problem: &str,
-    ) -> Result<(), String> {
-        let stem = name.trim_end_matches(".png");
-        write_png(&self.review.join(name), size, drawn)?;
-        if let Some(a) = &against {
-            write_png(
-                &self.review.join(format!("{stem}.diff.png")),
-                size,
-                a.marked,
-            )?;
-            let to = self.review.join(format!("{stem}.expected.png"));
-            std::fs::copy(a.image, &to).map_err(|e| format!("{}: {e}", a.image.display()))?;
-        }
-        let captions = against.map(|a| a.captions);
-        let mut reviewed = self.reviewed.lock().unwrap_or_else(|e| e.into_inner());
-        reviewed.push((name.to_string(), problem.to_string(), captions));
-        Ok(())
-    }
-
-    fn reviewed(&self) -> Vec<Reviewed> {
-        let mut list = (self.reviewed.lock().unwrap_or_else(|e| e.into_inner())).clone();
-        list.sort();
-        list
-    }
-
-    /// The page comparing the frames that went to review.
-    fn write_review(&self) -> Result<(), String> {
-        let reviewed = self.reviewed();
-        if reviewed.is_empty() {
-            return Ok(());
-        }
-        let mut html = String::from(
-            "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Valle review</title>\n<style>\n\
-             body { font: 14px system-ui, sans-serif; margin: 24px; }\n\
-             figure { display: inline-block; margin: 0 16px 16px 0; }\n\
-             img { image-rendering: pixelated; background: repeating-conic-gradient(#ccc 0 25%, \
-             #fff 0 50%) 0 0 / 16px 16px; }\n</style>\n<h1>Frames to review</h1>\n\
-             <p>Accept the cases that look right with <code>cargo xtask accept &lt;case&gt;</code>; \
-             a css or svg case that differs from Chrome is the engine's to fix.\n",
-        );
-        for (name, problem, against) in reviewed {
-            let stem = name.trim_end_matches(".png");
-            let figure = |file: String, caption: &str| {
-                format!("<figure><img src=\"{file}\"><figcaption>{caption}</figcaption></figure>\n")
-            };
-            let _ = write!(html, "<h2>{name}</h2>\n<p>{problem}\n");
-            if let Some((expected, _)) = against {
-                html += &figure(format!("{stem}.expected.png"), expected);
+#[test]
+fn text_checks_detect_changed_spacing_and_line_geometry() {
+    with_stack(|| {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let dir = root.join("tests/cases/css/text/preserved-spaces");
+        let case = case::Case::read(&dir.join("case.json")).unwrap();
+        let sample = scene::load(&root, &dir.join("scene.tsx"), case.times().unwrap()[0]).unwrap();
+        for broken in ["text", "x", "baseline", "height"] {
+            let mut m = scene::measure(&sample.frame);
+            match broken {
+                "text" => m.lines[0].text[0] = "Valle motion".into(),
+                "x" => m.lines[0].geometry[0].x += 1.0,
+                "baseline" => m.lines[0].geometry[1].baseline += 1.0,
+                "height" => m.lines[0].geometry[0].height += 1.0,
+                _ => unreachable!(),
             }
-            html += &figure(name.clone(), "drawn");
-            if let Some((_, marks)) = against {
-                html += &figure(format!("{stem}.diff.png"), marks);
-            }
+            assert!(m.check(&case).is_err(), "{broken}");
         }
-        let page = self.review.join("index.html");
-        std::fs::write(&page, html).map_err(|e| format!("{}: {e}", page.display()))
-    }
-}
-
-/// Runs a script with bun in the repository, after installing the locked packages.
-fn bun(repo: &Path, args: &[&std::ffi::OsStr]) -> Result<(), String> {
-    let script = args.first().map_or("".into(), |s| s.to_string_lossy());
-    for args in [
-        &["install", "--frozen-lockfile", "--silent"].map(std::ffi::OsStr::new)[..],
-        args,
-    ] {
-        let status = Command::new("bun")
-            .args(args)
-            .current_dir(repo)
-            .status()
-            .map_err(|e| format!("cannot run bun, which {script} needs: {e}"))?;
-        if !status.success() {
-            let shown: Vec<_> = args.iter().map(|a| a.to_string_lossy()).collect();
-            return Err(format!("`bun {}` failed ({status})", shown.join(" ")));
-        }
-    }
-    Ok(())
-}
-
-/// Whether `error` fits `expected`, where each `…` stands for any text.
-fn fits(error: &str, expected: &str) -> bool {
-    let mut parts = expected.split('…');
-    let Some(mut rest) = error.strip_prefix(parts.next().unwrap_or_default()) else {
-        return false;
-    };
-    let parts: Vec<&str> = parts.collect();
-    let Some((last, middle)) = parts.split_last() else {
-        return rest.is_empty();
-    };
-    for part in middle {
-        match rest.find(part) {
-            Some(i) => rest = &rest[i + part.len()..],
-            None => return false,
-        }
-    }
-    rest.ends_with(last)
-}
-
-fn read_png(path: &Path) -> Result<([u32; 2], Vec<u8>), String> {
-    let bad = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
-    let file = std::fs::File::open(path).map_err(|e| bad(&e))?;
-    let mut reader = (png::Decoder::new(BufReader::new(file)).read_info()).map_err(|e| bad(&e))?;
-    let mut pixels = vec![
-        0;
-        reader
-            .output_buffer_size()
-            .ok_or_else(|| bad(&"too large"))?
-    ];
-    let info = reader.next_frame(&mut pixels).map_err(|e| bad(&e))?;
-    pixels.truncate(info.buffer_size());
-    let size = [info.width, info.height];
-    match (info.color_type, info.bit_depth) {
-        (png::ColorType::Rgba, png::BitDepth::Eight) => Ok((size, pixels)),
-        // Chrome leaves out the alpha of an opaque frame.
-        (png::ColorType::Rgb, png::BitDepth::Eight) => {
-            let rgba = pixels
-                .chunks(3)
-                .flat_map(|p| [p[0], p[1], p[2], 255])
-                .collect();
-            Ok((size, rgba))
-        }
-        _ => Err(bad(&"frames are 8-bit RGBA or RGB")),
-    }
-}
-
-fn write_png(path: &Path, size: [u32; 2], pixels: &[u8]) -> Result<(), String> {
-    let bad = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| bad(&e))?;
-    }
-    let file = std::fs::File::create(path).map_err(|e| bad(&e))?;
-    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), size[0], size[1]);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().map_err(|e| bad(&e))?;
-    writer.write_image_data(pixels).map_err(|e| bad(&e))?;
-    writer.finish().map_err(|e| bad(&e))
-}
-
-/// The file of pinned font `font` in the global cache.
-/// A video FFmpeg decodes, as the scene reads it.
-struct Decoded(Box<dyn media::Read>);
-
-impl Video for Decoded {
-    fn size(&self) -> [u32; 2] {
-        self.0.size()
-    }
-
-    fn frame(&mut self, at: Tick) -> Result<Image, String> {
-        let pixels = self.0.frame(at.0)?;
-        Ok(Image {
-            size: self.0.size(),
-            pixels: pixels.into(),
-        })
-    }
-}
-
-fn cached(font: &BuiltIn) -> Result<PathBuf, String> {
-    UrlCache::global()?.fetch_pinned(font.url, font.sha256, font.file)
-}
-
-/// The page Chrome loads for `html`: each pinned font it names by its file's name the file in
-/// the cache, which the server `web/tests/chrome.ts` runs gives under `/file`.
-fn page(html: &str) -> Result<String, String> {
-    let mut page = html.to_string();
-    for font in pinned() {
-        let name = format!("url(\"{}\")", font.file);
-        if page.contains(&name) {
-            let path = cached(font)?;
-            page = page.replace(&name, &format!("url(\"/file{}\")", path.display()));
-        }
-    }
-    Ok(page)
-}
-
-/// The built-in fonts, from the global cache, each read once for all the cases.
-fn fonts() -> Fonts {
-    static GIVEN: Mutex<BTreeMap<&str, Blob<u8>>> = Mutex::new(BTreeMap::new());
-    std::rc::Rc::new(|font: &BuiltIn| {
-        let mut given = GIVEN.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(blob) = given.get(font.sha256) {
-            return Ok(blob.clone());
-        }
-        let path = cached(font)?;
-        let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let blob = Blob::from(bytes);
-        given.insert(font.sha256, blob.clone());
-        Ok(blob)
-    })
+    });
 }

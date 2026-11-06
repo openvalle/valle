@@ -1,0 +1,9 @@
+{
+  "spec": "crates/valle-engine/src/style/tailwind.rs",
+  "assertion": "Background classes: linear gradients to a side, at an angle, negative, the long way round the hue and in sRGB, with a via stop and stop positions, and written; radial gradients, centered and at a written place; conic gradients, from the top and from an angle; and a written image sized, placed and repeated, with its box clipped and its origin moved, and text clipped to it.",
+  "at": [0.0],
+  "valle": {
+    "reason": "Restored product regression PNGs from the verified 2026-11-05 backup and its base commit 5d1fb918; resource paths adapted without changing the expected pixels.",
+    "maxDifference": 1
+  }
+}

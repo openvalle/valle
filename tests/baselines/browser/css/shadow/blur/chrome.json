@@ -1,0 +1,10 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/css/shadow/blur/scene.html": "2e563e12694a68da3d9d01aa356a01ceaa0e865af078f16c872437ce11dd8d04"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "size": [360, 150],
+  "sources": {
+    "tests/baselines/browser/css/images/object-fit/scene.html": "74e83015a985db2091b6d43d8cfcdb50f1ad2b6a9db4414623f79f87915d8d8f",
+    "tests/resources/svg/pixels.png": "d8f66d52df52b8a99d21ba37b5f535585d6a2889925ee919edf84aa36bc4516d"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "contain",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        }
+      },
+      {
+        "key": "cover",
+        "border": {
+          "x": 130,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        },
+        "padding": {
+          "x": 130,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        },
+        "content": {
+          "x": 130,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        }
+      },
+      {
+        "key": "fill",
+        "border": {
+          "x": 240,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        },
+        "padding": {
+          "x": 240,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        },
+        "content": {
+          "x": 240,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        }
+      }
+    ],
+    "lines": []
+  }
+}

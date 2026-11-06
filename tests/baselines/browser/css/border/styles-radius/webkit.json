@@ -1,0 +1,10 @@
+{
+  "size": [360, 220],
+  "sources": {
+    "tests/baselines/browser/css/border/styles-radius/scene.html": "9a08f93bbea3847014289f127a79f984ac3c56fef997c09f05824a0a13b23665"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

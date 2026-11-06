@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/sizing/auto-height-limits</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 440px;
+      height: 160px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <div style="position: relative; width: 440px; height: 160px; background-color: white">
+      <div
+        data-key="auto"
+        style="
+          position: absolute;
+          left: 20px;
+          top: 20px;
+          width: 120px;
+          padding: 8px;
+          border: 2px solid #102a43;
+          background-color: #eef2f7;
+        "
+      >
+        <div style="height: 20px; background-color: #176bba"></div>
+        <div style="height: 30px; background-color: #16a085"></div>
+      </div>
+      <div
+        data-key="min"
+        style="
+          position: absolute;
+          left: 160px;
+          top: 20px;
+          width: 120px;
+          min-height: 100px;
+          padding: 8px;
+          border: 2px solid #102a43;
+          background-color: #eef2f7;
+        "
+      >
+        <div style="height: 20px; background-color: #176bba"></div>
+        <div style="height: 30px; background-color: #16a085"></div>
+      </div>
+      <div
+        data-key="max"
+        style="
+          position: absolute;
+          left: 300px;
+          top: 20px;
+          width: 120px;
+          max-height: 48px;
+          overflow: hidden;
+          padding: 8px;
+          border: 2px solid #102a43;
+          background-color: #eef2f7;
+        "
+      >
+        <div style="height: 20px; background-color: #176bba"></div>
+        <div style="height: 30px; background-color: #16a085"></div>
+      </div>
+    </div>
+  </div>
+</html>

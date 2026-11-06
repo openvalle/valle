@@ -1,0 +1,9 @@
+{
+  "spec": "crates/valle-engine/src/style/tailwind.rs",
+  "assertion": "Transform classes: translations of the scale, of fractions, full, negative and written; scales of both axes, of one, negative and written; rotations of the theme, negative and written, about origins; skews; a transform written; and in 3D, turned about each axis under perspectives of the theme and written, moved in depth, in a kept 3D space and with their backs hidden.",
+  "at": [0.0],
+  "valle": {
+    "reason": "Restored product regression PNGs from the verified 2026-11-05 backup and its base commit 5d1fb918; resource paths adapted without changing the expected pixels.",
+    "maxDifference": 1
+  }
+}

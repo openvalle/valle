@@ -1,0 +1,53 @@
+{
+  "size": [380, 180],
+  "sources": {
+    "tests/baselines/browser/css/sizing/intrinsic-width/scene.html": "5ab7d92236979343cbc07d2f4e5746b69bd257faf8df61c9bdadbd1b8c611de8"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "min",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 100,
+          "height": 70
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 100,
+          "height": 70
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 100,
+          "height": 70
+        }
+      },
+      {
+        "key": "max",
+        "border": {
+          "x": 180,
+          "y": 20,
+          "width": 170,
+          "height": 30
+        },
+        "padding": {
+          "x": 180,
+          "y": 20,
+          "width": 170,
+          "height": 30
+        },
+        "content": {
+          "x": 180,
+          "y": 20,
+          "width": 170,
+          "height": 30
+        }
+      }
+    ],
+    "lines": []
+  }
+}

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <title>Preserved spaces and line breaks</title>
+  <style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf") format("truetype");
+      font-weight: 100 900;
+    }
+    body {
+      margin: 0;
+    }
+    #canvas {
+      position: relative;
+      width: 360px;
+      height: 140px;
+      background: white;
+    }
+    #text {
+      position: absolute;
+      left: 20px;
+      top: 24px;
+      width: 320px;
+      height: 88px;
+      box-sizing: border-box;
+      padding: 8px;
+      border: 2px solid #ccd6e0;
+      background: #f4f7fa;
+      color: #17324d;
+      font: 24px / 32px "Test Sans";
+      white-space: pre;
+    }
+  </style>
+  <div id="canvas">
+    <!-- Preserve whitespace independently of HTML source formatting. -->
+    <!-- prettier-ignore -->
+    <div id="text" data-key="text" data-text>Valle&#32;&#32;motion&#10;Frame&#32;&#32;by&#32;&#32;frame</div>
+  </div>
+</html>

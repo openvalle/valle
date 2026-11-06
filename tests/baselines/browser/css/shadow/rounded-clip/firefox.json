@@ -1,0 +1,10 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/css/shadow/rounded-clip/scene.html": "321b2ba8a852f6d7c33b534635cd1a9a8a1d97085971e1e7596b9a7356a782d2"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

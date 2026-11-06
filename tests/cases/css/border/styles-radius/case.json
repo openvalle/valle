@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/css-backgrounds-3/#borders",
+  "assertion": "Solid/double/dashed/dotted borders and elliptical/asymmetric rounded corners use the declared widths and outer shapes.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed the solid/double rings, round dots, dash placement and curved silhouettes. Differences from Chrome are confined to rasterized edges. Firefox and WebKit distribute dashes/dots differently; those captures remain diagnostic.",
+    "pixels": {
+      "maxDifference": 140,
+      "maxPixels": 700
+    }
+  }
+}

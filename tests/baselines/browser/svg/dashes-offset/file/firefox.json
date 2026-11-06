@@ -1,0 +1,33 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/svg/dashes-offset/file/scene.html": "c8003b78038331616bc5f4cf49bc914de7c755f47fdb6112be25a3915b77767f",
+    "tests/cases/svg/dashes-offset/file/source.svg": "872158cf3b1dc1a38637f38b6981cba93895da2aa08676ce00d0d8db983e7469"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "drawing",
+        "border": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "padding": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "content": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        }
+      }
+    ],
+    "lines": []
+  }
+}

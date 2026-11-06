@@ -1,0 +1,33 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/svg/gradients/file/scene.html": "32883525c90874a39380291fa86a84b5f8ff156582db949981473a4622c960da",
+    "tests/cases/svg/gradients/file/source.svg": "4ea3404757e822e33c282e6de8193fabbbae64eb0dec6b36f41a38f6ca7818cf"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "drawing",
+        "border": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "padding": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "content": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        }
+      }
+    ],
+    "lines": []
+  }
+}

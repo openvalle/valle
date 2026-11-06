@@ -1,0 +1,57 @@
+{
+  "spec": "https://www.w3.org/TR/css-text-3/#text-align-property",
+  "assertion": "Two preformatted lines align their right edge to x=260, while baselines remain separated by 32px.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three fixed-font captures. Chrome agrees with the expected line strings and baselines; line geometry is asserted within 2/64px. Its glyph-edge rasterization differs from Valle, with a separate contour allowance; flat regions remain exact. Right-aligned x values are calculated from the pinned font M advance: 907/1000 em at 24px, subtracted from x=260.",
+    "textEdges": {
+      "key": "text",
+      "pixels": {
+        "maxDifference": 110,
+        "maxPixels": 1000
+      }
+    }
+  },
+  "layout": [
+    {
+      "key": "text",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 240,
+        "height": 120
+      },
+      "padding": {
+        "x": 20,
+        "y": 20,
+        "width": 240,
+        "height": 120
+      },
+      "content": {
+        "x": 20,
+        "y": 20,
+        "width": 240,
+        "height": 120
+      }
+    }
+  ],
+  "lines": [
+    {
+      "key": "text",
+      "text": ["MMMM", "MM"],
+      "geometry": [
+        {
+          "x": 172.928,
+          "baseline": 45,
+          "height": 32
+        },
+        {
+          "x": 216.464,
+          "baseline": 77,
+          "height": 32
+        }
+      ]
+    }
+  ]
+}

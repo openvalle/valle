@@ -1,0 +1,74 @@
+{
+  "spec": "https://www.w3.org/TR/css-images-3/#the-object-fit",
+  "assertion": "A 2:1 image is contained, covered or filled in a 100x100 box. Integer scaling and pixelated sampling expose fit/crop boundaries without interpolation noise.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed against the cited rule and all three browser captures. Explicit box expectations agree in all three where present; the Chrome image matches Valle exactly, so pixel comparison remains exact."
+  },
+  "layout": [
+    {
+      "key": "contain",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 100,
+        "height": 100
+      },
+      "padding": {
+        "x": 20,
+        "y": 20,
+        "width": 100,
+        "height": 100
+      },
+      "content": {
+        "x": 20,
+        "y": 20,
+        "width": 100,
+        "height": 100
+      }
+    },
+    {
+      "key": "cover",
+      "border": {
+        "x": 130,
+        "y": 20,
+        "width": 100,
+        "height": 100
+      },
+      "padding": {
+        "x": 130,
+        "y": 20,
+        "width": 100,
+        "height": 100
+      },
+      "content": {
+        "x": 130,
+        "y": 20,
+        "width": 100,
+        "height": 100
+      }
+    },
+    {
+      "key": "fill",
+      "border": {
+        "x": 240,
+        "y": 20,
+        "width": 100,
+        "height": 100
+      },
+      "padding": {
+        "x": 240,
+        "y": 20,
+        "width": 100,
+        "height": 100
+      },
+      "content": {
+        "x": 240,
+        "y": 20,
+        "width": 100,
+        "height": 100
+      }
+    }
+  ]
+}

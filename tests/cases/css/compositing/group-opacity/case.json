@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/compositing-1/#simplealphacompositing",
+  "assertion": "Group opacity applies once after opaque children overlap; per-child alpha blends twice in the overlap and therefore gives a different color.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed against the cited rule and all three browser captures. Explicit box expectations agree in all three where present; the Chrome image matches Valle exactly, so pixel comparison remains exact. Other browsers round alpha compositing differently by one or two channel levels; these remain diagnostic."
+  }
+}

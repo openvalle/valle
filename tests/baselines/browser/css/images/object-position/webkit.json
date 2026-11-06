@@ -1,0 +1,75 @@
+{
+  "size": [380, 150],
+  "sources": {
+    "tests/baselines/browser/css/images/object-position/scene.html": "499e6c04579837ce2fa8219d0d94d9fdd4ef82385ddfbaca6b3bddf679e22dab",
+    "tests/resources/svg/pixels.png": "d8f66d52df52b8a99d21ba37b5f535585d6a2889925ee919edf84aa36bc4516d"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "left",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        }
+      },
+      {
+        "key": "center",
+        "border": {
+          "x": 140,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        },
+        "padding": {
+          "x": 140,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        },
+        "content": {
+          "x": 140,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        }
+      },
+      {
+        "key": "right",
+        "border": {
+          "x": 260,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        },
+        "padding": {
+          "x": 260,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        },
+        "content": {
+          "x": 260,
+          "y": 20,
+          "width": 100,
+          "height": 100
+        }
+      }
+    ],
+    "lines": []
+  }
+}

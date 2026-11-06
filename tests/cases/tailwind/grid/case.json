@@ -1,0 +1,263 @@
+{
+  "spec": "crates/valle-engine/src/style/tailwind.rs",
+  "assertion": "Grid classes: columns and rows of equal fractions or arbitrary tracks, implicit tracks, items spanning and placed by line, negative lines too, dense and column flow; placing and justifying the items and the tracks; and items that place themselves. A full-span item crosses the 72px inner width. Column flow places two 12px rows in each 10px column with 4px gaps; place-items centers a 16px square in 48px.",
+  "at": [0.0],
+  "valle": {
+    "reason": "Restored product regression PNGs from the verified 2026-11-05 backup and its base commit 5d1fb918; resource paths adapted without changing the expected pixels.",
+    "maxDifference": 1
+  },
+  "layout": [
+    {
+      "key": "tracks",
+      "border": {
+        "x": 8,
+        "y": 8,
+        "width": 80,
+        "height": 48
+      },
+      "padding": {
+        "x": 8,
+        "y": 8,
+        "width": 80,
+        "height": 48
+      },
+      "content": {
+        "x": 12,
+        "y": 12,
+        "width": 72,
+        "height": 40
+      }
+    },
+    {
+      "key": "tracks/full",
+      "border": {
+        "x": 12,
+        "y": 44,
+        "width": 72,
+        "height": 8
+      },
+      "padding": {
+        "x": 12,
+        "y": 44,
+        "width": 72,
+        "height": 8
+      },
+      "content": {
+        "x": 12,
+        "y": 44,
+        "width": 72,
+        "height": 8
+      }
+    },
+    {
+      "key": "placement",
+      "border": {
+        "x": 96,
+        "y": 8,
+        "width": 80,
+        "height": 32
+      },
+      "padding": {
+        "x": 96,
+        "y": 8,
+        "width": 80,
+        "height": 32
+      },
+      "content": {
+        "x": 100,
+        "y": 12,
+        "width": 72,
+        "height": 24
+      }
+    },
+    {
+      "key": "placement/full",
+      "border": {
+        "x": 100,
+        "y": 28,
+        "width": 72,
+        "height": 8
+      },
+      "padding": {
+        "x": 100,
+        "y": 28,
+        "width": 72,
+        "height": 8
+      },
+      "content": {
+        "x": 100,
+        "y": 28,
+        "width": 72,
+        "height": 8
+      }
+    },
+    {
+      "key": "columns",
+      "border": {
+        "x": 184,
+        "y": 8,
+        "width": 46,
+        "height": 36
+      },
+      "padding": {
+        "x": 184,
+        "y": 8,
+        "width": 46,
+        "height": 36
+      },
+      "content": {
+        "x": 188,
+        "y": 12,
+        "width": 38,
+        "height": 28
+      }
+    },
+    {
+      "key": "columns/0",
+      "border": {
+        "x": 188,
+        "y": 12,
+        "width": 10,
+        "height": 12
+      },
+      "padding": {
+        "x": 188,
+        "y": 12,
+        "width": 10,
+        "height": 12
+      },
+      "content": {
+        "x": 188,
+        "y": 12,
+        "width": 10,
+        "height": 12
+      }
+    },
+    {
+      "key": "columns/1",
+      "border": {
+        "x": 188,
+        "y": 28,
+        "width": 10,
+        "height": 12
+      },
+      "padding": {
+        "x": 188,
+        "y": 28,
+        "width": 10,
+        "height": 12
+      },
+      "content": {
+        "x": 188,
+        "y": 28,
+        "width": 10,
+        "height": 12
+      }
+    },
+    {
+      "key": "columns/2",
+      "border": {
+        "x": 202,
+        "y": 12,
+        "width": 10,
+        "height": 12
+      },
+      "padding": {
+        "x": 202,
+        "y": 12,
+        "width": 10,
+        "height": 12
+      },
+      "content": {
+        "x": 202,
+        "y": 12,
+        "width": 10,
+        "height": 12
+      }
+    },
+    {
+      "key": "columns/4",
+      "border": {
+        "x": 216,
+        "y": 12,
+        "width": 10,
+        "height": 12
+      },
+      "padding": {
+        "x": 216,
+        "y": 12,
+        "width": 10,
+        "height": 12
+      },
+      "content": {
+        "x": 216,
+        "y": 12,
+        "width": 10,
+        "height": 12
+      }
+    },
+    {
+      "key": "dense",
+      "border": {
+        "x": 238,
+        "y": 8,
+        "width": 52,
+        "height": 36
+      },
+      "padding": {
+        "x": 238,
+        "y": 8,
+        "width": 52,
+        "height": 36
+      },
+      "content": {
+        "x": 242,
+        "y": 12,
+        "width": 44,
+        "height": 28
+      }
+    },
+    {
+      "key": "center",
+      "border": {
+        "x": 8,
+        "y": 64,
+        "width": 48,
+        "height": 48
+      },
+      "padding": {
+        "x": 8,
+        "y": 64,
+        "width": 48,
+        "height": 48
+      },
+      "content": {
+        "x": 8,
+        "y": 64,
+        "width": 48,
+        "height": 48
+      }
+    },
+    {
+      "key": "center/child",
+      "border": {
+        "x": 24,
+        "y": 80,
+        "width": 16,
+        "height": 16
+      },
+      "padding": {
+        "x": 24,
+        "y": 80,
+        "width": 16,
+        "height": 16
+      },
+      "content": {
+        "x": 24,
+        "y": 80,
+        "width": 16,
+        "height": 16
+      }
+    }
+  ]
+}

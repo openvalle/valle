@@ -1,0 +1,9 @@
+{
+  "spec": "crates/valle-engine/src/style/tailwind.rs",
+  "assertion": "Color classes: backgrounds of the palette, black, white and transparent; at opacities a modifier gives, named and written, over a color; written colors; a written image with its size and position; text colors; and SVG fills and strokes, of the palette, `current`, written, at an opacity, with stroke widths of the scale and written.",
+  "at": [0.0],
+  "valle": {
+    "reason": "Restored product regression PNGs from the verified 2026-11-05 backup and its base commit 5d1fb918; resource paths adapted without changing the expected pixels.",
+    "maxDifference": 1
+  }
+}

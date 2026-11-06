@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/css-color-4/#color-type",
+  "assertion": "Hex, rgb, hsl and color(srgb) produce their sRGB colors; straight-alpha black/red composite over white, including fully transparent input.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed against the cited rule and all three browser captures. Explicit box expectations agree in all three where present; the Chrome image matches Valle exactly, so pixel comparison remains exact. Other browsers round alpha compositing differently by one or two channel levels; these remain diagnostic."
+  }
+}

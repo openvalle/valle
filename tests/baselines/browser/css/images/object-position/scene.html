@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/images/object-position</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 380px;
+      height: 150px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <img
+      data-key="left"
+      src="/tests/resources/svg/pixels.png"
+      style="
+        position: absolute;
+        left: 20px;
+        top: 20px;
+        width: 100px;
+        height: 100px;
+        object-fit: cover;
+        object-position: left center;
+        image-rendering: pixelated;
+      "
+    /><img
+      data-key="center"
+      src="/tests/resources/svg/pixels.png"
+      style="
+        position: absolute;
+        left: 140px;
+        top: 20px;
+        width: 100px;
+        height: 100px;
+        object-fit: cover;
+        object-position: center;
+        image-rendering: pixelated;
+      "
+    /><img
+      data-key="right"
+      src="/tests/resources/svg/pixels.png"
+      style="
+        position: absolute;
+        left: 260px;
+        top: 20px;
+        width: 100px;
+        height: 100px;
+        object-fit: cover;
+        object-position: right center;
+        image-rendering: pixelated;
+      "
+    />
+  </div>
+</html>

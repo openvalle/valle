@@ -1,0 +1,33 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/svg/clip-rule-transform/file/scene.html": "c3afdfda1e54aa74749f97448f2808a2fa5e6f8f7414f0ea280b9cb6f3abd76f",
+    "tests/cases/svg/clip-rule-transform/file/source.svg": "2ad2a6c0fb2691cf3b53776a1f19275c3bd285eb4ad5bb4f87ef713f189946d1"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "drawing",
+        "border": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "padding": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "content": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        }
+      }
+    ],
+    "lines": []
+  }
+}

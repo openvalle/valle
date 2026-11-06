@@ -1,0 +1,9 @@
+{
+  "spec": "crates/valle-engine/src/style/tailwind.rs",
+  "assertion": "Border classes: widths of the scale, in px and written, on each side and the logical ones; colors at an opacity; dashed, dotted and double styles; radii of the scale, full, none, written and per corner; lines between children, reversed and styled; and outlines with their width, style, color and offset.",
+  "at": [0.0],
+  "valle": {
+    "reason": "Restored product regression PNGs from the verified 2026-11-05 backup and its base commit 5d1fb918; resource paths adapted without changing the expected pixels.",
+    "maxDifference": 1
+  }
+}

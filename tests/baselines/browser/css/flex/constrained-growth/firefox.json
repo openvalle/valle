@@ -1,0 +1,95 @@
+{
+  "size": [340, 160],
+  "sources": {
+    "tests/baselines/browser/css/flex/constrained-growth/scene.html": "020d9205c2f70baa5e972f5384147411a3cfdf16130bf7e8c0c03ee4b8e912e0"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "row",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 300,
+          "height": 100
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 300,
+          "height": 100
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 300,
+          "height": 100
+        }
+      },
+      {
+        "key": "row/capped",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 80,
+          "height": 100
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 80,
+          "height": 100
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 80,
+          "height": 100
+        }
+      },
+      {
+        "key": "row/second",
+        "border": {
+          "x": 100,
+          "y": 20,
+          "width": 110,
+          "height": 100
+        },
+        "padding": {
+          "x": 100,
+          "y": 20,
+          "width": 110,
+          "height": 100
+        },
+        "content": {
+          "x": 100,
+          "y": 20,
+          "width": 110,
+          "height": 100
+        }
+      },
+      {
+        "key": "row/third",
+        "border": {
+          "x": 210,
+          "y": 20,
+          "width": 110,
+          "height": 100
+        },
+        "padding": {
+          "x": 210,
+          "y": 20,
+          "width": 110,
+          "height": 100
+        },
+        "content": {
+          "x": 210,
+          "y": 20,
+          "width": 110,
+          "height": 100
+        }
+      }
+    ],
+    "lines": []
+  }
+}

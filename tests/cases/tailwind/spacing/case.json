@@ -1,0 +1,179 @@
+{
+  "spec": "crates/valle-engine/src/style/tailwind.rs",
+  "assertion": "Spacing classes: padding on each side, in steps of the scale, a half step, px and an arbitrary value; margins, negative and auto; the space between children, reversed and negative, under the children's own margins; gaps in a grid; and the style over a class, an important class over the style. Asymmetric padding is 4/8/12/16px; px-1.5 is 6px. Flex stretch gives the first row 40px height; negative top margin is -8px and auto horizontal margins center the 16px child.",
+  "at": [0.0],
+  "valle": {
+    "reason": "Restored product regression PNGs from the verified 2026-11-05 backup and its base commit 5d1fb918; resource paths adapted without changing the expected pixels.",
+    "maxDifference": 1
+  },
+  "layout": [
+    {
+      "key": "sides",
+      "border": {
+        "x": 8,
+        "y": 8,
+        "width": 48,
+        "height": 40
+      },
+      "padding": {
+        "x": 8,
+        "y": 8,
+        "width": 48,
+        "height": 40
+      },
+      "content": {
+        "x": 24,
+        "y": 12,
+        "width": 24,
+        "height": 24
+      }
+    },
+    {
+      "key": "sides/0",
+      "border": {
+        "x": 24,
+        "y": 12,
+        "width": 24,
+        "height": 24
+      },
+      "padding": {
+        "x": 24,
+        "y": 12,
+        "width": 24,
+        "height": 24
+      },
+      "content": {
+        "x": 24,
+        "y": 12,
+        "width": 24,
+        "height": 24
+      }
+    },
+    {
+      "key": "fractional",
+      "border": {
+        "x": 64,
+        "y": 8,
+        "width": 36,
+        "height": 40
+      },
+      "padding": {
+        "x": 64,
+        "y": 8,
+        "width": 36,
+        "height": 40
+      },
+      "content": {
+        "x": 70,
+        "y": 11,
+        "width": 24,
+        "height": 34
+      }
+    },
+    {
+      "key": "fractional/0",
+      "border": {
+        "x": 70,
+        "y": 11,
+        "width": 24,
+        "height": 24
+      },
+      "padding": {
+        "x": 70,
+        "y": 11,
+        "width": 24,
+        "height": 24
+      },
+      "content": {
+        "x": 70,
+        "y": 11,
+        "width": 24,
+        "height": 24
+      }
+    },
+    {
+      "key": "margins",
+      "border": {
+        "x": 108,
+        "y": 8,
+        "width": 48,
+        "height": 40
+      },
+      "padding": {
+        "x": 108,
+        "y": 8,
+        "width": 48,
+        "height": 40
+      },
+      "content": {
+        "x": 109,
+        "y": 9,
+        "width": 46,
+        "height": 38
+      }
+    },
+    {
+      "key": "margins/negative",
+      "border": {
+        "x": 127,
+        "y": 1,
+        "width": 24,
+        "height": 18
+      },
+      "padding": {
+        "x": 127,
+        "y": 1,
+        "width": 24,
+        "height": 18
+      },
+      "content": {
+        "x": 127,
+        "y": 1,
+        "width": 24,
+        "height": 18
+      }
+    },
+    {
+      "key": "auto",
+      "border": {
+        "x": 164,
+        "y": 8,
+        "width": 96,
+        "height": 40
+      },
+      "padding": {
+        "x": 164,
+        "y": 8,
+        "width": 96,
+        "height": 40
+      },
+      "content": {
+        "x": 168,
+        "y": 12,
+        "width": 88,
+        "height": 32
+      }
+    },
+    {
+      "key": "auto/0",
+      "border": {
+        "x": 204,
+        "y": 12,
+        "width": 16,
+        "height": 16
+      },
+      "padding": {
+        "x": 204,
+        "y": 12,
+        "width": 16,
+        "height": 16
+      },
+      "content": {
+        "x": 204,
+        "y": 12,
+        "width": 16,
+        "height": 16
+      }
+    }
+  ]
+}

@@ -31,13 +31,13 @@ jobs:
         with:
           path: ~/.bun/install/cache
           key: bun-${{ hashFiles('bun.lock') }}
-      # The fonts the tests download, built-in and test ones, as files/<SHA-256>/<name>.
+      # The built-in fonts used by the unit and integration tests.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.valle/cache/files
-          key: downloads-${{ hashFiles('crates/valle-engine/src/text.rs', 'crates/valle-engine/tests/cases/main.rs') }}
+          key: downloads-${{ hashFiles('crates/valle-engine/src/text.rs') }}
           restore-keys: downloads-
-      # The FFmpeg the video cases decode with, loaded at run time.
+      # The FFmpeg used by the video integration tests, loaded at run time.
       - name: Install FFmpeg
         run: bun .github/scripts/install-ffmpeg.ts
       - name: Check formatting
@@ -47,6 +47,13 @@ jobs:
       # No GPU here: the gpu job runs that layer.
       - name: Test
         run: cargo xtask test --skip gpu,browser
+      - name: Keep failed test results
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results-${{ runner.os }}
+          path: target/test-results
+          if-no-files-found: ignore
 
   gpu:
     # An Apple silicon virtual machine with a virtual Metal device.
@@ -61,31 +68,31 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v1' }}
-      # The fonts the tests download, built-in and test ones, as files/<SHA-256>/<name>.
+      # The built-in fonts used by the unit and integration tests.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.valle/cache/files
-          key: downloads-${{ hashFiles('crates/valle-engine/src/text.rs', 'crates/valle-engine/tests/cases/main.rs') }}
+          key: downloads-${{ hashFiles('crates/valle-engine/src/text.rs') }}
           restore-keys: downloads-
       # LLVM's clang builds QuickJS for the browser's engine; Apple's builds no wasm32.
       - name: Install FFmpeg and LLVM
         run: brew install ffmpeg llvm
-      # The browser layer: the SDK built with Bun, played in the pinned Chrome.
+      # The browser layer: the SDK built with Bun, played in Playwright's Chromium.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.valle/cache/chrome
-          key: chrome-${{ runner.os }}-${{ hashFiles('tests/baselines/chrome/version') }}
+          path: ~/Library/Caches/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}
       - name: Test
         run: cargo xtask test
-      - name: Keep the frames to review
+      - name: Keep failed test results
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: review
-          path: target/review
+          name: test-results-${{ runner.os }}
+          path: target/test-results
           if-no-files-found: ignore
 
   windows:
@@ -100,11 +107,11 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v1' }}
-      # The fonts the tests download, built-in and test ones, as files/<SHA-256>/<name>.
+      # The built-in fonts used by the unit and integration tests.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.valle/cache/files
-          key: downloads-${{ hashFiles('crates/valle-engine/src/text.rs', 'crates/valle-engine/tests/cases/main.rs') }}
+          key: downloads-${{ hashFiles('crates/valle-engine/src/text.rs') }}
           restore-keys: downloads-
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -114,3 +121,10 @@ jobs:
       # No GPU here either.
       - name: Test
         run: cargo xtask test --skip gpu,browser
+      - name: Keep failed test results
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results-${{ runner.os }}
+          path: target/test-results
+          if-no-files-found: ignore

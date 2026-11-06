@@ -4,10 +4,8 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::{Command, ExitCode};
 
-/// What Prettier formats and Oxlint checks, by extension.
-const SCRIPTS: [&str; 9] = [
-    ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx", ".json",
-];
+/// JavaScript and TypeScript sources, checked by both Prettier and Oxlint.
+const SCRIPTS: [&str; 8] = [".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx"];
 
 const USAGE: &str = "\
 usage: cargo xtask <command>
@@ -15,10 +13,10 @@ usage: cargo xtask <command>
 commands:
   fmt [--check]   format the code with rustfmt and Prettier, or only check it
   lint [--fix]    run clippy and Oxlint with warnings as errors, optionally applying fixes
-  test [case...] [--skip gpu,browser]
-                  run the tests, or only the cases under tests/cases at these paths;
-                  --skip leaves out test layers
-  accept case...  take the frames the last test run drew for these cases as their baselines
+  test [--skip gpu,browser]
+                  run workspace and browser tests; --skip leaves out test layers
+  cases [path]    run dependency and scene cases, optionally under one path in tests/cases
+  fonts           prepare the pinned test fonts from the download cache
   build-web       build the engine for the browser into web/packages/engine/dist, and
                   Studio into web/apps/studio/dist
 ";
@@ -36,7 +34,16 @@ fn main() -> ExitCode {
         "fmt" => fmt(flags),
         "lint" => lint(flags),
         "test" => test(flags),
-        "accept" => accept(flags),
+        "cases" => cases(flags),
+        "fonts" if flags.is_empty() => cargo(&[
+            "run",
+            "--locked",
+            "-p",
+            "valle-engine",
+            "--example",
+            "prepare-test-fonts",
+        ]),
+        "fonts" => Err(unexpected(flags)),
         "build-web" if flags.is_empty() => build_web(),
         "build-web" => Err(unexpected(flags)),
         "help" | "-h" | "--help" => {
@@ -62,7 +69,13 @@ fn fmt(flags: &[String]) -> Result<(), String> {
     }
     cargo(&args)?;
     let mode = if check { "--check" } else { "--write" };
-    bun("prettier", &[mode, "--log-level=warn"], &files(&SCRIPTS)?)
+    let mut extensions = SCRIPTS.to_vec();
+    extensions.extend([".json", ".html"]);
+    bun(
+        "prettier",
+        &[mode, "--log-level=warn"],
+        &files(&extensions)?,
+    )
 }
 
 fn lint(flags: &[String]) -> Result<(), String> {
@@ -82,20 +95,15 @@ fn lint(flags: &[String]) -> Result<(), String> {
     if fix {
         args.push("--fix");
     }
-    let scripts: Vec<String> = files(&SCRIPTS)?
-        .into_iter()
-        .filter(|f| !f.ends_with(".json"))
-        .collect();
-    bun("oxlint", &args, &scripts)
+    bun("oxlint", &args, &files(&SCRIPTS)?)
 }
 
-/// Test layers past the first, which `--skip` can leave out: the cases the GPU draws, and the
-/// engine in Chrome with WebGPU, which `web/tests/player.ts` compares with the native engine,
+/// Test layers past the first, which `--skip` can leave out: native GPU integration tests, and the
+/// engine in Playwright's Chromium with WebGPU, compared with native by `web/tests/player.ts`,
 /// with Studio driven end to end by `web/tests/studio.ts`.
 const LAYERS: [&str; 2] = ["gpu", "browser"];
 
 fn test(args: &[String]) -> Result<(), String> {
-    let mut cases = Vec::new();
     let mut skip = Vec::new();
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -111,28 +119,35 @@ fn test(args: &[String]) -> Result<(), String> {
                     skip.push(layer);
                 }
             }
-            flag if flag.starts_with('-') => return Err(format!("unexpected flag {flag}")),
-            case => cases.push(case),
+            arg => return Err(format!("unexpected argument {arg}")),
         }
     }
     let layers: Vec<&str> = LAYERS.into_iter().filter(|l| !skip.contains(l)).collect();
-    let mut command = vec!["test", "--locked"];
-    if cases.is_empty() {
-        command.push("--workspace");
-    } else {
-        command.extend(["-p", "valle-engine", "--test", "cases", "--"]);
-        command.extend(&cases);
-    }
+    let command = ["test", "--locked", "--workspace"];
     run(
         Command::new(cargo_path())
-            .args(&command)
+            .args(command)
+            // A direct case-runner filter must not silently narrow the workspace suite.
+            .env_remove("VALLE_CASE")
             .env("VALLE_TEST_LAYERS", layers.join(",")),
         &format!("cargo {}", command.join(" ")),
     )?;
-    if !cases.is_empty() || !layers.contains(&"browser") {
+    if !layers.contains(&"browser") {
         return Ok(());
     }
     build_web()?;
+    // The Playwright package pins the browser revision; install only the full Chromium build.
+    run(
+        Command::new("bun").args([
+            "run",
+            "--bun",
+            "playwright",
+            "install",
+            "chromium",
+            "--no-shell",
+        ]),
+        "playwright install chromium --no-shell",
+    )?;
     cargo(&["build", "--locked", "-p", "valle-cli"])?;
     let valle = root().join("target/debug/valle");
     for test in ["web/tests/player.ts", "web/tests/studio.ts"] {
@@ -144,73 +159,30 @@ fn test(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Takes the frames the last test run drew for `cases` as their Valle baselines.
-fn accept(cases: &[String]) -> Result<(), String> {
-    if cases.is_empty() {
-        return Err("name the cases to accept, as shown on target/review/index.html".into());
-    }
-    if let Some(flag) = cases.iter().find(|c| c.starts_with('-')) {
-        return Err(format!("unexpected flag {flag}"));
-    }
-    let review = root().join("target/review");
-    let mut drawn = Vec::new();
-    frames(&review, "", &mut drawn)?;
-    for case in cases {
-        let case = case.trim_end_matches('/');
-        let case = case.strip_suffix(".tsx").unwrap_or(case);
-        let standard = ["css", "svg", "tailwind"]
-            .iter()
-            .any(|d| case == *d || case.starts_with(&format!("{d}/")));
-        if standard {
-            return Err(format!(
-                "{case}: Chrome draws the css, svg and tailwind baselines; a case that differs \
-                 is the engine's to fix"
-            ));
-        }
-        let mine: Vec<&String> = drawn
-            .iter()
-            .filter(|f| {
-                let stem = f.rsplitn(3, '.').nth(2).unwrap_or_default();
-                stem == case || stem.starts_with(&format!("{case}/"))
-            })
-            .collect();
-        if mine.is_empty() {
-            return Err(format!(
-                "the last test run drew nothing to review for {case}"
-            ));
-        }
-        for frame in mine {
-            let to = root().join("tests/baselines/valle").join(frame);
-            if let Some(dir) = to.parent() {
-                std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-            }
-            std::fs::copy(review.join(frame), &to).map_err(|e| format!("{frame}: {e}"))?;
-            println!("accepted {frame}");
-        }
-    }
-    Ok(())
-}
-
-/// The drawn frames under `dir`, `<case>.<frame>.png`, as paths from it.
-fn frames(dir: &Path, prefix: &str, out: &mut Vec<String>) -> Result<(), String> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) if prefix.is_empty() => return Ok(()),
-        Err(e) => return Err(format!("{}: {e}", dir.display())),
+fn cases(args: &[String]) -> Result<(), String> {
+    let filter = match args {
+        [] => "",
+        [path] if !path.starts_with('-') && !path.is_empty() => path,
+        _ => return Err(unexpected(args)),
     };
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if entry.path().is_dir() {
-            frames(&entry.path(), &format!("{prefix}{name}/"), out)?;
-            continue;
-        }
-        let frame = name.strip_suffix(".png").and_then(|n| n.rsplit_once('.'));
-        if frame.is_some_and(|(_, i)| !i.is_empty() && i.bytes().all(|b| b.is_ascii_digit())) {
-            out.push(format!("{prefix}{name}"));
-        }
-    }
-    Ok(())
+    run(
+        Command::new(cargo_path())
+            .args([
+                "test",
+                "--locked",
+                "-p",
+                "valle-engine",
+                "--test",
+                "cases",
+                "scene_cases",
+                "--",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("VALLE_CASE", filter)
+            .env("VALLE_TEST_LAYERS", "gpu"),
+        "cargo test -p valle-engine --test cases",
+    )
 }
 
 /// Cargo's `command` for `valle-web` in the browser.

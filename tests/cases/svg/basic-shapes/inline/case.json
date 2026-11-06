@@ -1,0 +1,36 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/shapes.html",
+  "assertion": "Rectangles, rounded corners, circles, ellipses, polygons, polylines and lines use their authored geometry.",
+  "at": [0],
+  "browser": {
+    "selected": "webkit",
+    "reason": "All three browser images agree on the specified shape geometry. Reviewed curve/diagonal edge differences only; WebKit permits a lower maximum channel allowance than Chrome or Firefox.",
+    "pixels": {
+      "maxDifference": 40,
+      "maxPixels": 1250
+    }
+  },
+  "layout": [
+    {
+      "key": "drawing",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      }
+    }
+  ]
+}

@@ -1,5 +1,5 @@
-// Studio end to end: `valle timeline studio` on a timeline in a project, Studio driven in the
-// pinned Chrome. It plays the timeline as the native engine draws it; a clip dragged on the
+// Studio end to end: `valle timeline studio` on a timeline in a project, driven through
+// Playwright. It plays the timeline as the native engine draws it; a clip dragged on the
 // timeline moves; edits undo and redo; saving writes the file; a change made outside while a
 // draft is open is a conflict that keeps the draft; an export renders natively.
 //
@@ -9,7 +9,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Cdp, flags, install, listening, root } from "./browser.ts";
+import { evaluate as evaluatePage, launch, root } from "./browser.ts";
 
 const valle = process.argv[2];
 if (!valle) {
@@ -67,10 +67,10 @@ async function main() {
     stdout: "pipe",
     stderr: "inherit",
   });
-  const profile = await mkdtemp(join(tmpdir(), "valle-chrome-"));
-  const browser = Bun.spawn([await install("chrome"), ...flags(profile)], {
-    stdout: "ignore",
-    stderr: "pipe",
+  const browser = await launch().catch(async (error) => {
+    service.kill();
+    await service.exited;
+    throw error;
   });
   const failed: string[] = [];
   const expect = (holds: boolean, what: string) => {
@@ -81,35 +81,19 @@ async function main() {
     const reader = service.stdout.getReader();
     const { value } = await reader.read();
     const ready = JSON.parse(new TextDecoder().decode(value).split("\n")[0]);
-    const cdp = await Cdp.open(await listening(browser.stderr));
-    const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
-    const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
-    const page = (method: string, params: object = {}) => cdp.send(method, params, sessionId);
-    await page("Page.enable");
-    await page("Runtime.enable");
-    cdp.on("Runtime.exceptionThrown", ({ exceptionDetails: e }) => {
-      console.log(`exception: ${e.exception?.description ?? e.text}`);
-    });
-    await page("Emulation.setDeviceMetricsOverride", {
-      width: 1400,
-      height: 900,
+    const page = await browser.newPage({
+      viewport: { width: 1400, height: 900 },
       deviceScaleFactor: 1,
-      mobile: false,
+      colorScheme: "light",
     });
-    const loaded = cdp.event("Page.loadEventFired", sessionId);
-    await page("Page.navigate", { url: ready.url });
-    await loaded;
-    const evaluate = async (expression: string) => {
-      const { result, exceptionDetails } = await page("Runtime.evaluate", {
-        expression: `(async () => { const studio = document.querySelector("valle-studio"); ${expression} })()`,
-        awaitPromise: true,
-        returnByValue: true,
-      });
-      if (exceptionDetails) {
-        throw new Error(exceptionDetails.exception?.description ?? exceptionDetails.text);
-      }
-      return result.value;
-    };
+    console.log(`browser: Chromium ${browser.version()}`);
+    page.on("pageerror", (error) => console.log(`exception: ${error.message}`));
+    await page.goto(ready.url);
+    const evaluate = (expression: string) =>
+      evaluatePage(
+        page,
+        `(async () => { const studio = document.querySelector("valle-studio"); ${expression} })()`,
+      );
     const isolated = await evaluate("return crossOriginIsolated;");
     expect(isolated === true, "the page is isolated across origins");
     await until("the player", () =>
@@ -135,18 +119,10 @@ async function main() {
       const view = studio.shadowRoot.querySelector("timeline-view");
       const r = view.shadowRoot.querySelector('[data-at="tracks.visual[1].clips[0]"]').getBoundingClientRect();
       return { x: r.x + r.width / 2, y: r.y + r.height / 2, perSecond: r.width / 0.5 };`);
-    const mouse = (type: string, x: number) =>
-      page("Input.dispatchMouseEvent", {
-        type,
-        x,
-        y: box.y,
-        button: "left",
-        buttons: 1,
-        clickCount: 1,
-      });
-    await mouse("mousePressed", box.x);
-    for (let k = 1; k <= 5; k++) await mouse("mouseMoved", box.x + (box.perSecond * 0.5 * k) / 5);
-    await mouse("mouseReleased", box.x + box.perSecond * 0.5);
+    await page.mouse.move(box.x, box.y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.perSecond * 0.5, box.y, { steps: 5 });
+    await page.mouse.up();
     const moved = await until("the drag's edit", () =>
       evaluate(`const c = studio.layout.tracks[1].clips[0]; return c.start > 0.9 && c.start;`),
     );
@@ -208,12 +184,9 @@ async function main() {
       "exporting does not resize the preview's canvas",
     );
     expect(await Bun.file(join(project, "renders/cut.mp4")).exists(), "renders/cut.mp4 is there");
-    await cdp.send("Browser.close").catch(() => {});
   } finally {
-    browser.kill();
     service.kill();
-    await Promise.all([browser.exited, service.exited]);
-    await rm(profile, { recursive: true, force: true });
+    await Promise.all([browser.close(), service.exited]);
   }
   if (failed.length > 0) {
     throw new Error(`Studio (in ${dir}):\n${failed.join("\n")}`);

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/grid/named-areas</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 340px;
+      height: 210px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <div style="position: relative; width: 340px; height: 210px; background-color: white">
+      <div
+        data-key="grid"
+        style="
+          position: absolute;
+          left: 20px;
+          top: 20px;
+          width: 290px;
+          height: 160px;
+          background-color: #eef2f7;
+          display: grid;
+          grid-template-columns: 90px 190px;
+          grid-template-rows: 40px 70px 30px;
+          grid-template-areas: &quot;head head&quot; &quot;side main&quot; &quot;foot foot&quot;;
+          gap: 10px;
+        "
+      >
+        <div data-key="grid/head" style="grid-area: head; background-color: #176bba"></div>
+        <div data-key="grid/side" style="grid-area: side; background-color: #16a085"></div>
+        <div data-key="grid/main" style="grid-area: main; background-color: #ffb74d"></div>
+        <div data-key="grid/foot" style="grid-area: foot; background-color: #ad1457"></div>
+      </div>
+    </div>
+  </div>
+</html>

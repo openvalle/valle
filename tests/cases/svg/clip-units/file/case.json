@@ -1,0 +1,32 @@
+{
+  "spec": "https://www.w3.org/TR/css-masking-1/#the-clippath-element",
+  "assertion": "SVG file path: User-space clipping produces an 80x100 rectangle at 30,30; object-bounding-box clipping retains the central 60x60 at 210,50.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed against the cited rule and all three browser captures. Explicit box expectations agree in all three where present; the Chrome image matches Valle exactly, so pixel comparison remains exact."
+  },
+  "layout": [
+    {
+      "key": "drawing",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      }
+    }
+  ]
+}

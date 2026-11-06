@@ -1,0 +1,10 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/css/mask/backdrop/scene.html": "17fabe787286f561fb65ee827424878e02d4cbd73bc6705551a22b04a153c762"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

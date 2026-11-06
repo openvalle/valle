@@ -1,0 +1,55 @@
+{
+  "size": [180, 180],
+  "sources": {
+    "tests/baselines/browser/css/text/wrapping/scene.html": "aa4a65749c79103df1af0303e78c59a5560471fb8dc6769f24747fcd89e1ff72",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "text",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 100,
+          "height": 120
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 100,
+          "height": 120
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 100,
+          "height": 120
+        }
+      }
+    ],
+    "lines": [
+      {
+        "key": "text",
+        "text": ["MMMM", "MMMM", "MMMM"],
+        "geometry": [
+          {
+            "x": 20,
+            "baseline": 45,
+            "height": 32
+          },
+          {
+            "x": 20,
+            "baseline": 77,
+            "height": 32
+          },
+          {
+            "x": 20,
+            "baseline": 109,
+            "height": 32
+          }
+        ]
+      }
+    ]
+  }
+}

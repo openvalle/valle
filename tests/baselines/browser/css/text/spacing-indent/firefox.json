@@ -1,0 +1,50 @@
+{
+  "size": [320, 160],
+  "sources": {
+    "tests/baselines/browser/css/text/spacing-indent/scene.html": "e1a98bd2b25111ab9e69c6b52dcd7b0a8038eb29e34866bc81636ec9094c028e",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "text",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 260,
+          "height": 110
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 260,
+          "height": 110
+        },
+        "content": {
+          "x": 24,
+          "y": 24,
+          "width": 252,
+          "height": 102
+        }
+      }
+    ],
+    "lines": [
+      {
+        "key": "text",
+        "text": ["MM MM", "MM"],
+        "geometry": [
+          {
+            "x": 44,
+            "baseline": 49,
+            "height": 32
+          },
+          {
+            "x": 24,
+            "baseline": 81,
+            "height": 32
+          }
+        ]
+      }
+    ]
+  }
+}

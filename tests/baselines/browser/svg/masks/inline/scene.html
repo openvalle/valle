@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>svg/masks/inline</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 340px;
+      height: 180px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <svg data-key="drawing" xmlns="http://www.w3.org/2000/svg" width="340" height="180">
+      <defs>
+        <mask id="luminance" maskUnits="userSpaceOnUse" x="20" y="20" width="120" height="120">
+          <rect x="20" y="20" width="60" height="120" fill="white" />
+          <rect x="80" y="20" width="60" height="120" fill="black" />
+        </mask>
+        <mask
+          id="alpha"
+          mask-type="alpha"
+          maskUnits="userSpaceOnUse"
+          x="180"
+          y="20"
+          width="120"
+          height="120"
+        >
+          <rect x="180" y="20" width="60" height="120" fill="black" />
+          <rect x="240" y="20" width="60" height="120" fill="black" fill-opacity="0.5" />
+        </mask>
+      </defs>
+      <rect x="20" y="20" width="120" height="120" fill="#176bba" mask="url(#luminance)" />
+      <rect x="180" y="20" width="120" height="120" fill="#16a085" mask="url(#alpha)" />
+    </svg>
+  </div>
+</html>

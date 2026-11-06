@@ -1,0 +1,36 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/render.html#ObjectAndGroupOpacityProperties",
+  "assertion": "SVG file path: Nested group opacity is not equivalent to per-paint alpha: strokes and fills composite inside the left group before its final opacity, while the right paints blend directly with the page.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three captures, including overlapping paints and opaque controls. Layer order and geometry agree with Chrome; 16640 pixels differ by a single output channel level due to filter/alpha quantization. Keep a one-level bound, with negative checks for missing content and displaced geometry.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 16640
+    }
+  },
+  "layout": [
+    {
+      "key": "drawing",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      }
+    }
+  ]
+}

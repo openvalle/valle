@@ -1,0 +1,74 @@
+{
+  "spec": "https://www.w3.org/TR/css-position-3/#abspos-layout",
+  "assertion": "Absolute insets use the parent padding box and do not consume flow space; relative offsets move painting without moving the following block.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed against the cited rule and all three browser captures. Explicit box expectations agree in all three where present; the Chrome image matches Valle exactly, so pixel comparison remains exact."
+  },
+  "layout": [
+    {
+      "key": "parent/stretch",
+      "border": {
+        "x": 34,
+        "y": 36,
+        "width": 262,
+        "height": 30
+      },
+      "padding": {
+        "x": 34,
+        "y": 36,
+        "width": 262,
+        "height": 30
+      },
+      "content": {
+        "x": 34,
+        "y": 36,
+        "width": 262,
+        "height": 30
+      }
+    },
+    {
+      "key": "parent/relative",
+      "border": {
+        "x": 50,
+        "y": 104,
+        "width": 100,
+        "height": 40
+      },
+      "padding": {
+        "x": 50,
+        "y": 104,
+        "width": 100,
+        "height": 40
+      },
+      "content": {
+        "x": 50,
+        "y": 104,
+        "width": 100,
+        "height": 40
+      }
+    },
+    {
+      "key": "parent/flow",
+      "border": {
+        "x": 34,
+        "y": 74,
+        "width": 80,
+        "height": 30
+      },
+      "padding": {
+        "x": 34,
+        "y": 74,
+        "width": 80,
+        "height": 30
+      },
+      "content": {
+        "x": 34,
+        "y": 74,
+        "width": 80,
+        "height": 30
+      }
+    }
+  ]
+}

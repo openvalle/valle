@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>svg/dashes-offset/inline</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 340px;
+      height: 180px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <svg data-key="drawing" xmlns="http://www.w3.org/2000/svg" width="340" height="180">
+      <path d="M20 30h280" fill="none" stroke="#176bba" stroke-width="8" stroke-dasharray="20 10" />
+      <path
+        d="M20 75h280"
+        fill="none"
+        stroke="#16a085"
+        stroke-width="8"
+        stroke-dasharray="20 10"
+        stroke-dashoffset="10"
+      />
+      <path
+        d="M20 120h280"
+        pathLength="28"
+        fill="none"
+        stroke="#ad1457"
+        stroke-width="8"
+        stroke-dasharray="2 1"
+        stroke-dashoffset="-1"
+      />
+    </svg>
+  </div>
+</html>

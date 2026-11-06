@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/css-masking-1/#compositing",
+  "assertion": "Clip and alpha mask intersect over the whole group before group opacity. The right half is removed even where a child extends beyond the remaining area.",
+  "at": [0],
+  "browser": {
+    "selected": "webkit",
+    "reason": "Reviewed clip boundaries, visible child regions and the half-opacity control in all three engines. Geometry agrees; Chrome and Firefox differ from Valle only by one output channel level in translucent regions. WebKit matches exactly, so no pixel allowance is needed."
+  }
+}

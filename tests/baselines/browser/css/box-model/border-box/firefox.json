@@ -1,0 +1,53 @@
+{
+  "size": [300, 160],
+  "sources": {
+    "tests/baselines/browser/css/box-model/border-box/scene.html": "5f48d832cacfa6934845500a83c8b3ea7034fc90b9c02fe72b0584c6fbf68870"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "border",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 120,
+          "height": 100
+        },
+        "padding": {
+          "x": 24,
+          "y": 24,
+          "width": 112,
+          "height": 92
+        },
+        "content": {
+          "x": 34,
+          "y": 34,
+          "width": 92,
+          "height": 72
+        }
+      },
+      {
+        "key": "content",
+        "border": {
+          "x": 170,
+          "y": 20,
+          "width": 108,
+          "height": 88
+        },
+        "padding": {
+          "x": 174,
+          "y": 24,
+          "width": 100,
+          "height": 80
+        },
+        "content": {
+          "x": 184,
+          "y": 34,
+          "width": 80,
+          "height": 60
+        }
+      }
+    ],
+    "lines": []
+  }
+}

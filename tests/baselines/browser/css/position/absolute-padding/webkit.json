@@ -1,0 +1,74 @@
+{
+  "size": [300, 220],
+  "sources": {
+    "tests/baselines/browser/css/position/absolute-padding/scene.html": "74e9939bf9d7c8d30fa211d5df1af6d73cf66c6acec36cf3ea622e0f2b35dee2"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "outer",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 240,
+          "height": 160
+        },
+        "padding": {
+          "x": 24,
+          "y": 24,
+          "width": 232,
+          "height": 152
+        },
+        "content": {
+          "x": 44,
+          "y": 44,
+          "width": 192,
+          "height": 112
+        }
+      },
+      {
+        "key": "outer/static",
+        "border": {
+          "x": 44,
+          "y": 44,
+          "width": 100,
+          "height": 80
+        },
+        "padding": {
+          "x": 44,
+          "y": 44,
+          "width": 100,
+          "height": 80
+        },
+        "content": {
+          "x": 54,
+          "y": 54,
+          "width": 80,
+          "height": 60
+        }
+      },
+      {
+        "key": "outer/static/placed",
+        "border": {
+          "x": 130,
+          "y": 90,
+          "width": 116,
+          "height": 76
+        },
+        "padding": {
+          "x": 130,
+          "y": 90,
+          "width": 116,
+          "height": 76
+        },
+        "content": {
+          "x": 130,
+          "y": 90,
+          "width": 116,
+          "height": 76
+        }
+      }
+    ],
+    "lines": []
+  }
+}

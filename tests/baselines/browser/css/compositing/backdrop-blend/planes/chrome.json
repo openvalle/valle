@@ -1,0 +1,10 @@
+{
+  "size": [500, 180],
+  "sources": {
+    "tests/baselines/browser/css/compositing/backdrop-blend/planes/scene.html": "3e696b44fd8fc24be3d2c9129d7f9ab278771c84e6e1856eed2d6a553a9bcc7c"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

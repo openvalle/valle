@@ -1,0 +1,74 @@
+{
+  "size": [440, 160],
+  "sources": {
+    "tests/baselines/browser/css/sizing/auto-height-limits/scene.html": "67afc87b6ba153c945bb3b2e4935f50951eb718e7d3021013a58ec0235eeae26"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "auto",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 120,
+          "height": 70
+        },
+        "padding": {
+          "x": 22,
+          "y": 22,
+          "width": 116,
+          "height": 66
+        },
+        "content": {
+          "x": 30,
+          "y": 30,
+          "width": 100,
+          "height": 50
+        }
+      },
+      {
+        "key": "min",
+        "border": {
+          "x": 160,
+          "y": 20,
+          "width": 120,
+          "height": 100
+        },
+        "padding": {
+          "x": 162,
+          "y": 22,
+          "width": 116,
+          "height": 96
+        },
+        "content": {
+          "x": 170,
+          "y": 30,
+          "width": 100,
+          "height": 80
+        }
+      },
+      {
+        "key": "max",
+        "border": {
+          "x": 300,
+          "y": 20,
+          "width": 120,
+          "height": 48
+        },
+        "padding": {
+          "x": 302,
+          "y": 22,
+          "width": 116,
+          "height": 44
+        },
+        "content": {
+          "x": 310,
+          "y": 30,
+          "width": 100,
+          "height": 28
+        }
+      }
+    ],
+    "lines": []
+  }
+}

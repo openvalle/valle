@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/grid/named-lines-implicit</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 260px;
+      height: 210px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <div style="position: relative; width: 260px; height: 210px; background-color: white">
+      <div
+        data-key="grid"
+        style="
+          position: absolute;
+          left: 20px;
+          top: 20px;
+          width: 190px;
+          height: 160px;
+          background-color: #eef2f7;
+          display: grid;
+          grid-template-columns: [start] 80px [mid] 100px [end];
+          grid-template-rows: 40px;
+          grid-auto-rows: 30px 50px;
+          gap: 10px;
+        "
+      >
+        <div
+          data-key="grid/span"
+          style="grid-column: start / end; grid-row: 1; background-color: #176bba"
+        ></div>
+        <div
+          data-key="grid/implicit"
+          style="grid-column: mid; grid-row: 3; background-color: #16a085"
+        ></div>
+      </div>
+    </div>
+  </div>
+</html>

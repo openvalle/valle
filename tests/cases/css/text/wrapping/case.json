@@ -1,0 +1,66 @@
+{
+  "spec": "https://www.w3.org/TR/css-text-3/#word-break-property",
+  "assertion": "At 24px Noto Sans, four M glyphs fit in 100px and five do not. break-all wraps twelve glyphs into three lines at a 32px line height.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three fixed-font captures. Chrome agrees with the expected line strings and baselines; line geometry is asserted within 2/64px. Its glyph-edge rasterization differs from Valle, with a separate contour allowance; flat regions remain exact. Three pixels just inside the M diagonals fall outside the one-pixel contour mask; each differs by 5/255. Only those three low-delta pixels are allowed outside the contour.",
+    "textEdges": {
+      "key": "text",
+      "pixels": {
+        "maxDifference": 120,
+        "maxPixels": 2000
+      }
+    },
+    "pixels": {
+      "maxDifference": 5,
+      "maxPixels": 3
+    }
+  },
+  "layout": [
+    {
+      "key": "text",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 100,
+        "height": 120
+      },
+      "padding": {
+        "x": 20,
+        "y": 20,
+        "width": 100,
+        "height": 120
+      },
+      "content": {
+        "x": 20,
+        "y": 20,
+        "width": 100,
+        "height": 120
+      }
+    }
+  ],
+  "lines": [
+    {
+      "key": "text",
+      "text": ["MMMM", "MMMM", "MMMM"],
+      "geometry": [
+        {
+          "x": 20,
+          "baseline": 45,
+          "height": 32
+        },
+        {
+          "x": 20,
+          "baseline": 77,
+          "height": 32
+        },
+        {
+          "x": 20,
+          "baseline": 109,
+          "height": 32
+        }
+      ]
+    }
+  ]
+}

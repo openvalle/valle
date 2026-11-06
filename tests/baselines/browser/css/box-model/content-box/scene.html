@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <title>Content-box sizing</title>
+  <style>
+    body {
+      margin: 0;
+    }
+    #canvas {
+      position: relative;
+      width: 200px;
+      height: 140px;
+      background: white;
+    }
+    #box {
+      position: absolute;
+      left: 20px;
+      top: 20px;
+      box-sizing: content-box;
+      width: 100px;
+      height: 60px;
+      padding: 10px;
+      border: 4px solid black;
+      background: #00aa00;
+    }
+  </style>
+  <div id="canvas"><div id="box" data-key="box"></div></div>
+</html>

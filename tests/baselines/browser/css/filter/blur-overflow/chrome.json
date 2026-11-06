@@ -1,0 +1,10 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/css/filter/blur-overflow/scene.html": "d5d29dbaf06d77d305d4eb7b73f1f300e648fe2d33b38fbdb06f8d5e85f2fc50"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

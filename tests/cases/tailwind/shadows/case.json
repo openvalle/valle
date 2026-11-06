@@ -1,0 +1,9 @@
+{
+  "spec": "crates/valle-engine/src/style/tailwind.rs",
+  "assertion": "Shadow classes: box shadows of the theme, in a color, at an opacity and written, one of them inset; inset shadows of the theme, and written in a color; rings of widths and colors, outside offsets of the background's color and of their own, inset, and inset rings; and text shadows of the theme, in a color, and written.",
+  "at": [0.0],
+  "valle": {
+    "reason": "Restored product regression PNGs from the verified 2026-11-05 backup and its base commit 5d1fb918; resource paths adapted without changing the expected pixels.",
+    "maxDifference": 1
+  }
+}

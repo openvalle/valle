@@ -1,0 +1,10 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/css/filter/opacity/scene.html": "37bff15849727c8b301e1f102303c822d6b535ad6149681157323fb7fb3a0dd7"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

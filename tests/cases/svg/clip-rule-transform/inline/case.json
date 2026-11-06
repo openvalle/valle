@@ -1,0 +1,32 @@
+{
+  "spec": "https://www.w3.org/TR/css-masking-1/#ClipPathElement",
+  "assertion": "Evenodd clip-rule cuts a hole independently of fill-rule. A user-space clip leaves a 100-unit ring at (30,30). The object-box clip realizes a unit square as (180,20,140,120), then applies translate(125,40) scale(0.5), leaving (215,50,70,60).",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed the evenodd hole and the visible green clip at (215,50,70,60). All three browsers and Valle agree exactly. The clipPath transform operates after object-box coordinates are realized; see the transform-order clarification at https://github.com/WebKit/WebKit/commit/83bf26fdb1d12bdd474d9de61a35c63251a306b0."
+  },
+  "layout": [
+    {
+      "key": "drawing",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      }
+    }
+  ]
+}

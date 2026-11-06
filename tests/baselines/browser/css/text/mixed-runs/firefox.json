@@ -1,0 +1,34 @@
+{
+  "size": [360, 160],
+  "sources": {
+    "tests/baselines/browser/css/text/mixed-runs/scene.html": "b8f0e5029a7e166b9218bb998bc7446c19d016fda6ce2bb43c7b75304da234e5",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97",
+    "tests/resources/NotoSansItalic.ttf": "4bf7b366af79c434984d67eae3967e9cd7a2f51c196101c43f21a7e21e608844"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "text",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 320,
+          "height": 110
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 320,
+          "height": 110
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 320,
+          "height": 110
+        }
+      }
+    ],
+    "lines": []
+  }
+}

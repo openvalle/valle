@@ -32,10 +32,14 @@ zune-jpeg.workspace = true
 
 [dev-dependencies]
 indoc.workspace = true
+ring.workspace = true
 # The built-in fonts, from the global cache.
 valle-native = { path = "../valle-native" }
 
-# The case runner over tests/cases, the crate's one integration test binary.
 [[test]]
 name = "cases"
-harness = false
+path = "tests/cases/main.rs"
+
+[[example]]
+name = "prepare-test-fonts"
+path = "tests/tools/fonts.rs"

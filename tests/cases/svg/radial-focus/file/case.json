@@ -1,0 +1,36 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/pservers.html#RadialGradients",
+  "assertion": "SVG file path: Object-box radial gradients scale into non-square rectangles. Off-center focus moves the bright origin; a nonzero focal radius preserves a flat inner region before the ramp.",
+  "at": [0],
+  "browser": {
+    "selected": "firefox",
+    "reason": "Reviewed the centered, displaced and finite-radius focal regions in all three browsers. Firefox differs only by one channel level in 4190 ramp pixels; the white inner region and solid outer color agree exactly. Chrome dithers more pixels and WebKit reaches three levels.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 4300
+    }
+  },
+  "layout": [
+    {
+      "key": "drawing",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      }
+    }
+  ]
+}

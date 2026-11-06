@@ -1,0 +1,61 @@
+{
+  "canvas": { "width": 160, "height": 90, "fps": 4, "background": "#0f172a" },
+  "resources": {
+    "photo": "/tests/resources/photo.png",
+    "tint": "/tests/resources/timeline/tint.motion.tsx",
+    "glow": "/tests/resources/timeline/glow.motion.tsx",
+    "split": "/tests/resources/timeline/split.motion.tsx",
+    "scan": "/tests/resources/timeline/scan.motion.tsx"
+  },
+  "tracks": {
+    "visual": [
+      {
+        "items": [
+          {
+            "id": "photo",
+            "kind": "image",
+            "src": "photo",
+            "fit": "cover",
+            "duration": 1,
+            "size": [100, 56],
+            "opacity": 0.8,
+            "effects": [
+              { "kind": "motion", "component": "tint", "props": { "hue": 180 } },
+              { "kind": "motion", "component": "glow" }
+            ]
+          },
+          { "transition": "motion", "component": "split", "inOffset": 0.25, "outOffset": 0.5 },
+          {
+            "id": "blue",
+            "kind": "solid",
+            "color": "#2563eb",
+            "duration": 1.5,
+            "size": [120, 70],
+            "effects": [
+              {
+                "kind": "motion",
+                "component": "tint",
+                "props": {
+                  "hue": {
+                    "keyframes": [
+                      [0, 0],
+                      [1.5, 120]
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "adjustment": [
+      {
+        "clips": [
+          { "id": "scan", "kind": "motion", "component": "scan", "start": 1.75, "duration": 0.5 },
+          { "id": "warm", "kind": "color-grade", "start": 2.25, "duration": 0.25, "temperature": 1 }
+        ]
+      }
+    ]
+  }
+}

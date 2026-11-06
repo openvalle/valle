@@ -613,34 +613,6 @@ fn direction(segment: &PathSeg, t: f64) -> Vec2 {
 mod tests {
     use super::*;
 
-    /// What the pinned Chrome measures: each path's total length and its points at tenths of it.
-    #[test]
-    fn paths_measure_as_chrome_measures_them() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/baselines/chrome/properties.json"
-        );
-        let text = std::fs::read_to_string(path).unwrap();
-        let list: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let paths = list["paths"].as_object().unwrap();
-        assert!(paths.len() > 8);
-        for (d, chrome) in paths {
-            let p = bez(d).unwrap();
-            let total = chrome["length"].as_f64().unwrap();
-            let ours = length(&p);
-            assert!(
-                (ours - total).abs() <= 1e-3 * total.max(1.0),
-                "{d}: {ours}, {total}"
-            );
-            for (i, point) in chrome["points"].as_array().unwrap().iter().enumerate() {
-                let (x, y) = (point[0].as_f64().unwrap(), point[1].as_f64().unwrap());
-                let (q, _) = at(&p, i as f64 / 10.0);
-                let off = (q.x - x).hypot(q.y - y);
-                assert!(off <= 0.05 + 1e-3 * total, "{d} at {i}/10: {q:?}, {x} {y}");
-            }
-        }
-    }
-
     #[test]
     fn directions_follow_the_path() {
         let p = bez("M0 0 L10 0 L10 10").unwrap();

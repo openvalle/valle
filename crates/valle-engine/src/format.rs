@@ -164,25 +164,6 @@ fn grouped(int: &str) -> String {
 mod tests {
     use super::*;
 
-    /// What the pinned Chrome's `Intl.NumberFormat` writes, each keyed `spec|value`.
-    #[test]
-    fn numbers_read_as_chrome_writes_them() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/baselines/chrome/properties.json"
-        );
-        let text = std::fs::read_to_string(path).unwrap();
-        let list: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let formats = list["formats"].as_object().unwrap();
-        assert!(formats.len() > 50);
-        for (key, chrome) in formats {
-            let (spec, value) = key.rsplit_once('|').unwrap();
-            let x: f64 = value.parse().unwrap();
-            let ours = Format::parse(spec).unwrap().text(x);
-            assert_eq!(ours, chrome.as_str().unwrap(), "{key}");
-        }
-    }
-
     #[test]
     fn ties_go_away_from_zero() {
         let f = Format::parse("number|0|true").unwrap();

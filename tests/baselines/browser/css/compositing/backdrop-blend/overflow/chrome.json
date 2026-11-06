@@ -1,0 +1,10 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/css/compositing/backdrop-blend/overflow/scene.html": "1c2d18f71a5bb9486445ba27f6579fdf27f2b98d68afea90d86099668848d618"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/css-color-4/#transparency",
+  "assertion": "An opacity group traps its high-z-index descendant below a later sibling stacking context. The opaque positioned control lets that descendant participate in the outer context.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three captures, including overlapping paints and opaque controls. Layer order and geometry agree with Chrome; 9600 pixels differ by a single output channel level due to filter/alpha quantization. Keep a one-level bound, with negative checks for missing content and displaced geometry.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 9600
+    }
+  }
+}

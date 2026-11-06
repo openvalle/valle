@@ -1,0 +1,36 @@
+{
+  "spec": "https://www.w3.org/TR/compositing-1/#blendingmultiply",
+  "assertion": "The oversized yellow child is clipped to rounded corners and multiplied with the aqua parent inside an isolated group: lime inside, aqua in the corners, white outside the parent.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Multiply requires aqua times yellow to produce lime. All browsers agree on the boxes, solid colors and clipping. Chrome differs from Valle at 64 curved-edge pixels by one channel level. Firefox (225 pixels, max 31) and WebKit (213, max 17) use different edge coverage.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 80
+    }
+  },
+  "layout": [
+    {
+      "key": "parent/clip",
+      "border": {
+        "x": 40,
+        "y": 20,
+        "width": 160,
+        "height": 160
+      },
+      "padding": {
+        "x": 40,
+        "y": 20,
+        "width": 160,
+        "height": 160
+      },
+      "content": {
+        "x": 40,
+        "y": 20,
+        "width": 160,
+        "height": 160
+      }
+    }
+  ]
+}

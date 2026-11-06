@@ -1,0 +1,57 @@
+{
+  "spec": "https://www.w3.org/TR/css-overflow-3/#text-overflow",
+  "assertion": "A non-wrapping overflowing line is either clipped or ends in an ellipsis; neither mode draws outside its padding box.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed clipped text versus the painted ellipsis in all three browsers, including the last visible glyph and right edge. Chrome has 1636 differing pixels, all at glyph contours, with maximum channel delta 125. This image allowance is paired with exact box assertions and negative checks for lost text, displacement and replacing ellipsis with clip; DOM range strings are not a painted-ellipsis oracle.",
+    "pixels": {
+      "maxDifference": 130,
+      "maxPixels": 1700
+    }
+  },
+  "layout": [
+    {
+      "key": "clip",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 160,
+        "height": 60
+      },
+      "padding": {
+        "x": 20,
+        "y": 20,
+        "width": 160,
+        "height": 60
+      },
+      "content": {
+        "x": 24,
+        "y": 24,
+        "width": 152,
+        "height": 52
+      }
+    },
+    {
+      "key": "ellipsis",
+      "border": {
+        "x": 200,
+        "y": 20,
+        "width": 160,
+        "height": 60
+      },
+      "padding": {
+        "x": 200,
+        "y": 20,
+        "width": 160,
+        "height": 60
+      },
+      "content": {
+        "x": 204,
+        "y": 24,
+        "width": 152,
+        "height": 52
+      }
+    }
+  ]
+}

@@ -1,0 +1,121 @@
+{
+  "size": [340, 260],
+  "sources": {
+    "tests/baselines/browser/svg/viewbox-dashes/file/scene.html": "fee58d0e74afab8d620ab5694a9e1a1bb53ab550a85d464c7c4f2293c2cbd632",
+    "tests/cases/svg/viewbox-dashes/file/source.svg": "d1fb15060739be0fad22d1ac5fb3a64411d2d87fe59e054423932424230fb531",
+    "tests/cases/svg/viewbox-dashes/file/meet-center.svg": "e4853aa5bf338d5802c7961bfdec2d0224e7c8e7346db53080d5cc96e773074f",
+    "tests/cases/svg/viewbox-dashes/file/slice.svg": "5fbb4178af5d03653b309361b6290a6c9bbe90e84829fd01ff6505df32d2092d",
+    "tests/cases/svg/viewbox-dashes/file/stretch.svg": "0669534b8f8d7bfc3780c5aaf4b28ea67226019bc1d2bb5cb86fb026425d1a70",
+    "tests/cases/svg/viewbox-dashes/file/meet-end.svg": "67acd2dd84b7c8fa89f0f54f431de33b714b800b928aa0a770dd37f663f38e28"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "drawing",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 240,
+          "height": 120
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 240,
+          "height": 120
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 240,
+          "height": 120
+        }
+      },
+      {
+        "key": "meet-center",
+        "border": {
+          "x": 20,
+          "y": 180,
+          "width": 60,
+          "height": 60
+        },
+        "padding": {
+          "x": 20,
+          "y": 180,
+          "width": 60,
+          "height": 60
+        },
+        "content": {
+          "x": 20,
+          "y": 180,
+          "width": 60,
+          "height": 60
+        }
+      },
+      {
+        "key": "slice",
+        "border": {
+          "x": 100,
+          "y": 180,
+          "width": 60,
+          "height": 60
+        },
+        "padding": {
+          "x": 100,
+          "y": 180,
+          "width": 60,
+          "height": 60
+        },
+        "content": {
+          "x": 100,
+          "y": 180,
+          "width": 60,
+          "height": 60
+        }
+      },
+      {
+        "key": "stretch",
+        "border": {
+          "x": 180,
+          "y": 180,
+          "width": 60,
+          "height": 60
+        },
+        "padding": {
+          "x": 180,
+          "y": 180,
+          "width": 60,
+          "height": 60
+        },
+        "content": {
+          "x": 180,
+          "y": 180,
+          "width": 60,
+          "height": 60
+        }
+      },
+      {
+        "key": "meet-end",
+        "border": {
+          "x": 260,
+          "y": 180,
+          "width": 60,
+          "height": 60
+        },
+        "padding": {
+          "x": 260,
+          "y": 180,
+          "width": 60,
+          "height": 60
+        },
+        "content": {
+          "x": 260,
+          "y": 180,
+          "width": 60,
+          "height": 60
+        }
+      }
+    ],
+    "lines": []
+  }
+}

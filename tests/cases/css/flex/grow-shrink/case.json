@@ -1,0 +1,95 @@
+{
+  "spec": "https://www.w3.org/TR/css-flexbox-1/#resolve-flexible-lengths",
+  "assertion": "After a 12px gap, 288px free width grows 1:2 to 96/192. A 300px basis shrinks to 240 proportionally to 160/80.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed against the cited rule and all three browser captures. Explicit box expectations agree in all three where present; the Chrome image matches Valle exactly, so pixel comparison remains exact."
+  },
+  "layout": [
+    {
+      "key": "grow/one",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 96,
+        "height": 50
+      },
+      "padding": {
+        "x": 20,
+        "y": 20,
+        "width": 96,
+        "height": 50
+      },
+      "content": {
+        "x": 20,
+        "y": 20,
+        "width": 96,
+        "height": 50
+      }
+    },
+    {
+      "key": "grow/two",
+      "border": {
+        "x": 128,
+        "y": 20,
+        "width": 192,
+        "height": 50
+      },
+      "padding": {
+        "x": 128,
+        "y": 20,
+        "width": 192,
+        "height": 50
+      },
+      "content": {
+        "x": 128,
+        "y": 20,
+        "width": 192,
+        "height": 50
+      }
+    },
+    {
+      "key": "shrink/large",
+      "border": {
+        "x": 20,
+        "y": 100,
+        "width": 160,
+        "height": 50
+      },
+      "padding": {
+        "x": 20,
+        "y": 100,
+        "width": 160,
+        "height": 50
+      },
+      "content": {
+        "x": 20,
+        "y": 100,
+        "width": 160,
+        "height": 50
+      }
+    },
+    {
+      "key": "shrink/small",
+      "border": {
+        "x": 180,
+        "y": 100,
+        "width": 80,
+        "height": 50
+      },
+      "padding": {
+        "x": 180,
+        "y": 100,
+        "width": 80,
+        "height": 50
+      },
+      "content": {
+        "x": 180,
+        "y": 100,
+        "width": 80,
+        "height": 50
+      }
+    }
+  ]
+}

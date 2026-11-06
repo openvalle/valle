@@ -1,0 +1,35 @@
+{
+  "spec": "crates/valle-timeline/src/time.rs:Rate::shutter",
+  "assertion": "At 30fps, four samples of a 180-degree shutter at 480px/s land at x+[-3,-1,1,3] with 1/4 weight. Static content and zero-angle shutters match unblurred content.",
+  "at": [
+    0.0, 0.033333333333, 0.066666666667, 0.1, 0.133333333333, 0.166666666667, 0.2, 0.233333333333,
+    0.266666666667, 0.3, 0.333333333333, 0.366666666667
+  ],
+  "valle": {
+    "reason": "All 12 frames at 30fps reviewed on Metal: spatial offsets [-3,-1,1,3] with 1/4 weights; static content and zero-angle exposure remain unblurred. All accepted PNGs match exactly.",
+    "maxDifference": 1
+  },
+  "layout": [
+    {
+      "key": "canvas",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 256,
+        "height": 128
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 256,
+        "height": 128
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 256,
+        "height": 128
+      }
+    }
+  ]
+}

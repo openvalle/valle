@@ -1,0 +1,33 @@
+{
+  "size": [200, 120],
+  "sources": {
+    "tests/baselines/browser/svg/embedded-image/file/scene.html": "8072d2639c3df08fa85c7345496304c4523b334dbcfe4f6848a318e3ff839da1",
+    "tests/cases/svg/embedded-image/file/source.svg": "301434ec7565f5fbaba292a6ddff216fbc324b1147686df3171f253565059067"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "image",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 160,
+          "height": 80
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 160,
+          "height": 80
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 160,
+          "height": 80
+        }
+      }
+    ],
+    "lines": []
+  }
+}

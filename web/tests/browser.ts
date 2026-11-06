@@ -1,181 +1,29 @@
-// What the tests that run Chrome share: the Chrome for Testing that tests/baselines/chrome/version
-// pins, downloaded once into ~/.valle/cache/chrome (or $VALLE_CACHE_DIR/chrome), and a connection
-// to its DevTools.
-
-import { mkdir, rename, rm } from "node:fs/promises";
+// Browser versions and downloads belong to the pinned Playwright package.
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { chromium, type Page } from "playwright";
 
 export const root = join(import.meta.dir, "../..");
 export const cache = process.env.VALLE_CACHE_DIR ?? join(homedir(), ".valle/cache");
-export const version = (await Bun.file(join(root, "tests/baselines/chrome/version")).text()).trim();
 
-const platforms: Record<string, string> = {
-  "darwin-arm64": "mac-arm64",
-  "darwin-x64": "mac-x64",
-  "linux-arm64": "linux-arm64",
-  "linux-x64": "linux64",
-  "win32-x64": "win64",
-};
-const platform = platforms[`${process.platform}-${process.arch}`];
-if (!platform) {
-  throw new Error(`Chrome for Testing has no build for ${process.platform} ${process.arch}`);
+/** Use the full browser's headless mode so WebGPU canvases appear in screenshots. */
+export function launch() {
+  return chromium.launch({
+    channel: "chromium",
+    args: [
+      "--enable-unsafe-webgpu",
+      "--force-color-profile=srgb",
+      "--force-device-scale-factor=1",
+      "--autoplay-policy=no-user-gesture-required",
+    ],
+  });
 }
 
-/** The executable of a build of the pinned Chrome, downloaded into the cache the first time:
- * `chrome-headless-shell`, or the whole of Chrome, which run headless shows WebGPU canvases. */
-export async function install(
-  build: "chrome-headless-shell" | "chrome" = "chrome-headless-shell",
-): Promise<string> {
-  const dir = join(cache, "chrome", version, build);
-  const executables: Record<string, string> = {
-    "chrome-headless-shell":
-      platform === "win64" ? "chrome-headless-shell.exe" : "chrome-headless-shell",
-    chrome: platform.startsWith("mac")
-      ? "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
-      : platform === "win64"
-        ? "chrome.exe"
-        : "chrome",
-  };
-  const exe = join(dir, `${build}-${platform}`, executables[build]);
-  if (await Bun.file(exe).exists()) {
-    return exe;
-  }
-  const url = `https://storage.googleapis.com/chrome-for-testing-public/${version}/${platform}/${build}-${platform}.zip`;
-  console.error(`downloading Chrome for Testing ${version} from ${url}`);
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`${url}: ${response.status} ${response.statusText}`);
-  }
-  // Unpacked beside the cache and moved in whole, so a broken download leaves nothing behind.
-  const partial = `${dir}.partial`;
-  await rm(partial, { recursive: true, force: true });
-  await mkdir(partial, { recursive: true });
-  const zip = join(partial, "chrome.zip");
-  await Bun.write(zip, response);
-  const unzip =
-    platform === "win64" ? ["tar", "-xf", zip, "-C", partial] : ["unzip", "-q", zip, "-d", partial];
-  if ((await Bun.spawn(unzip, { stdout: "inherit", stderr: "inherit" }).exited) !== 0) {
-    throw new Error(`${unzip.join(" ")} failed`);
-  }
-  await rm(zip);
-  await rename(partial, dir);
-  return exe;
-}
-
-/** How the tests run the whole of Chrome: headless, with WebGPU, colors as sRGB at one pixel a
- * CSS pixel, sound without a gesture, and its DevTools on a port it picks. */
-export function flags(profile: string): string[] {
-  return [
-    "--headless=new",
-    "--remote-debugging-port=0",
-    `--user-data-dir=${profile}`,
-    "--no-first-run",
-    // Else Chrome asks the keychain for its password store, and waits.
-    "--use-mock-keychain",
-    "--no-default-browser-check",
-    "--hide-scrollbars",
-    "--enable-unsafe-webgpu",
-    "--force-color-profile=srgb",
-    "--force-device-scale-factor=1",
-    "--autoplay-policy=no-user-gesture-required",
-    "about:blank",
-  ];
-}
-
-/** The DevTools address Chrome prints once it listens. Its later output is read and dropped. */
-export async function listening(stderr: ReadableStream<Uint8Array>): Promise<string> {
-  const reader = stderr.getReader();
-  const decoder = new TextDecoder();
-  let text = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) {
-      throw new Error(`Chrome stopped before it listened:\n${text}`);
-    }
-    text += decoder.decode(value, { stream: true });
-    const found = /DevTools listening on (ws:\/\/\S+)/.exec(text);
-    if (found) {
-      void (async () => {
-        while (!(await reader.read()).done);
-      })();
-      return found[1];
-    }
-  }
-}
-
-/** A Chrome DevTools Protocol connection: commands with their replies, and events awaited or
- * listened to. */
-export class Cdp {
-  #ws: WebSocket;
-  #next = 0;
-  #listeners = new Map<string, ((params: any, sessionId?: string) => void)[]>();
-  #replies = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
-  #waiting: { method: string; sessionId?: string; resolve: (v: any) => void }[] = [];
-
-  static async open(url: string): Promise<Cdp> {
-    const ws = new WebSocket(url);
-    await new Promise((resolve, reject) => {
-      ws.onopen = resolve;
-      ws.onerror = () => reject(new Error(`cannot connect to ${url}`));
-    });
-    return new Cdp(ws);
-  }
-
-  constructor(ws: WebSocket) {
-    this.#ws = ws;
-    ws.onmessage = (event) => {
-      const message = JSON.parse(String(event.data));
-      if (message.id !== undefined) {
-        const reply = this.#replies.get(message.id);
-        this.#replies.delete(message.id);
-        if (message.error) {
-          reply?.reject(new Error(`${message.error.message} (${message.error.code})`));
-        } else {
-          reply?.resolve(message.result);
-        }
-        return;
-      }
-      for (const listener of this.#listeners.get(message.method) ?? []) {
-        listener(message.params, message.sessionId);
-      }
-      const i = this.#waiting.findIndex(
-        (w) => w.method === message.method && w.sessionId === message.sessionId,
-      );
-      if (i >= 0) {
-        this.#waiting.splice(i, 1)[0].resolve(message.params);
-      }
-    };
-  }
-
-  send(method: string, params: object = {}, sessionId?: string): Promise<any> {
-    const id = ++this.#next;
-    this.#ws.send(JSON.stringify({ id, method, params, sessionId }));
-    return timed(
-      method,
-      new Promise((resolve, reject) => this.#replies.set(id, { resolve, reject })),
-    );
-  }
-
-  /** Calls `listener` with every `method` event, of any session. */
-  on(method: string, listener: (params: any, sessionId?: string) => void): void {
-    this.#listeners.set(method, [...(this.#listeners.get(method) ?? []), listener]);
-  }
-
-  /** The next `method` event of the session. */
-  event(method: string, sessionId?: string): Promise<any> {
-    return timed(
-      method,
-      new Promise((resolve) => this.#waiting.push({ method, sessionId, resolve })),
-    );
-  }
-}
-
-/** `promise`, or an error after 30 s: a page that never loads stops the run. */
-function timed<T>(what: string, promise: Promise<T>): Promise<T> {
+/** Playwright's page.evaluate has no timeout; a stalled worker must still fail the test. */
+export function evaluate(page: Page, expression: string): Promise<any> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${what}: no answer from Chrome in 30 s`)), 30_000);
+    timer = setTimeout(() => reject(new Error("no answer from the page in 30 s")), 30_000);
   });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  return Promise.race([page.evaluate(expression), timeout]).finally(() => clearTimeout(timer));
 }

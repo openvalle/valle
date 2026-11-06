@@ -1,0 +1,10 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/css/compositing/group-opacity/scene.html": "b0d81a24c0a479e25d04aea4dfdccd0bbb73c99a898d3a17001ca1664d4c5520"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

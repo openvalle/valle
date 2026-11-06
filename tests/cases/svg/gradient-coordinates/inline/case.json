@@ -1,0 +1,36 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/pservers.html#LinearGradientElementGradientUnitsAttribute",
+  "assertion": "User-space gradients share absolute endpoints across differently sized rectangles; object-box gradients restart per shape. An inherited gradient transformed by translate(1,0) scale(-1,1) reverses the ramp.",
+  "at": [0],
+  "browser": {
+    "selected": "firefox",
+    "reason": "Reviewed shared user-space endpoints, per-object ramps and the inherited reversed transform in all three browsers. Geometry agrees. Firefox differs only by one channel level in 4560 gradient pixels; Chrome dithers more pixels and WebKit reaches two levels. Flat colors remain identical.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 4600
+    }
+  },
+  "layout": [
+    {
+      "key": "drawing",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      }
+    }
+  ]
+}

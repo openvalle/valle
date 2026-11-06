@@ -1,0 +1,32 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/embedded.html#ImageElement",
+  "assertion": "SVG files decode embedded PNG, JPEG and lossless WebP. Pixelated sampling and slice crop each 2:1 source into the center of a 90 by 100 viewport.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three decoded color grids and their center crops. Chrome and Firefox match Valle exactly for all formats; WebKit differs by one channel level over half of the JPEG crop. Use the exact Chrome image, retaining the WebKit capture for diagnostics."
+  },
+  "layout": [
+    {
+      "key": "drawing",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 140
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 140
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 140
+      }
+    }
+  ]
+}

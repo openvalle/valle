@@ -1,0 +1,137 @@
+{
+  "spec": "https://www.w3.org/TR/css-grid-1/#auto-placement-algo",
+  "assertion": "Sparse row placement leaves the first-row hole after two-column items; dense placement puts the final one-column item back into that hole.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three captures against dense backfilling versus sparse placement. Their geometry and pixels agree; use an exact Chrome baseline."
+  },
+  "layout": [
+    {
+      "key": "sparse/first",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 130,
+        "height": 40
+      },
+      "padding": {
+        "x": 20,
+        "y": 20,
+        "width": 130,
+        "height": 40
+      },
+      "content": {
+        "x": 20,
+        "y": 20,
+        "width": 130,
+        "height": 40
+      }
+    },
+    {
+      "key": "sparse/second",
+      "border": {
+        "x": 20,
+        "y": 70,
+        "width": 130,
+        "height": 40
+      },
+      "padding": {
+        "x": 20,
+        "y": 70,
+        "width": 130,
+        "height": 40
+      },
+      "content": {
+        "x": 20,
+        "y": 70,
+        "width": 130,
+        "height": 40
+      }
+    },
+    {
+      "key": "sparse/small",
+      "border": {
+        "x": 160,
+        "y": 70,
+        "width": 60,
+        "height": 40
+      },
+      "padding": {
+        "x": 160,
+        "y": 70,
+        "width": 60,
+        "height": 40
+      },
+      "content": {
+        "x": 160,
+        "y": 70,
+        "width": 60,
+        "height": 40
+      }
+    },
+    {
+      "key": "dense/first",
+      "border": {
+        "x": 270,
+        "y": 20,
+        "width": 130,
+        "height": 40
+      },
+      "padding": {
+        "x": 270,
+        "y": 20,
+        "width": 130,
+        "height": 40
+      },
+      "content": {
+        "x": 270,
+        "y": 20,
+        "width": 130,
+        "height": 40
+      }
+    },
+    {
+      "key": "dense/second",
+      "border": {
+        "x": 270,
+        "y": 70,
+        "width": 130,
+        "height": 40
+      },
+      "padding": {
+        "x": 270,
+        "y": 70,
+        "width": 130,
+        "height": 40
+      },
+      "content": {
+        "x": 270,
+        "y": 70,
+        "width": 130,
+        "height": 40
+      }
+    },
+    {
+      "key": "dense/small",
+      "border": {
+        "x": 410,
+        "y": 20,
+        "width": 60,
+        "height": 40
+      },
+      "padding": {
+        "x": 410,
+        "y": 20,
+        "width": 60,
+        "height": 40
+      },
+      "content": {
+        "x": 410,
+        "y": 20,
+        "width": 60,
+        "height": 40
+      }
+    }
+  ]
+}

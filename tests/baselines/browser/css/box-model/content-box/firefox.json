@@ -1,0 +1,32 @@
+{
+  "size": [200, 140],
+  "sources": {
+    "tests/baselines/browser/css/box-model/content-box/scene.html": "373832ccdfdbcbe5bdf70309c56673923933e236e033f5f962205e403a541ee8"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "box",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 128,
+          "height": 88
+        },
+        "padding": {
+          "x": 24,
+          "y": 24,
+          "width": 120,
+          "height": 80
+        },
+        "content": {
+          "x": 34,
+          "y": 34,
+          "width": 100,
+          "height": 60
+        }
+      }
+    ],
+    "lines": []
+  }
+}

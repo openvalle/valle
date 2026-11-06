@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>svg/image-sizing/file</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 320px;
+      height: 160px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <img
+      data-key="natural"
+      src="/tests/cases/svg/gradient-sizing/file/source.svg"
+      style="position: absolute; left: 20px; top: 20px"
+    /><img
+      data-key="fit"
+      src="/tests/cases/svg/gradient-sizing/file/source.svg"
+      style="
+        position: absolute;
+        left: 180px;
+        top: 20px;
+        width: 120px;
+        height: 120px;
+        object-fit: contain;
+      "
+    />
+  </div>
+</html>

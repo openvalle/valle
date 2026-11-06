@@ -1,0 +1,9 @@
+{
+  "spec": "crates/valle-engine/src/style/tailwind.rs",
+  "assertion": "Opacity and blend classes: opacities of the scale and written, on a child and over a stripe; each blend mode of a child, over a gradient; background layers blended with each other; and an isolated group, whose child blends with nothing under it.",
+  "at": [0.0],
+  "valle": {
+    "reason": "Restored product regression PNGs from the verified 2026-11-05 backup and its base commit 5d1fb918; resource paths adapted without changing the expected pixels.",
+    "maxDifference": 1
+  }
+}

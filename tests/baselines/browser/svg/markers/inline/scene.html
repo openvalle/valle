@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>svg/markers/inline</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 340px;
+      height: 180px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <svg data-key="drawing" xmlns="http://www.w3.org/2000/svg" width="340" height="180">
+      <defs>
+        <marker
+          id="arrow"
+          viewBox="0 0 10 10"
+          refX="5"
+          refY="5"
+          markerWidth="20"
+          markerHeight="20"
+          markerUnits="userSpaceOnUse"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0L10 5L0 10z" fill="#176bba" />
+        </marker>
+      </defs>
+      <path
+        d="M40 40H280"
+        fill="none"
+        stroke="#176bba"
+        stroke-width="4"
+        marker-start="url(#arrow)"
+        marker-end="url(#arrow)"
+      />
+      <path
+        d="M40 140L160 80L280 140"
+        fill="none"
+        stroke="#16a085"
+        stroke-width="4"
+        marker-mid="url(#arrow)"
+        marker-end="url(#arrow)"
+      />
+    </svg>
+  </div>
+</html>

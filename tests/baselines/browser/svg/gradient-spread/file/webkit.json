@@ -1,0 +1,33 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/svg/gradient-spread/file/scene.html": "ab16b62ba7ac2a2e7f81cc3f052b6d60b7474ed53672439452521e16b41e0faa",
+    "tests/cases/svg/gradient-spread/file/source.svg": "1e8897c8be9aefc20cccf8925ed947df4475c5bd68c00325411413901f7d701a"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "drawing",
+        "border": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "padding": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "content": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        }
+      }
+    ],
+    "lines": []
+  }
+}

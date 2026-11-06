@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/compositing-1/#csscompositingrules",
+  "assertion": "A preserve-3d scene establishes an isolated stacking context. Its blending planes see the scene background and previously painted planes, not the page outside it. The two-plane overlap is blue; a transparent scene keeps cyan instead of multiplying it by the yellow page.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Chrome and WebKit agree exactly with the stacking-context isolation defined by Compositing 1 section 3.2 and CSS Transforms 2 section 7. The current Firefox capture omits the translated planes, so it cannot arbitrate their blending. Valle matches exactly; no pixel allowance."
+  }
+}

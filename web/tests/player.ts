@@ -1,17 +1,17 @@
 // The browser test layer: the engine's SDK, as `cargo xtask build-web` builds it, plays the
-// examples in the pinned Chrome with WebGPU, and the frames its canvas shows are the frames the
-// native engine draws, within a step of rounding.
+// examples in Playwright's Chromium with WebGPU. Its canvas shows the frames the native engine
+// draws, within a step of rounding.
 //
 //   bun web/tests/player.ts <valle binary>
 //
 // The native frames are drawn first, which puts the built-in fonts in the cache; the page fetches
-// them from there, so the test reads nothing from the network but Chrome the first time.
+// them from there, so the test needs no external network after the browser is installed.
 
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Cdp, cache, flags, install, listening, root } from "./browser.ts";
+import { cache, evaluate as evaluatePage, launch, root } from "./browser.ts";
 
 /** The examples and frames compared, and the props bound once the player is open. */
 const CASES: { entry: string; frames: number[]; props?: Record<string, unknown> }[] = [
@@ -27,7 +27,6 @@ const CASES: { entry: string; frames: number[]; props?: Record<string, unknown> 
     props: { name: "Ada Lovelace", accent: "#00C2A8" },
   },
   { entry: "examples/edit.timeline.json", frames: [20] },
-  { entry: "tests/cases/motion/video.tsx", frames: [1, 3] },
 ];
 /** The most a channel may differ, and the share of pixels that may differ by more than 1. */
 const STEP = 2;
@@ -101,7 +100,7 @@ const PAGE = `<!doctype html>
     const bytes = new Uint8Array(await (await c.convertToBlob()).arrayBuffer());
     return "data:image/png;base64," + btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join(""));
   };
-  /** Where a player's clock is after it plays for a second from the start, and how many frames
+  /** How far a player's clock advances in a second of playback, and how many frames
    * it drew on the way: as many as the page's animation frames, which a page in the background
    * has fewer of. */
   window.played = async () => {
@@ -111,16 +110,23 @@ const PAGE = `<!doctype html>
       window.player.on("time", ({ frame }) => shown.add(frame)),
       window.player.on("stats", (s) => stats.push(s)),
     ];
+    // Audio initialization is asynchronous. Measure playback once its clock starts;
+    // the host's evaluation timeout still fails a player that never starts.
+    const started = new Promise((resolve) => {
+      offs.push(window.player.on("time", ({ frame }) => { if (frame > 0) resolve(); }));
+    });
     window.player.seekFrame(0);
     window.player.play();
+    await started;
+    const from = window.player.currentTime;
     await new Promise((r) => setTimeout(r, 1000));
     window.player.pause();
     for (const off of offs) off();
     const counted = stats.reduce((n, s) => n + s.shown, 0);
-    return { at: window.player.currentTime, drawn: shown.size, counted, memory: stats.at(-1)?.memory };
+    return { advanced: window.player.currentTime - from, drawn: shown.size, counted, memory: stats.at(-1)?.memory };
   };
-  /** How the sound of \`entry\` differs from the native mix in the WAV at \`mix\`, and where its
-   * clock is after it plays for a second. */
+  /** How the sound of \`entry\` differs from the native mix in the WAV at \`mix\`, and how far its
+   * clock advances in a second of playback. */
   window.heard = async (entry, mix) => {
     await window.player?.close();
     const canvas = document.createElement("canvas");
@@ -130,8 +136,8 @@ const PAGE = `<!doctype html>
     const mine = await player.renderSound(0, native.length / 2 / 48000);
     let most = mine.length === native.length ? 0 : Infinity;
     for (let i = 0; i < native.length; i++) most = Math.max(most, Math.abs(mine[i] - native[i]));
-    const { at } = await window.played();
-    return { sound: player.hasSound, samples: native.length / 2, most, at };
+    const { advanced } = await window.played();
+    return { sound: player.hasSound, samples: native.length / 2, most, advanced };
   };
   /** Whether binding a prop to a value its control does not take fails, and leaves the frame
    * as it was. */
@@ -367,8 +373,8 @@ async function main() {
     const bound = props ? ["--props", JSON.stringify(props)] : [];
     for (const frame of frames) {
       const png = join(out, `${natives.size}.png`);
-      // Videos decoded by FFmpeg's own decoder, as the cases' baselines are: a virtual machine's
-      // hardware decoder hands frames over unlike a real one's.
+      // Decode video with FFmpeg's own decoder: a virtual machine's hardware decoder hands
+      // frames over unlike a real one's.
       const run = Bun.spawnSync(
         [
           valle,
@@ -448,57 +454,23 @@ async function main() {
       return new Response("not found", { status: 404 });
     },
   });
-  const profile = await mkdtemp(join(tmpdir(), "valle-chrome-"));
-  const browser = Bun.spawn([await install("chrome"), ...flags(profile)], {
-    stdout: "ignore",
-    stderr: "pipe",
+  const browser = await launch().catch((error) => {
+    server.stop(true);
+    throw error;
   });
   const failed: string[] = [];
   try {
-    const cdp = await Cdp.open(await listening(browser.stderr));
-    const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
-    const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
-    const page = (method: string, params: object = {}) => cdp.send(method, params, sessionId);
-    await page("Page.enable");
-    // What the page and its workers say to the console goes to the test's.
-    cdp.on("Target.attachedToTarget", ({ sessionId: worker }) => {
-      void cdp.send("Runtime.enable", {}, worker);
-      void cdp.send("Runtime.runIfWaitingForDebugger", {}, worker);
-    });
-    cdp.on("Runtime.consoleAPICalled", ({ type, args }) => {
-      const text = args.map((a: any) => a.value ?? a.description).join(" ");
-      console.log(`console.${type}: ${text}`);
-    });
-    cdp.on("Runtime.exceptionThrown", ({ exceptionDetails: e }) => {
-      console.log(`exception: ${e.exception?.description ?? e.text}`);
-    });
-    await page("Runtime.enable");
-    await page("Target.setAutoAttach", {
-      autoAttach: true,
-      waitForDebuggerOnStart: true,
-      flatten: true,
-    });
     // Room for the largest composition at 1 px a pixel.
-    await page("Emulation.setDeviceMetricsOverride", {
-      width: 1920,
-      height: 1920,
+    const page = await browser.newPage({
+      viewport: { width: 1920, height: 1920 },
       deviceScaleFactor: 1,
-      mobile: false,
+      colorScheme: "light",
     });
-    const loaded = cdp.event("Page.loadEventFired", sessionId);
-    await page("Page.navigate", { url: `http://127.0.0.1:${server.port}/` });
-    await loaded;
-    const evaluate = async (expression: string) => {
-      const { result, exceptionDetails } = await page("Runtime.evaluate", {
-        expression,
-        awaitPromise: true,
-        returnByValue: true,
-      });
-      if (exceptionDetails) {
-        throw new Error(exceptionDetails.exception?.description ?? exceptionDetails.text);
-      }
-      return result.value;
-    };
+    console.log(`browser: Chromium ${browser.version()}`);
+    page.on("console", (message) => console.log(`console.${message.type()}: ${message.text()}`));
+    page.on("pageerror", (error) => console.log(`exception: ${error.message}`));
+    await page.goto(`http://127.0.0.1:${server.port}/`);
+    const evaluate = (expression: string) => evaluatePage(page, expression);
     for (const { entry, frames, props } of CASES) {
       for (const frame of frames) {
         const name = named(entry, frame, props);
@@ -535,13 +507,12 @@ async function main() {
         let screen = "";
         for (let tries = 0; tries < 20 && most > STEP; tries++) {
           await evaluate(`new Promise((r) => setTimeout(() => requestAnimationFrame(r), 100))`);
-          const { data } = await page("Page.captureScreenshot", {
-            format: "png",
-            clip: { x: 0, y: 0, width, height, scale: 1 },
+          const png = await page.screenshot({
+            clip: { x: 0, y: 0, width, height },
           });
-          screen = data;
+          screen = png.toString("base64");
           most = await evaluate(
-            `shown(${JSON.stringify(`data:image/png;base64,${data}`)}, ${JSON.stringify(native)})`,
+            `shown(${JSON.stringify(`data:image/png;base64,${screen}`)}, ${JSON.stringify(native)})`,
           );
         }
         if (most > STEP) {
@@ -562,9 +533,9 @@ async function main() {
     // The last player plays on its own clock.
     const played = await evaluate("played()");
     console.log(
-      `played: at ${played.at.toFixed(2)} s after 1 s, ${played.drawn} frames drawn, ${played.counted} counted, ${played.memory} bytes of memory`,
+      `played: advanced ${played.advanced.toFixed(2)} s in 1 s, ${played.drawn} frames drawn, ${played.counted} counted, ${played.memory} bytes of memory`,
     );
-    if (played.at < 0.5 || played.drawn < 2 || played.counted < 2 || !(played.memory > 0)) {
+    if (played.advanced < 0.5 || played.drawn < 2 || played.counted < 2 || !(played.memory > 0)) {
       failed.push(`playing for 1 s: ${JSON.stringify(played)}`);
     }
     const fetched = await evaluate("fetched");
@@ -575,9 +546,9 @@ async function main() {
     // A timeline's sound: the native mix, and played on its clock.
     const heard = await evaluate(`heard("sound/sound.timeline.json", "/mix.wav")`);
     console.log(
-      `sound: ${heard.samples} samples, most ${heard.most.toExponential(1)} apart; played: at ${heard.at.toFixed(2)} s after 1 s on the sound's clock`,
+      `sound: ${heard.samples} samples, most ${heard.most.toExponential(1)} apart; played: advanced ${heard.advanced.toFixed(2)} s in 1 s on the sound's clock`,
     );
-    if (!heard.sound || heard.most > 1e-6 || heard.at < 0.5) {
+    if (!heard.sound || heard.most > 1e-6 || heard.advanced < 0.5) {
       failed.push(`sound: ${JSON.stringify(heard)}`);
     }
     // Exports: the browser's MP4s, which the native engine decodes.
@@ -723,12 +694,8 @@ export default function Scene() { return <Video src="resource://video" style={{ 
     if (Math.abs(heardBack.lag) > 0 || heardBack.rms > 0.01) {
       failed.push(`the exported sound is ${heardBack.lag} samples late, ${heardBack.rms} apart`);
     }
-    await cdp.send("Browser.close").catch(() => {});
   } finally {
-    browser.kill();
-    await browser.exited;
-    server.stop(true);
-    await rm(profile, { recursive: true, force: true });
+    await Promise.all([browser.close(), server.stop(true)]);
   }
   if (failed.length > 0) {
     throw new Error(

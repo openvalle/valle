@@ -1,0 +1,36 @@
+{
+  "spec": "https://www.w3.org/TR/css-inline-3/#inline-boxes",
+  "assertion": "Normal, bold larger and italic runs share one baseline; their sizes and shapes remain distinct inside a 48px line.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed the common baseline, 20px/36px sizes, 700 weight and italic font. Chrome differs on glyph edges only; Firefox/WebKit differ slightly in run positioning and rasterization. Box dimensions are asserted separately.",
+    "pixels": {
+      "maxDifference": 140,
+      "maxPixels": 1100
+    }
+  },
+  "layout": [
+    {
+      "key": "text",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 320,
+        "height": 110
+      },
+      "padding": {
+        "x": 20,
+        "y": 20,
+        "width": 320,
+        "height": 110
+      },
+      "content": {
+        "x": 20,
+        "y": 20,
+        "width": 320,
+        "height": 110
+      }
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/grid/placement</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 320px;
+      height: 210px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <div style="position: relative; width: 320px; height: 210px; background-color: white">
+      <div
+        data-key="grid"
+        style="
+          position: absolute;
+          left: 20px;
+          top: 20px;
+          width: 280px;
+          height: 170px;
+          background-color: #eef2f7;
+          display: grid;
+          grid-template-columns: repeat(3, 80px);
+          grid-template-rows: repeat(3, 50px);
+          gap: 10px;
+        "
+      >
+        <div
+          data-key="grid/span"
+          style="grid-column: 2 / span 2; grid-row: 1; background-color: #176bba"
+        ></div>
+        <div
+          data-key="grid/tall"
+          style="grid-column: 1; grid-row: 1 / span 2; background-color: #16a085"
+        ></div>
+        <div
+          data-key="grid/aligned"
+          style="
+            grid-column: 3;
+            grid-row: 3;
+            justify-self: center;
+            align-self: center;
+            width: 40px;
+            height: 20px;
+            background-color: #ffb74d;
+          "
+        ></div>
+      </div>
+    </div>
+  </div>
+</html>

@@ -1,0 +1,13 @@
+{
+  "spec": "https://drafts.csswg.org/filter-effects-2/#BackdropFilterProperty",
+  "assertion": "An ancestor overflow clip applies after the descendant backdrop/content blend. The visible control retains the protruding filter; the hidden control cuts both backdrop and foreground at the ancestor boundary.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed PNGs and difference images. Chrome preserves the filtered backdrop and applies foreground blending before final source-over; Firefox/WebKit captures omit invert even in the standalone control in this environment. See ../backdrop-blend/README.md. Only one output channel level differs across 15100 translucent pixels; geometry and opaque regions were reviewed.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 15100
+    }
+  }
+}

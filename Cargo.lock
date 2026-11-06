@@ -2332,6 +2332,7 @@ dependencies = [
  "oxc",
  "parley",
  "png",
+ "ring",
  "roxmltree",
  "rquickjs",
  "serde",

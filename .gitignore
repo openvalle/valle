@@ -1,6 +1,11 @@
 # Build output
 /target/
 
+# Test fonts prepared from the pinned built-in definitions and download cache.
+/tests/resources/NotoSans.ttf
+/tests/resources/NotoSansItalic.ttf
+/tests/resources/*.part
+
 # Editor and operating-system files
 .DS_Store
 .idea/

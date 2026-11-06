@@ -1,0 +1,225 @@
+{
+  "spec": "crates/valle-engine/src/style/tailwind.rs",
+  "assertion": "Text classes: font sizes of the scale with their line heights, and written ones with a line height after the slash; leading and tracking; weights, italic and the narrowest stretch; case, alignment, decoration lines with their style, thickness, offset and color; truncating, clamping, balancing and breaking; numeric variants; and the font stack. Explicit checks cover 16px/24px/18px line heights, the 96px truncation box, two 15px clamped line boxes, balanced two-line text and break-all wrapping. Line breaks were independently verified with official Tailwind CSS in Chrome, Firefox and WebKit using the pinned Noto Sans. Fractional box widths and line baselines use the reviewed Chrome geometry; the other browsers differ slightly in font rounding.",
+  "at": [0.0],
+  "valle": {
+    "reason": "Restored product regression PNGs from the verified 2026-11-05 backup and its base commit 5d1fb918; resource paths adapted without changing the expected pixels.",
+    "maxDifference": 1
+  },
+  "layout": [
+    {
+      "key": "small",
+      "border": {
+        "x": 8,
+        "y": 8,
+        "width": 61.8125,
+        "height": 16
+      },
+      "padding": {
+        "x": 8,
+        "y": 8,
+        "width": 61.8125,
+        "height": 16
+      },
+      "content": {
+        "x": 8,
+        "y": 8,
+        "width": 61.8125,
+        "height": 16
+      }
+    },
+    {
+      "key": "roomy",
+      "border": {
+        "x": 81.8125,
+        "y": 8,
+        "width": 85.921875,
+        "height": 24
+      },
+      "padding": {
+        "x": 81.8125,
+        "y": 8,
+        "width": 85.921875,
+        "height": 24
+      },
+      "content": {
+        "x": 81.8125,
+        "y": 8,
+        "width": 85.921875,
+        "height": 24
+      }
+    },
+    {
+      "key": "large",
+      "border": {
+        "x": 179.734375,
+        "y": 8,
+        "width": 48.015625,
+        "height": 18
+      },
+      "padding": {
+        "x": 179.734375,
+        "y": 8,
+        "width": 48.015625,
+        "height": 18
+      },
+      "content": {
+        "x": 179.734375,
+        "y": 8,
+        "width": 48.015625,
+        "height": 18
+      }
+    },
+    {
+      "key": "truncate",
+      "border": {
+        "x": 95.390625,
+        "y": 72,
+        "width": 96,
+        "height": 20
+      },
+      "padding": {
+        "x": 95.390625,
+        "y": 72,
+        "width": 96,
+        "height": 20
+      },
+      "content": {
+        "x": 95.390625,
+        "y": 72,
+        "width": 96,
+        "height": 20
+      }
+    },
+    {
+      "key": "clamp",
+      "border": {
+        "x": 8,
+        "y": 96,
+        "width": 112,
+        "height": 30
+      },
+      "padding": {
+        "x": 8,
+        "y": 96,
+        "width": 112,
+        "height": 30
+      },
+      "content": {
+        "x": 8,
+        "y": 96,
+        "width": 112,
+        "height": 30
+      }
+    },
+    {
+      "key": "balance",
+      "border": {
+        "x": 132,
+        "y": 96,
+        "width": 128,
+        "height": 40
+      },
+      "padding": {
+        "x": 132,
+        "y": 96,
+        "width": 128,
+        "height": 40
+      },
+      "content": {
+        "x": 132,
+        "y": 96,
+        "width": 128,
+        "height": 40
+      }
+    },
+    {
+      "key": "break",
+      "border": {
+        "x": 8,
+        "y": 140,
+        "width": 80,
+        "height": 32
+      },
+      "padding": {
+        "x": 8,
+        "y": 140,
+        "width": 80,
+        "height": 32
+      },
+      "content": {
+        "x": 8,
+        "y": 140,
+        "width": 80,
+        "height": 32
+      }
+    }
+  ],
+  "lines": [
+    {
+      "key": "small",
+      "text": ["Extra small"],
+      "geometry": [
+        {
+          "x": 8,
+          "baseline": 20,
+          "height": 16
+        }
+      ]
+    },
+    {
+      "key": "roomy",
+      "text": ["Small, roomy"],
+      "geometry": [
+        {
+          "x": 81.8125,
+          "baseline": 25,
+          "height": 24
+        }
+      ]
+    },
+    {
+      "key": "large",
+      "text": ["Large"],
+      "geometry": [
+        {
+          "x": 179.734375,
+          "baseline": 24,
+          "height": 18
+        }
+      ]
+    },
+    {
+      "key": "balance",
+      "text": ["Balanced lines of ", "centered text here"],
+      "geometry": [
+        {
+          "x": 140.328125,
+          "baseline": 111,
+          "height": 20
+        },
+        {
+          "x": 135.703125,
+          "baseline": 131,
+          "height": 20
+        }
+      ]
+    },
+    {
+      "key": "break",
+      "text": ["Breakeverywh", "ereword"],
+      "geometry": [
+        {
+          "x": 8,
+          "baseline": 152,
+          "height": 16
+        },
+        {
+          "x": 8,
+          "baseline": 168,
+          "height": 16
+        }
+      ]
+    }
+  ]
+}

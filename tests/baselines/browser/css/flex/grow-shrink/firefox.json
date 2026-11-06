@@ -1,0 +1,137 @@
+{
+  "size": [360, 180],
+  "sources": {
+    "tests/baselines/browser/css/flex/grow-shrink/scene.html": "387fddf39f21c6bbba1cfd6d30abdee459445d483cfc54504076d44c0c76de0b"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "grow",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 300,
+          "height": 50
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 300,
+          "height": 50
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 300,
+          "height": 50
+        }
+      },
+      {
+        "key": "grow/one",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 96,
+          "height": 50
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 96,
+          "height": 50
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 96,
+          "height": 50
+        }
+      },
+      {
+        "key": "grow/two",
+        "border": {
+          "x": 128,
+          "y": 20,
+          "width": 192,
+          "height": 50
+        },
+        "padding": {
+          "x": 128,
+          "y": 20,
+          "width": 192,
+          "height": 50
+        },
+        "content": {
+          "x": 128,
+          "y": 20,
+          "width": 192,
+          "height": 50
+        }
+      },
+      {
+        "key": "shrink",
+        "border": {
+          "x": 20,
+          "y": 100,
+          "width": 240,
+          "height": 50
+        },
+        "padding": {
+          "x": 20,
+          "y": 100,
+          "width": 240,
+          "height": 50
+        },
+        "content": {
+          "x": 20,
+          "y": 100,
+          "width": 240,
+          "height": 50
+        }
+      },
+      {
+        "key": "shrink/large",
+        "border": {
+          "x": 20,
+          "y": 100,
+          "width": 160,
+          "height": 50
+        },
+        "padding": {
+          "x": 20,
+          "y": 100,
+          "width": 160,
+          "height": 50
+        },
+        "content": {
+          "x": 20,
+          "y": 100,
+          "width": 160,
+          "height": 50
+        }
+      },
+      {
+        "key": "shrink/small",
+        "border": {
+          "x": 180,
+          "y": 100,
+          "width": 80,
+          "height": 50
+        },
+        "padding": {
+          "x": 180,
+          "y": 100,
+          "width": 80,
+          "height": 50
+        },
+        "content": {
+          "x": 180,
+          "y": 100,
+          "width": 80,
+          "height": 50
+        }
+      }
+    ],
+    "lines": []
+  }
+}

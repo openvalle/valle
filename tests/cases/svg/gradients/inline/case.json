@@ -1,0 +1,36 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/pservers.html",
+  "assertion": "Object-bounding-box linear, coincident hard stops, and radial gradients preserve direction, stop placement and elliptical scaling.",
+  "at": [0],
+  "browser": {
+    "selected": "firefox",
+    "reason": "Reviewed linear endpoints, the hard stop and the elliptical radial ramp against all three browsers. Firefox has only one-level quantization differences and the smallest affected area.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 1800
+    }
+  },
+  "layout": [
+    {
+      "key": "drawing",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      }
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "size": [180, 160],
+  "sources": {
+    "tests/baselines/browser/css/text/overflow-wrap/scene.html": "81f5d434f0ba23dcd17f7b72231bbe80ae3275d6f3eec501bfffac9d03f84b08",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "text",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 108,
+          "height": 108
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 108,
+          "height": 108
+        },
+        "content": {
+          "x": 24,
+          "y": 24,
+          "width": 100,
+          "height": 100
+        }
+      }
+    ],
+    "lines": [
+      {
+        "key": "text",
+        "text": ["MMMM", "MMMM"],
+        "geometry": [
+          {
+            "x": 24,
+            "baseline": 49,
+            "height": 32
+          },
+          {
+            "x": 24,
+            "baseline": 81,
+            "height": 32
+          }
+        ]
+      }
+    ]
+  }
+}

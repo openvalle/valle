@@ -1,0 +1,158 @@
+{
+  "size": [380, 180],
+  "sources": {
+    "tests/baselines/browser/css/grid/tracks/scene.html": "f9ed9cdd17edc71846c8ca95f4847dd0824b60e7521e85044238fd2b73d23726"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "grid",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 340,
+          "height": 140
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 340,
+          "height": 140
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 340,
+          "height": 140
+        }
+      },
+      {
+        "key": "grid/0",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 80,
+          "height": 40
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 80,
+          "height": 40
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 80,
+          "height": 40
+        }
+      },
+      {
+        "key": "grid/1",
+        "border": {
+          "x": 110,
+          "y": 20,
+          "width": 80,
+          "height": 40
+        },
+        "padding": {
+          "x": 110,
+          "y": 20,
+          "width": 80,
+          "height": 40
+        },
+        "content": {
+          "x": 110,
+          "y": 20,
+          "width": 80,
+          "height": 40
+        }
+      },
+      {
+        "key": "grid/2",
+        "border": {
+          "x": 200,
+          "y": 20,
+          "width": 160,
+          "height": 40
+        },
+        "padding": {
+          "x": 200,
+          "y": 20,
+          "width": 160,
+          "height": 40
+        },
+        "content": {
+          "x": 200,
+          "y": 20,
+          "width": 160,
+          "height": 40
+        }
+      },
+      {
+        "key": "grid/3",
+        "border": {
+          "x": 20,
+          "y": 70,
+          "width": 80,
+          "height": 60
+        },
+        "padding": {
+          "x": 20,
+          "y": 70,
+          "width": 80,
+          "height": 60
+        },
+        "content": {
+          "x": 20,
+          "y": 70,
+          "width": 80,
+          "height": 60
+        }
+      },
+      {
+        "key": "grid/4",
+        "border": {
+          "x": 110,
+          "y": 70,
+          "width": 80,
+          "height": 60
+        },
+        "padding": {
+          "x": 110,
+          "y": 70,
+          "width": 80,
+          "height": 60
+        },
+        "content": {
+          "x": 110,
+          "y": 70,
+          "width": 80,
+          "height": 60
+        }
+      },
+      {
+        "key": "grid/5",
+        "border": {
+          "x": 200,
+          "y": 70,
+          "width": 160,
+          "height": 60
+        },
+        "padding": {
+          "x": 200,
+          "y": 70,
+          "width": 160,
+          "height": 60
+        },
+        "content": {
+          "x": 200,
+          "y": 70,
+          "width": 160,
+          "height": 60
+        }
+      }
+    ],
+    "lines": []
+  }
+}

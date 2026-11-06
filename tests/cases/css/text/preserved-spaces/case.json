@@ -1,0 +1,57 @@
+{
+  "spec": "https://www.w3.org/TR/css-text-3/#white-space-property",
+  "assertion": "white-space: pre preserves doubled spaces and the explicit line break, with a 32px line height and the same pinned Noto Sans font in every renderer.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "The same pinned Noto Sans is used throughout. Chrome, Firefox and Valle agree on x=30, baselines 59/91 and line-height 32; WebKit baselines are 59.281494/91.281494 and remain diagnostic. Reviewed glyph-edge rasterization differs (Chrome 1807 pixels, max 130; Firefox 1808, max 130; WebKit 2002, max 168). Only a contour mask derived from the reviewed browser image permits these differences; flat regions and the border remain exact. Missing text, one-pixel glyph displacements and one-level solid-color changes must fail.",
+    "textEdges": {
+      "key": "text",
+      "pixels": {
+        "maxDifference": 140,
+        "maxPixels": 1900
+      }
+    }
+  },
+  "layout": [
+    {
+      "key": "text",
+      "border": {
+        "x": 20,
+        "y": 24,
+        "width": 320,
+        "height": 88
+      },
+      "padding": {
+        "x": 22,
+        "y": 26,
+        "width": 316,
+        "height": 84
+      },
+      "content": {
+        "x": 30,
+        "y": 34,
+        "width": 300,
+        "height": 68
+      }
+    }
+  ],
+  "lines": [
+    {
+      "key": "text",
+      "text": ["Valle  motion", "Frame  by  frame"],
+      "geometry": [
+        {
+          "x": 30,
+          "baseline": 59,
+          "height": 32
+        },
+        {
+          "x": 30,
+          "baseline": 91,
+          "height": 32
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "spec": "https://www.w3.org/TR/css-sizing-3/#box-sizing",
+  "assertion": "Fixed content-box width and height exclude padding and borders, which extend outside the content box.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed against CSS Box Sizing: Valle and all three browsers agree exactly on the 12 box values and every pixel. Chrome is the stored pixel oracle; it is not the authority for box sizing."
+  },
+  "layout": [
+    {
+      "key": "box",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 128,
+        "height": 88
+      },
+      "padding": {
+        "x": 24,
+        "y": 24,
+        "width": 120,
+        "height": 80
+      },
+      "content": {
+        "x": 34,
+        "y": 34,
+        "width": 100,
+        "height": 60
+      }
+    }
+  ]
+}

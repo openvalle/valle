@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <title>Rounded clipping and multiply blending</title>
+  <style>
+    body {
+      margin: 0;
+    }
+    #canvas {
+      position: relative;
+      width: 240px;
+      height: 200px;
+      background: white;
+    }
+    #parent {
+      position: absolute;
+      left: 40px;
+      top: 20px;
+      width: 160px;
+      height: 160px;
+      background: aqua;
+      isolation: isolate;
+    }
+    #clip {
+      width: 160px;
+      height: 160px;
+      border-radius: 32px;
+      overflow: hidden;
+      mix-blend-mode: multiply;
+    }
+    #child {
+      width: 200px;
+      height: 200px;
+      background: yellow;
+    }
+  </style>
+  <div id="canvas">
+    <div id="parent">
+      <div id="clip" data-key="parent/clip"><div id="child"></div></div>
+    </div>
+  </div>
+</html>

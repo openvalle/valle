@@ -1,0 +1,57 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/conform.html",
+  "assertion": "An SVG file loaded as an Image retains natural 120x80 size; explicit 120x120 contain fitting centers its 120x80 drawing.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All three browsers agree on natural size, contain centering and the white stroke. Chrome differs only at the rounded clip boundary; the file-gradient companion checks smooth colors separately.",
+    "pixels": {
+      "maxDifference": 20,
+      "maxPixels": 160
+    }
+  },
+  "layout": [
+    {
+      "key": "natural",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 120,
+        "height": 80
+      },
+      "padding": {
+        "x": 20,
+        "y": 20,
+        "width": 120,
+        "height": 80
+      },
+      "content": {
+        "x": 20,
+        "y": 20,
+        "width": 120,
+        "height": 80
+      }
+    },
+    {
+      "key": "fit",
+      "border": {
+        "x": 180,
+        "y": 20,
+        "width": 120,
+        "height": 120
+      },
+      "padding": {
+        "x": 180,
+        "y": 20,
+        "width": 120,
+        "height": 120
+      },
+      "content": {
+        "x": 180,
+        "y": 20,
+        "width": 120,
+        "height": 120
+      }
+    }
+  ]
+}

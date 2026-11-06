@@ -1,0 +1,32 @@
+{
+  "spec": "tests/cases/d3/cases.ts:line",
+  "assertion": "The default D3 linear generator connects (10,20), (50,60), (90,20) in order, with a blue 2px stroke.",
+  "at": [0],
+  "layout": [
+    {
+      "key": "plot",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 120,
+        "height": 100
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 120,
+        "height": 100
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 120,
+        "height": 100
+      }
+    }
+  ],
+  "valle": {
+    "reason": "Reviewed on Metal: a blue 2px polyline through (10,20), (50,60), (90,20) in a 120x100 SVG viewport. The official D3 function suite independently checks the line generator. Initial PNG accepted after visual inspection.",
+    "maxDifference": 1
+  }
+}

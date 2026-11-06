@@ -1,0 +1,53 @@
+{
+  "spec": "https://www.w3.org/TR/css-overflow-3/#overflow-properties",
+  "assertion": "The first oversized child is clipped to its 120px padding box; the second extends 20px outside both edges.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed against the cited rule and all three browser captures. Explicit box expectations agree in all three where present; the Chrome image matches Valle exactly, so pixel comparison remains exact."
+  },
+  "layout": [
+    {
+      "key": "hidden",
+      "border": {
+        "x": 30,
+        "y": 30,
+        "width": 120,
+        "height": 100
+      },
+      "padding": {
+        "x": 30,
+        "y": 30,
+        "width": 120,
+        "height": 100
+      },
+      "content": {
+        "x": 30,
+        "y": 30,
+        "width": 120,
+        "height": 100
+      }
+    },
+    {
+      "key": "visible",
+      "border": {
+        "x": 190,
+        "y": 30,
+        "width": 120,
+        "height": 100
+      },
+      "padding": {
+        "x": 190,
+        "y": 30,
+        "width": 120,
+        "height": 100
+      },
+      "content": {
+        "x": 190,
+        "y": 30,
+        "width": 120,
+        "height": 100
+      }
+    }
+  ]
+}

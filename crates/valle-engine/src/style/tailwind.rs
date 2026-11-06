@@ -7,10 +7,10 @@
 //! style's: before the inline style, or after it for an important class (`p-4!`).
 //!
 //! The utilities are Tailwind's (MIT, see THIRD_PARTY.md), family by family, and the case runner
-//! compares each class's CSS with what the compiler makes of it. Variants, CSS variables and the
-//! names Tailwind v4 keeps from v3 are errors that say what to write instead. So is a class whose
-//! CSS the style layer does not take, as its declarations resolve on an element of it alone: it
-//! fails where it is written, with the style layer's reason.
+//! compares each class's CSS with reviewed output from the official compiler. Variants, CSS
+//! variables and the names Tailwind v4 keeps from v3 are errors that say what to write instead.
+//! So is a class whose CSS the style layer does not take, as its declarations resolve on an
+//! element of it alone: it fails where it is written, with the style layer's reason.
 
 mod order;
 mod types;
@@ -1249,7 +1249,7 @@ fn closing(s: &str) -> Option<usize> {
     None
 }
 
-/// A class's CSS on one line, as `web/tests/tailwind.ts` prints Tailwind's: its rules, `&` its
+/// A class's CSS on one line, as `tests/tools/tailwind.ts` prints Tailwind's: its rules, `&` its
 /// element.
 pub fn print(class: &Class) -> String {
     fn body(head: &str, nodes: &[Node], important: &str) -> String {

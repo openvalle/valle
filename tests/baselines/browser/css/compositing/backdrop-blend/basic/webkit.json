@@ -1,0 +1,10 @@
+{
+  "size": [660, 180],
+  "sources": {
+    "tests/baselines/browser/css/compositing/backdrop-blend/basic/scene.html": "6e6a35eafa0c3e0e7bf8f187847443c14a19e7b6e5c7da082b47e768669cb935"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

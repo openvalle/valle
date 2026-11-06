@@ -1,0 +1,13 @@
+{
+  "spec": "https://drafts.csswg.org/filter-effects-2/#BackdropFilterProperty",
+  "assertion": "Backdrop invert, multiply and opacity must preserve their compositing order. Controls use full, half and zero opacity; the final box has no foreground content and must not multiply the filtered page by the original page again.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed before/after colors and difference images; see README.md beside this case. The double multiplication is fixed. Chrome preserves the filtered backdrop, blends foreground with it, then composites normally. Only the full-opacity translucent background differs by one blue-channel level over 16000 pixels (31 versus 32). Firefox/WebKit captures omit even the invert-only backdrop control in this environment; their agreement does not arbitrate this combination.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 16000
+    }
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "spec": "https://www.w3.org/TR/css-backgrounds-3/#the-background-origin",
+  "assertion": "The same bottom-right 40x30 tile is positioned against three different origin boxes, then cropped to the content box. The border and content dimensions stay fixed.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three captures against all three positioning origins and the content-box clip. Their geometry and pixels agree; use an exact Chrome baseline."
+  },
+  "layout": [
+    {
+      "key": "border-box",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 140,
+        "height": 110
+      },
+      "padding": {
+        "x": 24,
+        "y": 24,
+        "width": 132,
+        "height": 102
+      },
+      "content": {
+        "x": 32,
+        "y": 32,
+        "width": 116,
+        "height": 86
+      }
+    },
+    {
+      "key": "padding-box",
+      "border": {
+        "x": 180,
+        "y": 20,
+        "width": 140,
+        "height": 110
+      },
+      "padding": {
+        "x": 184,
+        "y": 24,
+        "width": 132,
+        "height": 102
+      },
+      "content": {
+        "x": 192,
+        "y": 32,
+        "width": 116,
+        "height": 86
+      }
+    },
+    {
+      "key": "content-box",
+      "border": {
+        "x": 340,
+        "y": 20,
+        "width": 140,
+        "height": 110
+      },
+      "padding": {
+        "x": 344,
+        "y": 24,
+        "width": 132,
+        "height": 102
+      },
+      "content": {
+        "x": 352,
+        "y": 32,
+        "width": 116,
+        "height": 86
+      }
+    }
+  ]
+}

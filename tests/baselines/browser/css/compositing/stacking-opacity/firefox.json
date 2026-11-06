@@ -1,0 +1,10 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/css/compositing/stacking-opacity/scene.html": "7fd6e2b907388f7b1c2431f0019b7dd860ad4ef4ef16b2ecacefd1933c107377"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

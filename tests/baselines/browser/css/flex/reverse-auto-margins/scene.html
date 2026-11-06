@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/flex/reverse-auto-margins</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 420px;
+      height: 240px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <div style="position: relative; width: 420px; height: 240px; background-color: white">
+      <div
+        data-key="reverse"
+        style="
+          position: absolute;
+          left: 20px;
+          top: 20px;
+          width: 300px;
+          height: 60px;
+          background-color: #eef2f7;
+          display: flex;
+          flex-direction: row-reverse;
+          gap: 10px;
+        "
+      >
+        <div data-key="reverse/0" style="width: 40px; background-color: #176bba"></div>
+        <div data-key="reverse/1" style="width: 60px; background-color: #16a085"></div>
+        <div data-key="reverse/2" style="width: 80px; background-color: #ffb74d"></div>
+      </div>
+      <div
+        data-key="margin"
+        style="
+          position: absolute;
+          left: 20px;
+          top: 110px;
+          width: 300px;
+          height: 60px;
+          background-color: #eef2f7;
+          display: flex;
+        "
+      >
+        <div data-key="margin/first" style="width: 40px; background-color: #176bba"></div>
+        <div
+          data-key="margin/last"
+          style="width: 60px; margin-left: auto; background-color: #ffb74d"
+        ></div>
+      </div>
+      <div
+        data-key="column"
+        style="
+          position: absolute;
+          left: 350px;
+          top: 20px;
+          width: 50px;
+          height: 180px;
+          background-color: #eef2f7;
+          display: flex;
+          flex-direction: column-reverse;
+          gap: 10px;
+        "
+      >
+        <div data-key="column/0" style="height: 20px; background-color: #176bba"></div>
+        <div data-key="column/1" style="height: 30px; background-color: #16a085"></div>
+        <div data-key="column/2" style="height: 40px; background-color: #ffb74d"></div>
+      </div>
+    </div>
+  </div>
+</html>

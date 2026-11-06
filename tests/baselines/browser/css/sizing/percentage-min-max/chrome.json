@@ -1,0 +1,95 @@
+{
+  "size": [360, 180],
+  "sources": {
+    "tests/baselines/browser/css/sizing/percentage-min-max/scene.html": "3128403499d1dc34edeb3557670d991833c5c897733bdf01d7801deffe7a1bbf"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "parent",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 320,
+          "height": 140
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 320,
+          "height": 140
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 320,
+          "height": 140
+        }
+      },
+      {
+        "key": "parent/max",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 200,
+          "height": 30
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 200,
+          "height": 30
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 200,
+          "height": 30
+        }
+      },
+      {
+        "key": "parent/min",
+        "border": {
+          "x": 20,
+          "y": 50,
+          "width": 120,
+          "height": 30
+        },
+        "padding": {
+          "x": 20,
+          "y": 50,
+          "width": 120,
+          "height": 30
+        },
+        "content": {
+          "x": 20,
+          "y": 50,
+          "width": 120,
+          "height": 30
+        }
+      },
+      {
+        "key": "parent/calc",
+        "border": {
+          "x": 20,
+          "y": 80,
+          "width": 140,
+          "height": 30
+        },
+        "padding": {
+          "x": 20,
+          "y": 80,
+          "width": 140,
+          "height": 30
+        },
+        "content": {
+          "x": 20,
+          "y": 80,
+          "width": 140,
+          "height": 30
+        }
+      }
+    ],
+    "lines": []
+  }
+}

@@ -996,6 +996,7 @@ impl Painter<'_> {
     /// context, in its transform if it has one and a layer if `grouped`, or a positioned box.
     fn layer(&self, d: usize, out: &mut Drawn) {
         let s = &self.styles[d];
+        let mut blend = s.blend;
         if self.in_scene(d) {
             // It paints with its scene.
             return;
@@ -1027,7 +1028,7 @@ impl Painter<'_> {
                 let filters = filters(&s.filter, snap(self.layout.boxes[d].border));
                 items = vec![Item::Filter { filters, items }];
             }
-            items = self.over_backdrop(d, items);
+            (items, blend) = self.over_backdrop(d, items);
             items = self.masked(d, self.clipped(d, items));
             if s.transformed() && !items.is_empty() {
                 items = vec![Item::Transform { matrix, items }];
@@ -1046,7 +1047,7 @@ impl Painter<'_> {
         if self.grouped(d) {
             // With the clips in the layer, so that it blends with all under it.
             let items = self.nest(drawn);
-            out.extend(group(s.opacity as f32, s.blend, items).map(|g| (None, g)));
+            out.extend(group(s.opacity as f32, blend, items).map(|g| (None, g)));
         } else {
             out.extend(drawn);
         }
@@ -1117,26 +1118,26 @@ impl Painter<'_> {
         under.into_iter().chain([shaded]).collect()
     }
 
-    /// `items` over what is under `d` through its backdrop filter, in its border box, if it has
-    /// one. They are a layer of their own, so what is in the box sees what it paints, not its
-    /// backdrop, as in Chrome.
-    fn over_backdrop(&self, d: usize, items: Vec<Item>) -> Vec<Item> {
+    /// Blend `items` with `d`'s filtered backdrop, then composite the combined layer normally.
+    /// Return its outer blend too, so the filtered backdrop is not blended with the page again.
+    /// Even an empty filter region isolates the foreground from the page behind it.
+    fn over_backdrop(&self, d: usize, items: Vec<Item>) -> (Vec<Item>, Blend) {
         let s = &self.styles[d];
         let rect = snap(self.layout.boxes[d].border);
-        if s.backdrop.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
-            return items;
+        if s.backdrop.is_empty() {
+            return (items, s.blend);
         }
-        let backdrop = Item::Backdrop {
+        let backdrop = (rect.width > 0.0 && rect.height > 0.0).then(|| Item::Backdrop {
             filters: filters(&s.backdrop, rect),
             rect,
             radii: self.radii(d, rect),
-        };
+        });
         let inside = (!items.is_empty()).then_some(Item::Group {
             opacity: 1.0,
-            blend: Blend::Normal,
+            blend: s.blend,
             items,
         });
-        std::iter::once(backdrop).chain(inside).collect()
+        (backdrop.into_iter().chain(inside).collect(), Blend::Normal)
     }
 
     /// `items` inside `d`'s clip path, if it has one: a shape in one of its boxes, in the px it
@@ -1310,6 +1311,7 @@ impl Painter<'_> {
         let mut planes = Vec::new();
         self.planes(d, &mut planes);
         let rects: Vec<(Matrix4, Rect)> = planes.iter().map(|(m, r, _)| (*m, *r)).collect();
+        let mut drawn = Vec::new();
         for (i, cuts) in scene::order(&rects) {
             let (space, _, items) = &planes[i];
             let items = (cuts.into_iter())
@@ -1318,8 +1320,16 @@ impl Painter<'_> {
                 matrix: space.flatten(),
                 items,
             };
-            out.push((self.clips[d].last().copied(), item));
+            drawn.push(item);
         }
+        // A 3D scene is a stacking context too: its blending planes see only what it paints.
+        let drawn = if self.grouped(d) {
+            group(1.0, Blend::Normal, drawn).into_iter().collect()
+        } else {
+            drawn
+        };
+        let clip = self.clips[d].last().copied();
+        out.extend(drawn.into_iter().map(|item| (clip, item)));
     }
 
     /// The planes of a 3D scene from `e` on, each in space, with its border box and its items:
@@ -1338,12 +1348,10 @@ impl Painter<'_> {
                 let filters = filters(&s.filter, snap(self.layout.boxes[e].border));
                 items = vec![Item::Filter { filters, items }];
             }
-            items = self.over_backdrop(e, items);
-            items = self.masked(e, self.clipped(e, items));
+            let (items, blend) = self.over_backdrop(e, items);
+            let mut items = self.masked(e, self.clipped(e, items));
             if self.grouped(e) {
-                items = group(s.opacity as f32, s.blend, items)
-                    .into_iter()
-                    .collect();
+                items = group(s.opacity as f32, blend, items).into_iter().collect();
             }
             if !items.is_empty() {
                 out.push((space, self.layout.boxes[e].border, items));
@@ -2884,6 +2892,92 @@ mod tests {
                 r#"group 1 ["backdrop of 2", "group 1 [\"red\", \"blue\"]"]"#
             ]
         );
+    }
+
+    #[test]
+    fn backdrop_blending_composites_normally_in_layers_and_planes() {
+        for plane in [false, true] {
+            let mut parent = vec![("background", "gray")];
+            let mut child = vec![
+                ("width", "100px"),
+                ("height", "60px"),
+                ("backdropFilter", "invert(1)"),
+                ("mixBlendMode", "multiply"),
+                ("opacity", "0.5"),
+                ("background", "red"),
+            ];
+            if plane {
+                parent.push(("transformStyle", "preserve-3d"));
+                child.push(("transform", "translateZ(1px)"));
+            }
+            let (items, _) = paint_of(vec![view(&parent, &[1]), view(&child, &[])], &[0]);
+            let mut layer = items.last().unwrap();
+            if plane {
+                let Item::Group {
+                    opacity,
+                    blend,
+                    items,
+                } = layer
+                else {
+                    panic!("expected an isolated scene: {layer:?}")
+                };
+                assert_eq!((*opacity, *blend), (1.0, Blend::Normal));
+                let Item::Transform { items, .. } = items.last().unwrap() else {
+                    panic!("expected a scene plane: {layer:?}")
+                };
+                layer = &items[0];
+            }
+            let Item::Group {
+                opacity,
+                blend,
+                items,
+            } = layer
+            else {
+                panic!("expected a compositing group: {layer:?}")
+            };
+            assert_eq!((*opacity, *blend), (0.5, Blend::Normal));
+            let [
+                Item::Backdrop { .. },
+                Item::Group {
+                    opacity,
+                    blend,
+                    items,
+                },
+            ] = &items[..]
+            else {
+                panic!("expected backdrop then foreground: {items:?}")
+            };
+            assert_eq!((*opacity, *blend), (1.0, Blend::Multiply));
+            assert_eq!(names(items), ["red"]);
+        }
+    }
+
+    #[test]
+    fn an_empty_backdrop_box_still_isolates_overflowing_content() {
+        let (items, _) = paint_of(
+            vec![
+                view(&[("background", "gray")], &[1]),
+                view(
+                    &[
+                        ("width", "0px"),
+                        ("height", "60px"),
+                        ("backdropFilter", "invert(1)"),
+                        ("mixBlendMode", "multiply"),
+                    ],
+                    &[2],
+                ),
+                view(
+                    &[("width", "80px"), ("height", "60px"), ("background", "red")],
+                    &[],
+                ),
+            ],
+            &[0],
+        );
+        let [_, Item::Group { blend, items, .. }] = &items[..] else {
+            panic!("expected an overflowing foreground: {items:?}")
+        };
+        assert_eq!(*blend, Blend::Normal);
+        assert_eq!(names(items), [r#"group 1 Multiply ["red"]"#]);
     }
 
     #[test]

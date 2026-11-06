@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/transform/origin-order</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 360px;
+      height: 180px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <div style="position: relative; width: 360px; height: 180px; background-color: white">
+      <div
+        style="
+          position: absolute;
+          left: 30px;
+          top: 30px;
+          width: 60px;
+          height: 40px;
+          background-color: #eef2f7;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 30px;
+          top: 30px;
+          width: 60px;
+          height: 40px;
+          background-color: #176bba;
+          transform: translate(20px, 40px);
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 170px;
+          top: 30px;
+          width: 60px;
+          height: 40px;
+          background-color: #16a085;
+          transform-origin: 0px 0px;
+          transform: scale(2, 2);
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 280px;
+          top: 30px;
+          width: 60px;
+          height: 40px;
+          background-color: #ffb74d;
+          transform-origin: 0px 0px;
+          transform: rotate(90deg);
+        "
+      ></div>
+    </div>
+  </div>
+</html>

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/text/word-wrap</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 220px;
+      height: 140px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <div style="position: relative; width: 220px; height: 140px; background-color: white">
+      <!-- prettier-ignore -->
+      <div data-key="text" style="position: absolute; left: 20px; top: 20px; width: 160px; height: 100px; background-color: #f4f7fa; font-family: &quot;Test Sans&quot;; font-size: 24px; line-height: 32px; color: #17324d; white-space: normal" data-text="">Alpha beta gamma delta</div>
+    </div>
+  </div>
+</html>

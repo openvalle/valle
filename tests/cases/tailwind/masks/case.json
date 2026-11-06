@@ -1,0 +1,9 @@
+{
+  "spec": "crates/valle-engine/src/style/tailwind.rs",
+  "assertion": "Mask classes: each side's gradient, from and to a stop, in percent, of the spacing scale, of a color and written; two sides together, and both on an axis; linear gradients at angles; radial ones, shaped, sized and placed; conic ones; and a mask written, sized, placed and repeated, its box clipped and its origin moved.",
+  "at": [0.0],
+  "valle": {
+    "reason": "Restored product regression PNGs from the verified 2026-11-05 backup and its base commit 5d1fb918; resource paths adapted without changing the expected pixels.",
+    "maxDifference": 1
+  }
+}

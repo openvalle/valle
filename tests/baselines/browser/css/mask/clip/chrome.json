@@ -1,0 +1,10 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/css/mask/clip/scene.html": "04b756e701e995b874f52286f8f44ac839fe42304593838bb4088ad3b891b8b7"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

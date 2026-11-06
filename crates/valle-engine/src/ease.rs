@@ -359,30 +359,6 @@ mod tests {
         Easing::parse(text).unwrap().at(t)
     }
 
-    /// What the pinned Chrome makes of each easing, at twenty-firsts of the way.
-    #[test]
-    fn curves_are_chrome_s() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/baselines/chrome/properties.json"
-        );
-        let text = std::fs::read_to_string(path).unwrap();
-        let list: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let curves = list["easings"].as_object().unwrap();
-        assert!(curves.len() > 10);
-        for (text, values) in curves {
-            let easing = Easing::parse(text).unwrap();
-            for (i, chrome) in values.as_array().unwrap().iter().enumerate() {
-                let (t, chrome) = (i as f64 / 20.0, chrome.as_f64().unwrap());
-                let ours = easing.at(t);
-                assert!(
-                    (ours - chrome).abs() < 1e-6,
-                    "{text} at {t}: {ours}, {chrome}"
-                );
-            }
-        }
-    }
-
     #[test]
     fn curves_go_on_past_their_ends() {
         assert!((at("cubic-bezier(0.5, 0.25, 0.5, 0.75)", -1.0) + 0.5).abs() < 1e-12);

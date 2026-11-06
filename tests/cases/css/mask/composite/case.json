@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/css-masking-1/#the-mask-composite",
+  "assertion": "Two binary alpha masks combine by add, subtract, intersect or exclude. The first mask is the source and the lower mask the destination; compositing changes the child with its parent.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three captures and the paired controls against the stated rule. Geometry, layer order and solid colors agree exactly; retain an exact Chrome baseline."
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/painting.html",
+  "assertion": "User-space marker dimensions remain 20x20; refX/refY center the marker, auto-start-reverse reverses the start, and the mid marker follows the angle bisector.",
+  "at": [0],
+  "browser": {
+    "selected": "webkit",
+    "reason": "Reviewed reference-point placement, 20px marker size, reversed start and mid-angle orientation in all three browsers. Differences are antialiasing on diagonal strokes and arrows; WebKit permits the smallest maximum channel difference.",
+    "pixels": {
+      "maxDifference": 30,
+      "maxPixels": 950
+    }
+  },
+  "layout": [
+    {
+      "key": "drawing",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      }
+    }
+  ]
+}

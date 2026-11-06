@@ -1,0 +1,33 @@
+{
+  "size": [340, 180],
+  "sources": {
+    "tests/baselines/browser/svg/radial-focus/file/scene.html": "c4afd65f599b1d219c8bfd1263b275081f6a0dddac3a20d6a823006c2cdb71d1",
+    "tests/cases/svg/radial-focus/file/source.svg": "130de407c8abe5c1680581c1684d3627daa8c497f0cadafa1981802e4d5a3634"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "drawing",
+        "border": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "padding": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        },
+        "content": {
+          "x": 0,
+          "y": 0,
+          "width": 340,
+          "height": 180
+        }
+      }
+    ],
+    "lines": []
+  }
+}

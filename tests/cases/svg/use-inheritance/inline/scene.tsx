@@ -1,0 +1,27 @@
+export const composition = { width: 340, height: 180, fps: 1, duration: 1 };
+
+export default function Scene() {
+  return (
+    <View style={{ width: 340, height: 180, backgroundColor: "white" }}>
+      <svg key="drawing" width={340} height={180}>
+        <defs>
+          <g id="shape">
+            <rect width="80" height="100" fill="currentColor" />
+            <rect x="20" y="20" width="40" height="60" />
+          </g>
+          <g id="shift">
+            <use href="#shape" x="10" y="10" />
+          </g>
+        </defs>
+        <use href="#shape" x="20" y="20" color="#176bba" fill="#ffb74d" />
+        <use href="#shift" x="120" y="10" color="#16a085" fill="#176bba" />
+        <use
+          href="#shift"
+          transform="translate(225 20) scale(0.8)"
+          color="#ffb74d"
+          fill="#16a085"
+        />
+      </svg>
+    </View>
+  );
+}

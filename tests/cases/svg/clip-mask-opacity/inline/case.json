@@ -1,0 +1,32 @@
+{
+  "spec": "https://www.w3.org/TR/css-masking-1/#compositing",
+  "assertion": "Group clip and luminance mask intersect after child paints are composited, in the group local coordinates. The second translated group applies opacity once to the masked result.",
+  "at": [0],
+  "browser": {
+    "selected": "webkit",
+    "reason": "Reviewed clip boundaries, visible child regions and the half-opacity control in all three engines. Geometry agrees; Chrome and Firefox differ from Valle only by one output channel level in translucent regions. WebKit matches exactly, so no pixel allowance is needed."
+  },
+  "layout": [
+    {
+      "key": "drawing",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 180
+      }
+    }
+  ]
+}

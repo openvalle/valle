@@ -1,0 +1,53 @@
+{
+  "size": [340, 160],
+  "sources": {
+    "tests/baselines/browser/css/sizing/aspect-ratio/scene.html": "3f42c73555a738e50a3f5d1ba2317d9f174ef3e59450d7a1e3af2dbe146339b1"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "width",
+        "border": {
+          "x": 20,
+          "y": 20,
+          "width": 160,
+          "height": 80
+        },
+        "padding": {
+          "x": 20,
+          "y": 20,
+          "width": 160,
+          "height": 80
+        },
+        "content": {
+          "x": 20,
+          "y": 20,
+          "width": 160,
+          "height": 80
+        }
+      },
+      {
+        "key": "height",
+        "border": {
+          "x": 220,
+          "y": 20,
+          "width": 90,
+          "height": 90
+        },
+        "padding": {
+          "x": 220,
+          "y": 20,
+          "width": 90,
+          "height": 90
+        },
+        "content": {
+          "x": 220,
+          "y": 20,
+          "width": 90,
+          "height": 90
+        }
+      }
+    ],
+    "lines": []
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "spec": "crates/valle-engine/src/front/runtime.js:sampling",
+  "assertion": "Two Echo configurations hold negative sample times at zero, paint older copies first, apply decay per copy and evaluate each copy's color at its sampled time.",
+  "at": [0, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75],
+  "valle": {
+    "reason": "Eight frames reviewed on Metal for older-to-newer ordering, separate sample times, start hold, decay and a color transition. Both Echo parameter sets match the accepted PNGs exactly.",
+    "maxDifference": 1
+  },
+  "layout": [
+    {
+      "key": "canvas",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 256,
+        "height": 112
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 256,
+        "height": 112
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 256,
+        "height": 112
+      }
+    }
+  ]
+}

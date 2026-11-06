@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/compositing-1/#isolation",
+  "assertion": "Without isolation, cyan/magenta multiply with the yellow page; an isolated group blends children against its transparent group backdrop, then composites the group normally.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three captures and the paired controls against the stated rule. Geometry, layer order and solid colors agree exactly; retain an exact Chrome baseline."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/css-backgrounds-3/#box-shadow",
+  "assertion": "Outer and inset shadows blur an offset silhouette while retaining the solid box and clipping the inset shadow to its interior.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed outer/inset bounds and the solid interiors. Chrome differs only in blurred shadow samples (maximum 7/255); Firefox and WebKit use a different blur approximation. The zero-blur companion is exact.",
+    "pixels": {
+      "maxDifference": 8,
+      "maxPixels": 4100
+    }
+  }
+}

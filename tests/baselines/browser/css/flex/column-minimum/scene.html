@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/flex/column-minimum</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSansItalic.ttf");
+      font-weight: 100 900;
+      font-style: italic;
+    }
+    body {
+      margin: 0;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 380px;
+      height: 240px;
+      background: white;
+    }
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <div style="position: relative; width: 380px; height: 240px; background-color: white">
+      <div
+        data-key="col0"
+        style="
+          position: absolute;
+          left: 20px;
+          top: 20px;
+          width: 160px;
+          height: 200px;
+          background-color: #eef2f7;
+          display: flex;
+          flex-direction: column;
+          padding: 10px;
+          gap: 10px;
+        "
+      >
+        <div data-key="col0/main" style="flex: 1 1 160px; background-color: #16a085">
+          <div style="height: 120px; background-color: #176bba"></div>
+        </div>
+        <div
+          data-key="col0/foot"
+          style="height: 80px; flex-shrink: 0; background-color: #ffb74d"
+        ></div>
+      </div>
+      <div
+        data-key="col1"
+        style="
+          position: absolute;
+          left: 200px;
+          top: 20px;
+          width: 160px;
+          height: 200px;
+          background-color: #eef2f7;
+          display: flex;
+          flex-direction: column;
+          padding: 10px;
+          gap: 10px;
+        "
+      >
+        <div
+          data-key="col1/main"
+          style="flex: 1 1 160px; background-color: #16a085; min-height: 0px"
+        >
+          <div style="height: 120px; background-color: #176bba"></div>
+        </div>
+        <div
+          data-key="col1/foot"
+          style="height: 80px; flex-shrink: 0; background-color: #ffb74d"
+        ></div>
+      </div>
+    </div>
+  </div>
+</html>

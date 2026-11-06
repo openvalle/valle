@@ -1,0 +1,13 @@
+{
+  "spec": "https://drafts.csswg.org/filter-effects-2/#BackdropFilterProperty",
+  "assertion": "A preserve-3d parent isolates its planes from the page. Unlike the 2D control, a plane over a transparent scene backdrop retains its foreground colors. Half opacity composites the complete plane result once.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed PNGs and difference images. Chrome preserves the filtered backdrop and applies foreground blending before final source-over; Firefox/WebKit captures omit invert even in the standalone control in this environment. See ../backdrop-blend/README.md. Chrome and WebKit agree on the isolated planes; Firefox omits them in this capture. Only one output channel level differs across 33600 translucent pixels; geometry and opaque regions were reviewed.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 33600
+    }
+  }
+}
