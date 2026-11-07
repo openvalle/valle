@@ -16,10 +16,15 @@ as a fallback. A damaged cache file must be removed before retrying.
 
 `counter.mp4`, `photo.png`, `rings.png` and `tile.png` are fixed video/image inputs
 restored from the earlier test suite. `timeline/` holds Motion components and
-the nested Timeline shared by the six Timeline cases. Shared references use
+the nested Timeline shared by the Timeline cases. Shared references use
 `/tests/resources/...`, mapped to this repository by the test loader and browser
 server, so moving a case does not change its resource paths. Media bytes are
 preserved.
+
+`timeline/captions/` holds inputs shared by numerical Rust subtitle tests and live
+Web/native rendering checks. These have no committed PNG baselines. `words.motion.tsx`
+is a caption presenter with timed runs, configurable color and an intro/outro;
+its paths resolve beside the Timeline that uses it.
 
 `svg/pixels.png` is a shared 4×2 opaque color grid authored for object-fit and
 integer `pixelated` scaling. Dedicated SVG drawings live beside their file cases

@@ -337,6 +337,22 @@ Run `cargo xtask cases tailwind` for both utility and rendering checks.
 
 ## Timeline
 
+Subtitle behavior is tested with Rust assertions beside the Timeline lowering code in
+`crates/valle-engine/src/timeline.rs`: visible glyphs and colors at run boundaries,
+opacity and transforms, exact line strings, text bounds, stable glyph positions,
+presenter props and local clocks, overlapping tracks, and joined emoji. These tests
+need no GPU or stored PNGs:
+
+```sh
+cargo test -p valle-engine --lib timeline::tests
+```
+
+`resources/timeline/captions/` contains shared inputs for those assertions and the
+browser checks in `web/tests/player.ts`. The browser compares a few frames with
+fresh native renders, then exports and reimports a subtitle video. Generated images
+are diagnostics, not permanent subtitle baselines; do not save a PNG for each timing
+assertion. CSS/text rendering has its own tests.
+
 Create `tests/cases/timeline/<name>/scene.timeline.json` using the normal Timeline
 format. Adapt [clips](cases/timeline/clips/scene.timeline.json) for placement and
 time mapping, or [nested](cases/timeline/nested/scene.timeline.json) for nesting.
