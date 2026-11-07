@@ -1942,6 +1942,10 @@
     const c = props.composition;
     const op = (part) => "clip|" + part + "|" + id;
     const on = mk(op("on"), [G.seconds]);
+    // Only active clips build content. Keep the decision on the clip table's exact clock,
+    // so crossing an edge or seeking backwards selects the corresponding variant.
+    guard(on, { truthy: on.v }, "clip", at);
+    if (!on.v) return;
     const local = mk(op("local"), [G.seconds]);
     const outer = [G.seconds, G.progress, G.clip, G.composition, G.names, G.inputs];
     if (c !== undefined) {
@@ -1953,7 +1957,7 @@
     G.scopes.push(op("time"));
     if (props.resources !== undefined) G.names = props.resources;
     if (props.inputs !== undefined) G.inputs = props.inputs;
-    const style = { ...props.style, display: mk("select", [on, "flex", "none"]) };
+    const style = { ...props.style, display: "flex" };
     try {
       element("View", { key: props.key, style }, [], out, at, false, f);
       if (props.picture !== undefined) out[out.length - 1].picture = props.picture;

@@ -3,8 +3,8 @@
 //!
 //! - A clip is a `<TimeScope clip>`: a box that shows while the clip is on, the clip's content
 //!   inside on the clip's own time. When it is on and what time it gives come from the clip
-//!   table, in ticks, never from JS: clips coming and going are not guards and trace nothing
-//!   again.
+//!   table, in ticks. Only active clips build content; their visibility guards select a new
+//!   variant when clips come and go, including when seeking backwards.
 //! - Later tracks paint over earlier ones.
 //! - Each video clip reads its file as a resource of its own, so two clips of one file decode
 //!   apart; a Motion component's resource slots are resources of the scene, which the names
@@ -1533,6 +1533,7 @@ mod tests {
     use super::*;
     use crate::paint::Item;
     use crate::scene::{Frame, Scene};
+    use crate::template::Kind as NodeKind;
     use serde_json::json;
 
     fn run(test: impl FnOnce() + Send + 'static) {
@@ -2031,6 +2032,87 @@ mod tests {
                 let f = scene.frame(at).unwrap();
                 assert_eq!(letters(&f.items, 1.0, None), count, "frame {index}");
             }
+        });
+    }
+
+    #[test]
+    fn long_caption_tracks_build_only_the_visible_text_and_can_seek() {
+        run(|| {
+            let clips: Vec<_> = (0..1200)
+                .map(|i| json!({ "text": format!("Caption {i}"), "start": i * 3, "duration": 2 }))
+                .collect();
+            let mut scene = caption(json!({ "animation": "none" }), json!(clips));
+            // More variants than the cache keeps, then jump to the end and back.
+            for i in (0..70).chain([599, 1199, 599, 0]) {
+                let f = frame(&mut scene, (i * 3) as f64 + 0.5);
+                let text: Vec<_> = f
+                    .layout
+                    .lines
+                    .iter()
+                    .flatten()
+                    .map(|l| &*l.string)
+                    .collect();
+                assert_eq!(text, [format!("Caption {i}")]);
+                assert_eq!(
+                    f.template
+                        .nodes
+                        .iter()
+                        .filter(|n| matches!(n.kind, NodeKind::Text { .. }))
+                        .count(),
+                    1,
+                    "inactive captions must not retain their text trees"
+                );
+                assert!(f.template.nodes.len() < 32);
+                // Reuse within a clip; a gap is empty, including on backwards seeks.
+                let traces = scene.traces().0;
+                frame(&mut scene, (i * 3) as f64 + 1.0);
+                assert_eq!(scene.traces().0, traces);
+                let gap = frame(&mut scene, (i * 3 + 2) as f64);
+                assert_eq!(letters(&gap.items, 1.0, None), 0);
+                assert!(
+                    !gap.template
+                        .nodes
+                        .iter()
+                        .any(|n| matches!(n.kind, NodeKind::Text { .. }))
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn checking_a_later_caption_still_reports_its_presenter_error() {
+        run(|| {
+            let source = r#"
+                export const composition = { width: 640, height: 360, fps: 30, duration: 3 };
+                export const role = captionPresenter({ intro: 0, outro: 0 });
+                export default function Caption({ caption }) {
+                    return <Text style={{ width: caption.text === "broken" ? "bad" : 200 }}>
+                        {caption.text}
+                    </Text>;
+                }
+            "#;
+            let scene = scene(
+                "captions.timeline.json",
+                &json!({
+                    "canvas": { "width": 640, "height": 360, "fps": 30 },
+                    "resources": { "words": "./words.motion.tsx" },
+                    "tracks": { "caption": [{
+                        "presenter": { "component": "words" },
+                        "clips": [
+                            { "text": "valid", "start": 0, "duration": 1 },
+                            { "text": "broken", "start": 2, "duration": 1 }
+                        ]
+                    }] }
+                }),
+                &|p| p.ends_with("words.motion.tsx").then(|| source.to_string()),
+            );
+            let mut checker = scene.into_checker();
+            for time in [0.0, 0.5, 1.0, 1.5] {
+                checker.check(Tick::from_seconds(time).unwrap()).unwrap();
+            }
+            let error = checker.check(Tick::from_seconds(2.0).unwrap()).unwrap_err();
+            assert!(error.contains("bad"), "{error}");
+            checker.check(Tick::ZERO).unwrap();
         });
     }
 }
