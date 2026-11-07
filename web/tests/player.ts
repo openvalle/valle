@@ -27,6 +27,18 @@ const CASES: { entry: string; frames: number[]; props?: Record<string, unknown> 
     props: { name: "Ada Lovelace", accent: "#00C2A8" },
   },
   { entry: "examples/edit.timeline.json", frames: [20] },
+  {
+    entry: "tests/resources/timeline/captions/animations.timeline.json",
+    frames: [6, 57, 111, 153, 207, 249, 282],
+  },
+  {
+    entry: "tests/resources/timeline/captions/layout.timeline.json",
+    frames: [0, 60, 120],
+  },
+  {
+    entry: "tests/resources/timeline/captions/boundaries.timeline.json",
+    frames: [45, 75],
+  },
 ];
 /** The most a channel may differ, and the share of pixels that may differ by more than 1. */
 const STEP = 2;
@@ -217,15 +229,21 @@ const PAGE = `<!doctype html>
   window.similar = async (a, b) => {
     const [x, y] = [await decoded(a), await decoded(b)];
     if (x.length !== y.length) return { most: Infinity, mean: Infinity };
-    let [most, sum] = [0, 0];
+    let [most, sum, inkSum, inkChannels] = [0, 0, 0, 0];
     for (let i = 0; i < x.length; i += 4) {
       for (let k = 0; k < 3; k++) {
         const d = Math.abs(x[i + k] - y[i + k]);
         most = Math.max(most, d);
         sum += d;
+        // Bright caption glyphs against a dark background: the full-frame mean alone
+        // can hide missing words because text occupies little of the canvas.
+        if (Math.max(y[i], y[i + 1], y[i + 2]) > 128) {
+          inkSum += d;
+          inkChannels++;
+        }
       }
     }
-    return { most, mean: sum / (x.length / 4) / 3 };
+    return { most, mean: sum / (x.length / 4) / 3, inkMean: inkChannels ? inkSum / inkChannels : 0, inkPixels: inkChannels / 3 };
   };
   /** How the frame on screen differs from \`native\`'s where it is opaque: the canvas is. */
   window.shown = async (screenshot, native) => {
@@ -439,9 +457,10 @@ async function main() {
       if (frame && natives.has(frame[1])) {
         return new Response(Bun.file(natives.get(frame[1])!));
       }
-      const file = /^\/((?:examples|tests\/cases|web\/packages\/engine\/dist)\/[\w./-]+)$/.exec(
-        path,
-      );
+      const file =
+        /^\/((?:examples|tests\/(?:cases|resources)|web\/packages\/engine\/dist)\/[\w./-]+)$/.exec(
+          path,
+        );
       if (file && !file[1].includes("..")) {
         const f = Bun.file(join(root, file[1]));
         const type = file[1].endsWith(".js") ? { "content-type": "text/javascript" } : undefined;
@@ -555,12 +574,49 @@ async function main() {
     for (const [entry, file] of [
       ["examples/edit.timeline.json", "edit.mp4"],
       ["sound/sound.timeline.json", "sound.mp4"],
+      ["tests/resources/timeline/captions/animations.timeline.json", "captions.mp4"],
     ]) {
       const e = await evaluate(`exported(${JSON.stringify(entry)})`);
       await Bun.write(join(out, file), Buffer.from(e.url.slice(e.url.indexOf(",") + 1), "base64"));
       console.log(`exported ${entry}: ${e.frames} frames in ${e.ms} ms`);
       if (e.done !== e.frames || e.count !== e.frames) {
         failed.push(`exporting ${entry} said ${e.done} of ${e.count} frames were done`);
+      }
+    }
+    // Reimport the subtitle export through the native decoder and check each animation,
+    // including the final blank frame. This also validates the complete exported duration.
+    const captionEntry = "tests/resources/timeline/captions/animations.timeline.json";
+    const captionImport = join(out, "captions.timeline.json");
+    await Bun.write(
+      captionImport,
+      JSON.stringify({
+        canvas: { width: 640, height: 360, fps: 30 },
+        resources: { video: "captions.mp4" },
+        tracks: {
+          visual: [{ items: [{ id: "video", kind: "video", src: "video", duration: 9.6 }] }],
+        },
+      }),
+    );
+    for (const frame of [6, 57, 111, 153, 207, 249, 282]) {
+      const file = `caption-${frame}.png`;
+      run([
+        "timeline",
+        "render",
+        captionImport,
+        "--decoder",
+        "ffmpeg",
+        "--frame",
+        String(frame),
+        "-o",
+        join(out, file),
+      ]);
+      const native = `/native/${encodeURIComponent(named(captionEntry, frame))}`;
+      const d = await evaluate(
+        `similar(${JSON.stringify(`/out/${file}`)}, ${JSON.stringify(native)})`,
+      );
+      console.log(`caption export frame ${frame}: ${JSON.stringify(d)}`);
+      if (d.mean > 1.5 || d.inkMean > 12 || (d.inkPixels === 0 && d.most > 8)) {
+        failed.push(`subtitle export frame ${frame}: ${JSON.stringify(d)}`);
       }
     }
     // An export at another size and rate, without its sound, and one cancelled.

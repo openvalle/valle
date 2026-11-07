@@ -268,7 +268,6 @@ mod tests {
                 "tailwind/filters",
                 "timeline/clips",
                 "timeline/transitions",
-                "timeline/captions",
                 "timeline/effects",
                 "timeline/look",
                 "timeline/nested",

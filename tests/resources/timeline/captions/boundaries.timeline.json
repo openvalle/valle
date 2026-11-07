@@ -1,0 +1,99 @@
+{
+  "canvas": {
+    "width": 640,
+    "height": 360,
+    "fps": 30,
+    "background": "#132433"
+  },
+  "tracks": {
+    "visual": [
+      {
+        "clips": [
+          {
+            "kind": "solid",
+            "color": "#132433",
+            "start": 0,
+            "duration": 4
+          }
+        ]
+      }
+    ],
+    "caption": [
+      {
+        "id": "plain",
+        "style": {
+          "fontSize": 30,
+          "margin": 24,
+          "shadow": false,
+          "animation": "none"
+        },
+        "clips": [
+          {
+            "id": "first",
+            "text": "FIRST / 上一句",
+            "start": 0.2,
+            "duration": 0.5
+          },
+          {
+            "id": "second",
+            "text": "SECOND / 下一句",
+            "start": 0.7,
+            "duration": 0.5
+          }
+        ]
+      },
+      {
+        "id": "custom",
+        "presenter": {
+          "component": "words",
+          "props": { "accent": "#7c3aed" }
+        },
+        "clips": [
+          {
+            "id": "words",
+            "start": 1.4,
+            "duration": 2,
+            "runs": [
+              {
+                "text": "你好 ",
+                "start": 0,
+                "end": 0.4
+              },
+              {
+                "text": "👩🏽‍💻 ",
+                "start": 0.5,
+                "end": 1
+              },
+              {
+                "text": "Valle!",
+                "start": 1.1,
+                "end": 1.8
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "overlap",
+        "style": {
+          "fontSize": 24,
+          "margin": 24,
+          "position": "top",
+          "background": "none",
+          "animation": "fade",
+          "transition": 0.2
+        },
+        "clips": [
+          {
+            "text": "两个字幕轨同时出现",
+            "start": 2,
+            "duration": 1.4
+          }
+        ]
+      }
+    ]
+  },
+  "resources": {
+    "words": "./words.motion.tsx"
+  }
+}

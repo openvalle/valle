@@ -1527,3 +1527,510 @@ fn kind_name(kind: &Kind) -> &'static str {
         Kind::Json => "data",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::paint::Item;
+    use crate::scene::{Frame, Scene};
+    use serde_json::json;
+
+    fn run(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(32 << 20)
+            .spawn(test)
+            .unwrap()
+            .join()
+            .unwrap_or_else(|p| std::panic::resume_unwind(p));
+    }
+
+    fn caption(style: Value, clips: Value) -> Scene {
+        let mut props = json!({ "fontSize": 28, "margin": 24, "maxWidth": 360,
+            "background": "none", "shadow": false, "transition": 0.2 });
+        props
+            .as_object_mut()
+            .unwrap()
+            .extend(style.as_object().unwrap().clone());
+        scene(
+            "captions.timeline.json",
+            &json!({
+                "canvas": { "width": 640, "height": 360, "fps": 30 },
+                "tracks": { "caption": [{ "style": props, "clips": clips }] }
+            }),
+            &|_| None,
+        )
+    }
+
+    fn scene(entry: &str, doc: &Value, read: &dyn Fn(&str) -> Option<String>) -> Scene {
+        let doc = Document::read(doc).unwrap();
+        let lowered = lower(
+            entry,
+            &doc,
+            &Host {
+                read,
+                length: &|_| None,
+            },
+        )
+        .unwrap();
+        Scene::load(
+            &lowered.entry,
+            &|path| {
+                lowered
+                    .files
+                    .get(path)
+                    .cloned()
+                    .or_else(|| read(path))
+                    .map(String::into_bytes)
+            },
+            &lowered.inputs,
+            crate::testing::fonts(),
+        )
+        .unwrap()
+    }
+
+    fn fixture(name: &str) -> Scene {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/resources/timeline/captions");
+        let entry = dir.join(format!("{name}.timeline.json"));
+        let read = |path: &str| std::fs::read_to_string(path).ok();
+        let value = serde_json::from_str(&read(entry.to_str().unwrap()).unwrap()).unwrap();
+        scene(entry.to_str().unwrap(), &value, &read)
+    }
+
+    fn frame(scene: &mut Scene, seconds: f64) -> Frame {
+        scene.frame(Tick::from_seconds(seconds).unwrap()).unwrap()
+    }
+
+    /// Count painted letters, excluding glyphs suppressed by a parent or their own alpha.
+    fn letters(items: &[Item], alpha: f32, color: Option<[f32; 4]>) -> usize {
+        items
+            .iter()
+            .map(|item| match item {
+                Item::Glyphs {
+                    glyphs, color: c, ..
+                } if alpha * c[3] > 0.0 && color.is_none_or(|color| color == *c) => glyphs.len(),
+                Item::Group { opacity, items, .. } => letters(items, alpha * opacity, color),
+                Item::Transform { items, .. } | Item::Clip { items, .. } => {
+                    letters(items, alpha, color)
+                }
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// The standard caption's outer box, found from its text rather than a generated node ID.
+    fn outer(frame: &Frame) -> usize {
+        let text = frame.layout.lines.iter().position(Option::is_some).unwrap();
+        parent(frame, parent(frame, text))
+    }
+
+    fn parent(frame: &Frame, i: usize) -> usize {
+        frame
+            .template
+            .nodes
+            .iter()
+            .position(|n| n.children.contains(&(i as u32)))
+            .unwrap()
+    }
+
+    #[test]
+    fn caption_runs_light_or_reveal_only_at_their_starts_and_seek_backwards() {
+        run(|| {
+            for animation in ["karaoke", "typewriter"] {
+                let mut scene = caption(
+                    json!({ "animation": animation, "highlight": "#00ff00" }),
+                    json!([{ "start": 0.2, "duration": 1.2, "runs": [
+                        { "text": "AB", "start": 0, "end": 0.3 },
+                        { "text": "CD", "start": 0.4, "end": 0.7 },
+                        { "text": "EF", "start": 0.8, "end": 1.2 }
+                    ] }]),
+                );
+                for (time, active) in [
+                    (0.1, 0),
+                    (0.2, 2),
+                    (0.59, 2),
+                    (0.6, 4),
+                    (0.99, 4),
+                    (1.0, 6),
+                    (1.39, 6),
+                    (1.4, 0),
+                    (0.6, 4),
+                    (0.2, 2),
+                ] {
+                    let f = frame(&mut scene, time);
+                    let color = (animation == "karaoke").then_some([0.0, 1.0, 0.0, 1.0]);
+                    assert_eq!(
+                        letters(&f.items, 1.0, color),
+                        active,
+                        "{animation} at {time}"
+                    );
+                    if animation == "karaoke" && active > 0 {
+                        assert_eq!(letters(&f.items, 1.0, None), 6);
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn caption_fade_pop_slide_and_none_have_their_expected_entry_and_exit() {
+        run(|| {
+            for animation in ["none", "fade", "pop", "slide"] {
+                let mut scene = caption(
+                    json!({ "animation": animation }),
+                    json!([{ "text": "AB", "start": 0.2, "duration": 1.2 }]),
+                );
+                let still = frame(&mut scene, 0.4);
+                let k = outer(&still);
+                let rest = still.transforms[k].bounds(still.layout.boxes[k].border);
+                for (time, opacity) in [(0.2, 0.0), (0.3, 0.5), (0.4, 1.0), (1.3, 0.5)] {
+                    let f = frame(&mut scene, time);
+                    let k = outer(&f);
+                    let expected = if animation == "none" { 1.0 } else { opacity };
+                    assert!(
+                        (f.styles[k].opacity - expected).abs() < 1e-6,
+                        "{animation} at {time}"
+                    );
+                    let b = f.transforms[k].bounds(f.layout.boxes[k].border);
+                    assert!((b.x + b.width / 2.0 - 320.0).abs() < 0.02);
+                    if animation == "slide" {
+                        assert!((b.y - rest.y - (1.0 - opacity as f32) * 36.0).abs() < 0.02);
+                    } else if animation == "pop" && time == 0.2 {
+                        assert!((b.width / rest.width - 0.82).abs() < 0.001);
+                    } else if animation == "pop" && time == 0.3 {
+                        assert!(b.width > rest.width, "pop overshoots before settling");
+                    } else {
+                        assert!((b.width - rest.width).abs() < 0.02);
+                    }
+                }
+                assert_eq!(letters(&frame(&mut scene, 1.4).items, 1.0, None), 0);
+            }
+        });
+    }
+
+    #[test]
+    fn caption_multiline_blocks_are_centered_and_wrapped_text_fits_its_box() {
+        run(|| {
+            for text in [
+                "One line",
+                "First line\nSecond line",
+                "中文与 English 123，一起检查长句自动换行，保持标点和阅读顺序。",
+            ] {
+                for position in ["top", "middle", "bottom"] {
+                    let mut scene = caption(
+                        json!({ "position": position, "background": "box" }),
+                        json!([{ "text": text, "start": 0, "duration": 1 }]),
+                    );
+                    let f = frame(&mut scene, 0.5);
+                    let k = outer(&f);
+                    let b = f.transforms[k].bounds(f.layout.boxes[k].border);
+                    let got = match position {
+                        "top" => b.y,
+                        "middle" => b.y + b.height / 2.0,
+                        _ => b.y + b.height,
+                    };
+                    let expected = match position {
+                        "top" => 24.0,
+                        "middle" => 180.0,
+                        _ => 336.0,
+                    };
+                    // Percentage transforms use the pixel-snapped border box. Its center may
+                    // differ from the unrounded layout center by at most half a pixel.
+                    let tolerance = if position == "middle" { 0.51 } else { 0.02 };
+                    assert!(
+                        (got - expected).abs() < tolerance,
+                        "{position} {text:?}: {b:?}"
+                    );
+                    let (i, lines) = f
+                        .layout
+                        .lines
+                        .iter()
+                        .enumerate()
+                        .find_map(|(i, l)| l.as_ref().map(|l| (i, l)))
+                        .unwrap();
+                    let content = f.layout.boxes[i].content;
+                    assert!(content.width <= 300.0);
+                    if text != "One line" {
+                        assert!(lines.text.len() >= 2);
+                    }
+                    assert!(
+                        lines
+                            .runs
+                            .iter()
+                            .all(|run| run.x[0] >= -0.02 && run.x[1] <= content.width + 0.02)
+                    );
+                }
+            }
+        });
+    }
+
+    fn caption_lines<'a>(frame: &'a Frame, expected: &[&str]) -> (usize, &'a crate::text::Lines) {
+        let (i, lines) = frame
+            .layout
+            .lines
+            .iter()
+            .enumerate()
+            .find_map(|(i, lines)| lines.as_ref().map(|lines| (i, lines)))
+            .unwrap();
+        let text: Vec<_> = lines
+            .text
+            .iter()
+            .map(|r| &lines.string[r.clone()])
+            .collect();
+        assert_eq!(text, expected);
+        (i, lines)
+    }
+
+    #[test]
+    fn caption_wraps_english_words_whole_in_plain_and_mixed_text() {
+        run(|| {
+            // The 220px box has 30px padding on each side: 160px for text. The English
+            // case uses the same font, size and width as css/text/word-wrap.
+            for (text, expected) in [
+                ("Alpha beta gamma delta", ["Alpha beta ", "gamma delta"]),
+                ("你好世界 English go", ["你好世界 ", "English go"]),
+            ] {
+                let mut scene = caption(
+                    json!({ "fontSize": 24, "fontWeight": 400, "maxWidth": 220,
+                        "background": "box", "animation": "none" }),
+                    json!([{ "text": text, "start": 0, "duration": 1.2 }]),
+                );
+                let f = frame(&mut scene, 0.5);
+                let (i, lines) = caption_lines(&f, &expected);
+                assert!((f.layout.boxes[i].content.width - 160.0).abs() < 0.02);
+                assert!(
+                    lines
+                        .runs
+                        .iter()
+                        .all(|r| r.x[0] >= -0.02 && r.x[1] <= 160.02)
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn caption_word_animations_keep_wrapping_and_glyph_positions() {
+        run(|| {
+            for (words, expected) in [
+                (
+                    vec!["Alpha ", "beta ", "gamma ", "delta"],
+                    ["Alpha beta ", "gamma delta"],
+                ),
+                (
+                    vec!["你好世界 ", "English ", "go"],
+                    ["你好世界 ", "English go"],
+                ),
+            ] {
+                for animation in ["karaoke", "typewriter"] {
+                    for timed in [false, true] {
+                        let mut clip = json!({ "start": 0, "duration": 1.2 });
+                        if timed {
+                            clip["runs"] = Value::Array(
+                                words
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, text)| {
+                                        json!({
+                                            "text": text,
+                                            "start": i as f64 * 0.3,
+                                            "end": (i + 1) as f64 * 0.3
+                                        })
+                                    })
+                                    .collect(),
+                            );
+                        } else {
+                            clip["text"] = json!(words.concat());
+                        }
+                        let mut scene = caption(
+                            json!({ "fontSize": 24, "fontWeight": 400, "maxWidth": 220,
+                                "background": "box", "animation": animation }),
+                            json!([clip]),
+                        );
+                        let last = frame(&mut scene, 35.0 / 30.0);
+                        let (i, reference) = caption_lines(&last, &expected);
+                        // Before and on run starts, fully revealed, and after seeking back.
+                        for index in [0, 8, 9, 17, 18, 26, 27, 35, 18, 0] {
+                            let f = frame(&mut scene, index as f64 / 30.0);
+                            let (j, lines) = caption_lines(&f, &expected);
+                            assert_eq!(
+                                lines, reference,
+                                "{animation}, timed={timed}, frame {index}"
+                            );
+                            assert_eq!(f.layout.boxes[j], last.layout.boxes[i]);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn caption_keeps_an_overlong_word_whole_with_default_wrapping() {
+        run(|| {
+            let word = "Supercalifragilisticexpialidocious";
+            let mut scene = caption(
+                json!({ "fontSize": 24, "fontWeight": 400, "maxWidth": 220,
+                    "background": "box", "animation": "none" }),
+                json!([{ "text": word, "start": 0, "duration": 1 }]),
+            );
+            let f = frame(&mut scene, 0.5);
+            let (i, lines) = caption_lines(&f, &[word]);
+            let content = f.layout.boxes[i].content;
+            assert!((content.width - 160.0).abs() < 0.02);
+            // The template leaves word-break/overflow-wrap at normal. Overflow is visible;
+            // it must not silently introduce break-all or discard part of the word.
+            let left = lines
+                .runs
+                .iter()
+                .map(|r| r.x[0])
+                .fold(f32::INFINITY, f32::min);
+            let right = lines
+                .runs
+                .iter()
+                .map(|r| r.x[1])
+                .fold(f32::NEG_INFINITY, f32::max);
+            assert!(right - left > content.width);
+            assert_eq!(letters(&f.items, 1.0, None), word.len());
+        });
+    }
+
+    #[test]
+    fn caption_layout_applies_background_stroke_shadow_and_keeps_emoji_whole() {
+        run(|| {
+            let mut scene = fixture("layout");
+            for (time, size, stroke, shadow, background) in [
+                (0.5, 28.0, 0.0, false, "box"),
+                (2.5, 28.0, 1.0, true, "none"),
+                (4.5, 24.0, 0.0, true, "bar"),
+            ] {
+                let f = frame(&mut scene, time);
+                let (i, lines) = f
+                    .layout
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, lines)| lines.as_ref().map(|l| (i, l)))
+                    .unwrap();
+                let font = &f.styles[i].font;
+                assert_eq!(font.size, size);
+                assert_eq!(font.stroke, stroke);
+                assert_eq!(font.shadows.len(), usize::from(shadow));
+                if shadow {
+                    assert_eq!(font.shadows[0].offset, [0.0, 4.0]);
+                    assert_eq!(font.shadows[0].blur, 14.0);
+                }
+                let box_index = parent(&f, i);
+                let expected = if background == "none" {
+                    0.0
+                } else {
+                    166.0 / 255.0
+                };
+                assert!((f.styles[box_index].background[3] - expected).abs() < 1e-6);
+                if background == "bar" {
+                    assert_eq!(f.layout.boxes[box_index].border.width, 640.0);
+                    let emoji = "👩🏽‍💻";
+                    let start = lines.string.find(emoji).unwrap();
+                    let range = start..start + emoji.len();
+                    let joined: Vec<_> = lines
+                        .glyphs
+                        .iter()
+                        .filter(|g| range.contains(&(g.cluster as usize)))
+                        .collect();
+                    assert_eq!(joined.len(), 1, "the joined emoji is one glyph");
+                    assert_eq!(joined[0].cluster as usize, start);
+                    assert_ne!(joined[0].id, 0, "the emoji is not a missing-glyph box");
+                    assert!(
+                        lines
+                            .text
+                            .iter()
+                            .any(|r| r.start <= range.start && r.end >= range.end)
+                    );
+                    let glyph = joined[0];
+                    assert_eq!(
+                        crate::text::color::colored(&scene.faces()[glyph.face as usize], glyph.id),
+                        Ok(true)
+                    );
+                } else if background == "box" {
+                    assert!(f.layout.boxes[box_index].border.width <= 360.0);
+                } else {
+                    caption_lines(&f, &["第一行 / line one\n", "第二行 / line two"]);
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn caption_presenter_receives_runs_props_and_local_time_across_overlapping_tracks() {
+        run(|| {
+            let mut scene = fixture("boundaries");
+            let checks = [
+                (42, 0.0, 1),
+                (45, 0.5, 1),
+                (48, 1.0, 1),
+                (56, 1.0, 1),
+                (57, 1.0, 2),
+                (63, 1.0, 2),
+                (74, 1.0, 2),
+                (75, 1.0, 3),
+                (96, 1.0, 3),
+                (99, 0.5, 3),
+            ];
+            for (index, opacity, lit) in checks.into_iter().chain(checks.into_iter().rev()) {
+                let f = frame(&mut scene, index as f64 / 30.0);
+                for (word, text) in ["你好 ", "👩🏽‍💻 ", "Valle!"].into_iter().enumerate()
+                {
+                    let i = f
+                        .layout
+                        .lines
+                        .iter()
+                        .position(|l| {
+                            l.as_ref()
+                                .is_some_and(|l| l.string.as_ref() == text.trim_end())
+                        })
+                        .unwrap();
+                    let color = if word < lit {
+                        [124.0, 58.0, 237.0, 255.0]
+                    } else {
+                        [51.0, 65.0, 85.0, 255.0]
+                    }
+                    .map(|c| c / 255.0);
+                    assert_eq!(f.styles[i].background, color, "frame {index}, word {word}");
+                    assert!((f.styles[parent(&f, i)].opacity - opacity).abs() < 1e-6);
+                }
+                if index == 63 {
+                    let i = f
+                        .layout
+                        .lines
+                        .iter()
+                        .position(|l| {
+                            l.as_ref()
+                                .is_some_and(|l| l.string.as_ref() == "两个字幕轨同时出现")
+                        })
+                        .unwrap();
+                    assert!((f.styles[parent(&f, parent(&f, i))].opacity - 0.5).abs() < 1e-6);
+                }
+            }
+            for time in [0.1, 1.2, 1.3, 3.4, 3.9] {
+                assert_eq!(letters(&frame(&mut scene, time).items, 1.0, None), 0);
+            }
+        });
+    }
+
+    #[test]
+    fn adjacent_captions_exchange_at_the_exclusive_end_without_a_blank_frame() {
+        run(|| {
+            let mut scene = caption(
+                json!({ "animation": "none" }),
+                json!([
+                    { "text": "A", "start": 0.2, "duration": 0.5 },
+                    { "text": "BC", "start": 0.7, "duration": 0.5 }
+                ]),
+            );
+            for (index, count) in [(5, 0), (6, 1), (20, 1), (21, 2), (35, 2), (36, 0), (20, 1)] {
+                let at = scene.composition().fps.frame_start(index).unwrap();
+                let f = scene.frame(at).unwrap();
+                assert_eq!(letters(&f.items, 1.0, None), count, "frame {index}");
+            }
+        });
+    }
+}

@@ -1,0 +1,87 @@
+{
+  "canvas": {
+    "width": 640,
+    "height": 360,
+    "fps": 30,
+    "background": "#132433"
+  },
+  "tracks": {
+    "visual": [
+      {
+        "clips": [
+          {
+            "kind": "solid",
+            "color": "#132433",
+            "start": 0,
+            "duration": 6
+          }
+        ]
+      }
+    ],
+    "caption": [
+      {
+        "id": "top",
+        "style": {
+          "fontSize": 28,
+          "margin": 24,
+          "maxWidth": 360,
+          "position": "top",
+          "background": "box",
+          "animation": "none",
+          "strokeWidth": 0,
+          "shadow": false
+        },
+        "clips": [
+          {
+            "id": "top-text",
+            "start": 0,
+            "duration": 2,
+            "text": "中文与 English 123，一起检查长句自动换行，保持标点和阅读顺序。"
+          }
+        ]
+      },
+      {
+        "id": "middle",
+        "style": {
+          "fontSize": 28,
+          "margin": 24,
+          "maxWidth": 360,
+          "position": "middle",
+          "background": "none",
+          "animation": "none",
+          "strokeWidth": 1,
+          "shadow": true
+        },
+        "clips": [
+          {
+            "id": "middle-text",
+            "start": 2,
+            "duration": 2,
+            "text": "第一行 / line one\n第二行 / line two"
+          }
+        ]
+      },
+      {
+        "id": "bottom",
+        "style": {
+          "fontSize": 24,
+          "margin": 24,
+          "maxWidth": 360,
+          "position": "bottom",
+          "background": "bar",
+          "animation": "none",
+          "strokeWidth": 0,
+          "shadow": true
+        },
+        "clips": [
+          {
+            "id": "bottom-text",
+            "start": 4,
+            "duration": 2,
+            "text": "字幕也有 emoji 👩🏽‍💻 🎉\n保持完整，不拆开！"
+          }
+        ]
+      }
+    ]
+  }
+}

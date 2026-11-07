@@ -74,7 +74,9 @@ export default function Caption({
   const shown = Math.min(enter, leave);
   const moves = animation === "fade" || animation === "slide" || animation === "pop";
   const scale =
-    animation === "pop" ? interpolate(enter, [0, 1], [0.82, 1], { easing: "easeOutBack" }) : 1;
+    animation === "pop"
+      ? interpolate(enter, [0, 1], [0.82, 1], { easing: "cubic-bezier(0.34, 1.56, 0.64, 1)" })
+      : 1;
   const rise = animation === "slide" ? (1 - shown) * 36 : 0;
   const bar = background === "bar";
   // Bottom captions grow upward from `margin` above the bottom edge.
@@ -82,7 +84,7 @@ export default function Caption({
     position === "top"
       ? { top: margin }
       : position === "middle"
-        ? { top: height / 2 - fontSize }
+        ? { top: height / 2 }
         : { bottom: margin };
   return (
     <View
@@ -94,7 +96,7 @@ export default function Caption({
         display: "flex",
         justifyContent: "center",
         opacity: moves ? shown : 1,
-        transform: `translateY(${rise}px) scale(${scale})`,
+        transform: `${position === "middle" ? "translateY(-50%) " : ""}translateY(${rise}px) scale(${scale})`,
       }}
     >
       <View

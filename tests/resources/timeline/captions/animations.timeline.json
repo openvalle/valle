@@ -1,0 +1,240 @@
+{
+  "canvas": {
+    "width": 640,
+    "height": 360,
+    "fps": 30,
+    "background": "#132433"
+  },
+  "tracks": {
+    "visual": [
+      {
+        "clips": [
+          {
+            "kind": "solid",
+            "color": "#132433",
+            "start": 0,
+            "duration": 9.6
+          }
+        ]
+      }
+    ],
+    "caption": [
+      {
+        "id": "none",
+        "style": {
+          "fontSize": 32,
+          "margin": 24,
+          "maxWidth": 540,
+          "animation": "none",
+          "transition": 0.2,
+          "shadow": false,
+          "highlight": "#ffd23f"
+        },
+        "clips": [
+          {
+            "id": "none-text",
+            "start": 0.2,
+            "duration": 1.2,
+            "runs": [
+              {
+                "text": "明天 ",
+                "start": 0,
+                "end": 0.4
+              },
+              {
+                "text": "一起 ",
+                "start": 0.4,
+                "end": 0.8
+              },
+              {
+                "text": "Go!",
+                "start": 0.8,
+                "end": 1.2
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "karaoke",
+        "style": {
+          "fontSize": 32,
+          "margin": 24,
+          "maxWidth": 540,
+          "animation": "karaoke",
+          "transition": 0.2,
+          "shadow": false,
+          "highlight": "#ffd23f"
+        },
+        "clips": [
+          {
+            "id": "karaoke-text",
+            "start": 1.8,
+            "duration": 1.2,
+            "runs": [
+              {
+                "text": "明天 ",
+                "start": 0,
+                "end": 0.4
+              },
+              {
+                "text": "一起 ",
+                "start": 0.4,
+                "end": 0.8
+              },
+              {
+                "text": "Go!",
+                "start": 0.8,
+                "end": 1.2
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "typewriter",
+        "style": {
+          "fontSize": 32,
+          "margin": 24,
+          "maxWidth": 540,
+          "animation": "typewriter",
+          "transition": 0.2,
+          "shadow": false,
+          "highlight": "#ffd23f"
+        },
+        "clips": [
+          {
+            "id": "typewriter-text",
+            "start": 3.4,
+            "duration": 1.2,
+            "runs": [
+              {
+                "text": "明天 ",
+                "start": 0,
+                "end": 0.4
+              },
+              {
+                "text": "一起 ",
+                "start": 0.4,
+                "end": 0.8
+              },
+              {
+                "text": "Go!",
+                "start": 0.8,
+                "end": 1.2
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "fade",
+        "style": {
+          "fontSize": 32,
+          "margin": 24,
+          "maxWidth": 540,
+          "animation": "fade",
+          "transition": 0.2,
+          "shadow": false,
+          "highlight": "#ffd23f"
+        },
+        "clips": [
+          {
+            "id": "fade-text",
+            "start": 5.0,
+            "duration": 1.2,
+            "runs": [
+              {
+                "text": "明天 ",
+                "start": 0,
+                "end": 0.4
+              },
+              {
+                "text": "一起 ",
+                "start": 0.4,
+                "end": 0.8
+              },
+              {
+                "text": "Go!",
+                "start": 0.8,
+                "end": 1.2
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "pop",
+        "style": {
+          "fontSize": 32,
+          "margin": 24,
+          "maxWidth": 540,
+          "animation": "pop",
+          "transition": 0.2,
+          "shadow": false,
+          "highlight": "#ffd23f"
+        },
+        "clips": [
+          {
+            "id": "pop-text",
+            "start": 6.6,
+            "duration": 1.2,
+            "runs": [
+              {
+                "text": "明天 ",
+                "start": 0,
+                "end": 0.4
+              },
+              {
+                "text": "一起 ",
+                "start": 0.4,
+                "end": 0.8
+              },
+              {
+                "text": "Go!",
+                "start": 0.8,
+                "end": 1.2
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "slide",
+        "style": {
+          "fontSize": 32,
+          "margin": 24,
+          "maxWidth": 540,
+          "animation": "slide",
+          "transition": 0.2,
+          "shadow": false,
+          "highlight": "#ffd23f"
+        },
+        "clips": [
+          {
+            "id": "slide-text",
+            "start": 8.2,
+            "duration": 1.2,
+            "runs": [
+              {
+                "text": "明天 ",
+                "start": 0,
+                "end": 0.4
+              },
+              {
+                "text": "一起 ",
+                "start": 0.4,
+                "end": 0.8
+              },
+              {
+                "text": "Go!",
+                "start": 0.8,
+                "end": 1.2
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
