@@ -216,6 +216,11 @@ impl Writer {
         let to = to.ok_or("the video stream is gone")?;
         while self.encoder.receive_packet(&mut packet).is_ok() {
             packet.set_stream(self.stream);
+            // Encoders may leave this unset. Each input frame spans one encoder time unit;
+            // without it the muxer ends the stream at the last PTS, one frame too early.
+            if packet.duration() <= 0 {
+                packet.set_duration(1);
+            }
             packet.rescale_ts(self.rate, to);
             (packet.write_interleaved(&mut self.output)).map_err(|e| e.to_string())?;
         }

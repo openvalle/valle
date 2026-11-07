@@ -11,7 +11,7 @@ use serde_json::Value;
 const VALLE: &str = env!("CARGO_BIN_EXE_valle");
 
 /// Smooth gradients and flat colors, which a video keeps closely, moving with time.
-const PICTURE: &str = r##"export const composition = { width: 256, height: 144, fps: 30, duration: 1 };
+const PICTURE: &str = r##"export const composition = { width: 256, height: 144, fps: 30, duration: 6 };
 export default function Scene() {
   const { progress } = useCurrentTime();
   return (
@@ -24,7 +24,7 @@ export default function Scene() {
 "##;
 
 /// The video at `clip`, filling the frame.
-const SHOWN: &str = r##"export const composition = { width: 256, height: 144, fps: 30, duration: 1 };
+const SHOWN: &str = r##"export const composition = { width: 256, height: 144, fps: 30, duration: 6 };
 export const controls = { resources: { clip: resource({ kind: "video", default: "clip.mp4" }) } };
 export default function Scene() {
   return <Video src="resource://clip" style={{ width: 256, height: 144 }} />;
@@ -73,6 +73,42 @@ fn round_trip(encoder: &str) -> (Value, u8, f64) {
             .collect::<Vec<_>>(),
         &dir,
     );
+    // A full export must be reusable at its original duration, including its final frame.
+    std::fs::write(
+        dir.join("reuse.timeline.json"),
+        r#"{"canvas":{"width":256,"height":144,"fps":30},
+            "resources":{"clip":"clip.mp4"},
+            "tracks":{"visual":[{"items":[{"id":"clip","kind":"video","src":"clip","duration":6}]}]}}"#,
+    )
+    .expect("timeline written");
+    let checked = valle(&["timeline", "check", "reuse.timeline.json"], &dir);
+    assert_eq!(checked["frames"], 180);
+    let before = std::fs::read(dir.join("reuse.timeline.json")).expect("timeline");
+    let refused = Command::new(VALLE)
+        .args([
+            "timeline",
+            "edit",
+            "reuse.timeline.json",
+            "--op",
+            r#"{"op":"trim","clip":"clip","duration":7}"#,
+            "--json",
+        ])
+        .current_dir(&dir)
+        .output()
+        .expect("edit runs");
+    let failure: Value = serde_json::from_slice(&refused.stdout).expect("JSON");
+    assert_eq!(failure["status"], "error", "{failure}");
+    assert!(
+        failure["message"]
+            .as_str()
+            .unwrap()
+            .contains("past its end")
+    );
+    assert_eq!(
+        std::fs::read(dir.join("reuse.timeline.json")).unwrap(),
+        before
+    );
+
     valle(
         &[
             "motion",

@@ -101,12 +101,14 @@ pub struct Sound {
 }
 
 pub struct Clip {
-    /// Its id as written, or `track.n` from its track's id and its place there, from 1.
+    /// Its id as written, or `track.n` from its track's id and its JSON array index, from 0.
     pub id: String,
     /// Whether the id is written.
     pub named: bool,
     /// Where it is written, as `tracks.visual[0].items[2]`.
     pub at: String,
+    /// Its index in the written `items` or `clips` array, including gaps and transitions.
+    pub index: usize,
     pub name: Option<String>,
     pub markers: Vec<Value>,
     pub metadata: Option<Value>,
@@ -364,6 +366,15 @@ pub fn parse(text: &str) -> Result<Document, Error> {
 
 impl Document {
     pub fn read(root: &Value) -> Result<Document, Error> {
+        let doc = Self::read_edit(root)?;
+        if doc.duration <= Tick::ZERO {
+            return Err("tracks: the timeline has no clips, so it has no length".into());
+        }
+        Ok(doc)
+    }
+
+    /// An editor may hold an empty timeline; rendering still requires `read`.
+    pub fn read_edit(root: &Value) -> Result<Document, Error> {
         let o = object(root, "the document")?;
         only(
             o,
@@ -426,6 +437,12 @@ impl Document {
             let what = format!("tracks.{}", kind.name());
             for (n, t) in array(list, &what)?.iter().enumerate() {
                 let track = doc.track(kind, n, t)?;
+                if doc.tracks.iter().any(|t| t.id == track.id) {
+                    return Err(format!(
+                        "{}.id: another track has the id {:?}",
+                        track.at, track.id
+                    ));
+                }
                 doc.tracks.push(track);
             }
         }
@@ -438,9 +455,6 @@ impl Document {
             .flat_map(|t| t.clips.iter().map(Clip::end))
             .max()
             .unwrap_or_default();
-        if doc.duration <= Tick::ZERO {
-            return Err("tracks: the timeline has no clips, so it has no length".into());
-        }
         Ok(doc)
     }
 
@@ -940,9 +954,10 @@ impl Document {
         };
         let named = id.is_some();
         Ok(Clip {
-            id: id.unwrap_or_else(|| format!("{}.{}", track.id, i + 1)),
+            id: id.unwrap_or_else(|| format!("{}.{i}", track.id)),
             named,
             at: w.to_string(),
+            index: i,
             name: optional_text(o, "name", &format!("{w}.name"))?,
             markers: markers(o.get("markers"), &format!("{w}.markers"))?,
             metadata: o.get("metadata").cloned(),
@@ -1492,8 +1507,8 @@ mod tests {
             "audio": [{ "clips": [{ "src": "a", "start": { "clip": "c1" }, "duration": 2 }] }] }"#)
         .unwrap();
         assert_eq!(d.clip("t").unwrap().start, s("2.5"));
-        assert_eq!(d.clip("V2.2").unwrap().start, s("3.5"));
-        assert_eq!(d.clip("audio0.1").unwrap().start, s("0"));
+        assert_eq!(d.clip("V2.1").unwrap().start, s("3.5"));
+        assert_eq!(d.clip("audio0.0").unwrap().start, s("0"));
     }
 
     #[test]

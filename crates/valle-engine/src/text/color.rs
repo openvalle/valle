@@ -101,10 +101,10 @@ pub fn raster(face: &Face, id: u32, ppem: f32, foreground: [u8; 3]) -> Option<(I
     for y in low[1]..high[1] {
         pixels.extend_from_slice(&px[(y * w + low[0]) * 4..(y * w + high[0]) * 4]);
     }
-    let image = Image {
-        size: [(high[0] - low[0]) as u32, (high[1] - low[1]) as u32],
-        pixels: Arc::from(pixels),
-    };
+    let image = Image::new(
+        [(high[0] - low[0]) as u32, (high[1] - low[1]) as u32],
+        Arc::from(pixels),
+    );
     Some((
         image,
         [low[0] as f32 - origin[0], low[1] as f32 - origin[1]],

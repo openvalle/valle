@@ -116,10 +116,7 @@ fn drawn_inputs_scale_without_baking_in_letterbox() {
         rect(0.0, 0.0, 16.0, 16.0, [1.0, 0.0, 0.0, 1.0]),
         rect(16.0, 0.0, 16.0, 16.0, [0.0, 1.0, 0.0, 1.0]),
     ];
-    let image = Image {
-        size: [32, 16],
-        pixels: std::sync::Arc::from([]),
-    };
+    let image = Image::new([32, 16], std::sync::Arc::from([]));
     let items = [Item::Image {
         rect: bounds,
         radii: SQUARE,

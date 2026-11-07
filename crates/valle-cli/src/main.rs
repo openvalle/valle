@@ -86,12 +86,24 @@ options of project:
   -C <folder>                 the project there, not the one the current folder is in
 
 options of query (every one given holds):
-  --clip <id>                 the clip of that id
-  --track <id>                the clips of that track
-  --index <n>                 the nth clip of its track by start, from 1
+  --clip <id|path>            the clip by id or JSON path, e.g. tracks.visual[0].items[2]
+  --track <id|path>           the track by id or JSON path, e.g. tracks.visual[0]
+  --index <n>                 its JSON array index from 0, including gaps and transitions
   --at <seconds|timecode>     the clips on at that time, with the source timecode there
   --marker <name>             the clips that carry that marker, or that the timeline's is on
   --meta <key=value>          metadata: a dotted path from the top, or a key at any depth
+
+timeline editing conventions:
+  clip / track               an id or JSON path, as query returns in path / trackAt
+  move.index                 the destination array index from 0; out-of-range is an error
+                              transitions are removed when their original neighbors separate
+  set id                     updates all anchors that reference the clip
+  delete                     also removes adjacent transitions and clips anchored to it
+  add                        appends to a track; tracks.<kind>[n] creates a track when n
+                              equals the number of tracks of that kind (0 for the first)
+  start / head / duration    seconds, snapped to the timeline's frames
+  edits                      validate source bounds before writing; failure leaves the file
+                              unchanged. Empty timelines can be edited and queried, not rendered.
 
 options of motion:
   --props <json|@file>        values of the props controls.props declares

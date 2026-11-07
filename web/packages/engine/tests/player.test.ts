@@ -8,6 +8,7 @@ async function playback(
   check: (p: {
     player: Player;
     stats: Stats[];
+    drawn: number[];
     advance: (ms: number) => Promise<void>;
     latency: (ms: number) => void;
   }) => Promise<void>,
@@ -17,6 +18,7 @@ async function playback(
   let next = 0;
   const frames = new Map<number, FrameRequestCallback>();
   const replies: { at: number; done: () => void }[] = [];
+  const drawn: number[] = [];
   const clock = spyOn(performance, "now").mockImplementation(() => now);
   const raf = Object.getOwnPropertyDescriptor(globalThis, "requestAnimationFrame");
   const caf = Object.getOwnPropertyDescriptor(globalThis, "cancelAnimationFrame");
@@ -42,6 +44,7 @@ async function playback(
         };
       if (request.type === "sound") return null;
       if (request.type === "frame") {
+        drawn.push(request.index);
         if (latency) await new Promise<void>((done) => replies.push({ at: now + latency, done }));
         return { memory: 1024 };
       }
@@ -77,7 +80,7 @@ async function playback(
   };
   try {
     await player.start({});
-    await check({ player, stats, advance, latency: (ms) => (latency = ms) });
+    await check({ player, stats, drawn, advance, latency: (ms) => (latency = ms) });
   } finally {
     await player.close();
     clock.mockRestore();
@@ -118,6 +121,23 @@ test("slow worker frames lower FPS and report skipped frames and latency", async
     expect(sample.fps).toBeLessThanOrEqual(10);
     expect(sample.dropped).toBeGreaterThan(0);
     expect(sample.frameMs).toBeGreaterThanOrEqual(100);
+  });
+});
+
+test("a faster display submits each video frame only once while seeks still redraw", async () => {
+  await playback(async ({ player, drawn, advance }) => {
+    drawn.length = 0;
+    player.play();
+    for (let i = 0; i < 125; i++) await advance(8);
+    expect(drawn.length).toBeGreaterThanOrEqual(29);
+    expect(drawn.length).toBeLessThanOrEqual(30);
+    expect(new Set(drawn).size).toBe(drawn.length);
+    player.pause();
+    const last = drawn.at(-1)!;
+    player.seekFrame(last);
+    await advance(1);
+    expect(drawn.at(-1)).toBe(last);
+    expect(drawn.filter((n) => n === last)).toHaveLength(2);
   });
 });
 

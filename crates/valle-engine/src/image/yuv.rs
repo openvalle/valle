@@ -1,7 +1,6 @@
 //! A decoded video frame's planes into straight sRGB RGBA, as the native engine's FFmpeg converts
 //! them: by the matrix and range the file tags, its values taken as sRGB's, chroma interpolated
-//! bilinearly from the middle of the pixels it covers. The browser's own conversion to RGBA loses
-//! precision in blue.
+//! bilinearly from the middle of the pixels it covers. GPU video input uses the same convention.
 
 /// How a frame's planes hold its samples, 8 bits each: those WebCodecs decodes 8-bit 4:2:0 into.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -12,6 +11,28 @@ pub enum Format {
     I420a,
     /// A Y plane, and U and V interleaved in one of half the width and height.
     Nv12,
+}
+
+/// Layout of the packed bytes of a decoded video frame.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Layout {
+    pub format: Format,
+    pub planes: Vec<(usize, usize)>,
+    pub bt709: bool,
+    pub full: bool,
+}
+
+impl Layout {
+    pub fn planes<'a>(&'a self, size: [u32; 2], bytes: &'a [u8]) -> Planes<'a> {
+        Planes {
+            format: self.format,
+            size,
+            planes: &self.planes,
+            bytes,
+            bt709: self.bt709,
+            full: self.full,
+        }
+    }
 }
 
 /// A frame's planes in `bytes`: each one's offset and bytes a row.
@@ -26,43 +47,65 @@ pub struct Planes<'a> {
     pub full: bool,
 }
 
-/// The frame as straight RGBA, 4 bytes a pixel, rows top down.
-pub fn rgba(p: &Planes) -> Result<Vec<u8>, String> {
-    let [w, h] = p.size.map(|n| n as usize);
-    let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
-    let wanted = match p.format {
-        Format::Nv12 => 2,
-        Format::I420 => 3,
-        Format::I420a => 4,
-    };
-    if p.planes.len() != wanted {
-        return Err(format!(
-            "{:?} has {wanted} planes, not {}",
-            p.format,
-            p.planes.len()
-        ));
-    }
-    // Each plane's rows and bytes a sample, which must lie in `bytes`.
-    let shape = |i: usize| -> (usize, usize, usize) {
-        match (p.format, i) {
-            (_, 0) | (Format::I420a, 3) => (w, h, 1),
-            (Format::Nv12, _) => (cw, ch, 2),
-            _ => (cw, ch, 1),
+impl Planes<'_> {
+    /// Validate before uploading, so a corrupt frame cannot read outside its buffers.
+    pub fn validate(&self) -> Result<(), String> {
+        let p = self;
+        let [w, h] = p.size.map(|n| n as usize);
+        if w == 0 || h == 0 {
+            return Err("a video frame has nonzero dimensions".into());
         }
-    };
-    for (i, &(offset, stride)) in p.planes.iter().enumerate() {
-        let (width, rows, step) = shape(i);
-        let end = offset + stride * (rows - 1) + width * step;
-        if stride < width * step || end > p.bytes.len() {
+        let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+        let wanted = match p.format {
+            Format::Nv12 => 2,
+            Format::I420 => 3,
+            Format::I420a => 4,
+        };
+        if p.planes.len() != wanted {
             return Err(format!(
-                "plane {i} does not fit its {} bytes",
-                p.bytes.len()
+                "{:?} has {wanted} planes, not {}",
+                p.format,
+                p.planes.len()
             ));
         }
+        // Each plane's rows and bytes a sample, which must lie in `bytes`.
+        let shape = |i: usize| -> (usize, usize, usize) {
+            match (p.format, i) {
+                (_, 0) | (Format::I420a, 3) => (w, h, 1),
+                (Format::Nv12, _) => (cw, ch, 2),
+                _ => (cw, ch, 1),
+            }
+        };
+        for (i, &(offset, stride)) in p.planes.iter().enumerate() {
+            let (width, rows, step) = shape(i);
+            let end = stride
+                .checked_mul(rows - 1)
+                .and_then(|n| n.checked_add(width * step))
+                .and_then(|n| offset.checked_add(n));
+            if stride < width * step || end.is_none_or(|end| end > p.bytes.len()) {
+                return Err(format!(
+                    "plane {i} does not fit its {} bytes",
+                    p.bytes.len()
+                ));
+            }
+        }
+        Ok(())
     }
+}
+
+/// The frame as straight RGBA, 4 bytes a pixel, rows top down.
+pub fn rgba(p: &Planes) -> Result<Vec<u8>, String> {
+    p.validate()?;
+    let [w, h] = p.size.map(|n| n as usize);
+    let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
     let sample = |i: usize, x: usize, y: usize, at: usize| {
         let (offset, stride) = p.planes[i];
-        p.bytes[offset + y * stride + x * shape(i).2 + at]
+        let step = if p.format == Format::Nv12 && i == 1 {
+            2
+        } else {
+            1
+        };
+        p.bytes[offset + y * stride + x * step + at]
     };
     // Y' = (Y − y0) × ys, C' = (C − 128) × cs.
     let (y0, ys, cs) = match p.full {

@@ -15,6 +15,8 @@ use zune_jpeg::zune_core::options::DecoderOptions;
 use crate::layout::Natural;
 use crate::svg::file::{self, Document};
 
+pub mod yuv;
+
 /// What a resource shows: one of the scene's images, by its index there, an SVG file, or nothing.
 #[derive(Debug)]
 pub enum Picture {
@@ -54,15 +56,57 @@ impl Picture {
     }
 }
 
-/// An image: 4 bytes a pixel, red, green, blue and alpha, rows top down; none for a picture a
-/// box draws, which the GPU draws each frame.
+/// An image's pixels: RGBA, or decoded YUV planes converted when uploaded to the GPU.
+/// Empty RGBA stands for a picture a box draws each frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Image {
     pub size: [u32; 2],
     pub pixels: Arc<[u8]>,
+    pub(crate) yuv: Option<yuv::Layout>,
 }
 
 impl Image {
+    /// RGBA bytes, rows top down; an empty buffer is a picture drawn by the scene.
+    pub fn new(size: [u32; 2], pixels: Arc<[u8]>) -> Self {
+        Self {
+            size,
+            pixels,
+            yuv: None,
+        }
+    }
+
+    /// Keep a decoded video's planes in their original format until the renderer needs them.
+    pub fn from_yuv(
+        size: [u32; 2],
+        pixels: impl Into<Arc<[u8]>>,
+        layout: yuv::Layout,
+    ) -> Result<Self, String> {
+        let pixels = pixels.into();
+        layout.planes(size, &pixels).validate()?;
+        Ok(Self {
+            size,
+            pixels,
+            yuv: Some(layout),
+        })
+    }
+
+    pub(crate) fn same(&self, other: &Self) -> bool {
+        self.size == other.size && self.yuv == other.yuv && Arc::ptr_eq(&self.pixels, &other.pixels)
+    }
+
+    /// CPU fallback for callers that need RGBA, including images larger than the device limit.
+    pub fn to_rgba(&self) -> Self {
+        match &self.yuv {
+            None => self.clone(),
+            Some(layout) => Self::new(
+                self.size,
+                yuv::rgba(&layout.planes(self.size, &self.pixels))
+                    .expect("validated YUV")
+                    .into(),
+            ),
+        }
+    }
+
     /// What stands for the `k`th picture the Timeline gives a scene, when it shows alone: a ramp
     /// from corner to corner, blue for the first, orange for the second, with a check of light
     /// squares over it, 8 across, so that moving it shows.
@@ -85,10 +129,7 @@ impl Image {
                 pixels.push(255);
             }
         }
-        Image {
-            size: [w, h],
-            pixels: pixels.into(),
-        }
+        Image::new([w, h], pixels.into())
     }
 
     /// The image a PNG, JPEG or WebP file holds, by the bytes the file starts with, its colors
@@ -121,7 +162,10 @@ impl Image {
         levels
     }
 
-    fn halved(&self) -> Image {
+    pub(crate) fn halved(&self) -> Image {
+        if self.yuv.is_some() {
+            return self.to_rgba().halved();
+        }
         let [w, h] = self.size.map(|n| n as usize);
         let size = self.size.map(|n| (n / 2).max(1));
         // Each axis's taps from the first under a pixel, and their weights.
@@ -150,10 +194,7 @@ impl Image {
                 pixels.extend(sum.map(|s| ((s + total / 2) / total) as u8));
             }
         }
-        Image {
-            size,
-            pixels: pixels.into(),
-        }
+        Image::new(size, pixels.into())
     }
 }
 
@@ -231,10 +272,7 @@ fn premultiplied<'a>(
             pixels.push(a);
         }
     }
-    Image {
-        size,
-        pixels: pixels.into(),
-    }
+    Image::new(size, pixels.into())
 }
 
 /// `c` times `a`, both of 255, rounded.
@@ -249,21 +287,18 @@ mod tests {
     #[test]
     fn mipmaps_halve_down_to_a_px() {
         // 3 × 2: the 3 across weighted 1, 2, 1, the 2 down evenly.
-        let image = Image {
-            size: [3, 2],
-            pixels: [[0, 0, 0, 0], [40, 0, 0, 0], [80, 0, 0, 0]]
+        let image = Image::new(
+            [3, 2],
+            [[0, 0, 0, 0], [40, 0, 0, 0], [80, 0, 0, 0]]
                 .repeat(2)
                 .concat()
                 .into(),
-        };
+        );
         let levels = image.mipmap();
         let sizes: Vec<_> = levels.iter().map(|l| l.size).collect();
         assert_eq!(sizes, [[1, 1]]);
         assert_eq!(levels[0].pixels[..], [40, 0, 0, 0]);
-        let wide = Image {
-            size: [8, 1],
-            pixels: [255, 0, 0, 255].repeat(8).into(),
-        };
+        let wide = Image::new([8, 1], [255, 0, 0, 255].repeat(8).into());
         let sizes: Vec<_> = wide.mipmap().iter().map(|l| l.size).collect();
         assert_eq!(sizes, [[4, 1], [2, 1], [1, 1]]);
     }

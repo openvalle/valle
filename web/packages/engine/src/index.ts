@@ -224,7 +224,8 @@ export class Player {
       // Frames the clock went past without asking for them.
       this.#stats.dropped += Math.max(0, index - this.#reached - 1);
       this.#reached = Math.max(this.#reached, index);
-      this.#show(index);
+      // The canvas retains the frame. A faster display need not redraw the same video frame.
+      if (index !== this.#frame) this.#show(index);
       if (performance.now() - this.#said >= 1000) {
         this.#say();
       }

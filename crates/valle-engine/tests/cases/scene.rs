@@ -151,10 +151,7 @@ impl Video for Decoded {
     }
 
     fn frame(&mut self, at: Tick) -> Result<Image, String> {
-        Ok(Image {
-            size: self.0.size(),
-            pixels: self.0.frame(at.0)?.into(),
-        })
+        Ok(Image::new(self.0.size(), self.0.frame(at.0)?.into()))
     }
 }
 

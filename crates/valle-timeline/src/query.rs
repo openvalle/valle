@@ -12,7 +12,7 @@ use crate::{Clip, Content, Document, Error, SourceTime, Track, timecode};
 pub struct Filter {
     pub clip: Option<String>,
     pub track: Option<String>,
-    /// Place among its track's clips by start, from 1.
+    /// Position in the written items/clips array, from 0; gaps and transitions count too.
     pub index: Option<usize>,
     /// Seconds from the start, or a program timecode.
     pub at: Option<String>,
@@ -55,11 +55,17 @@ pub fn query(text: &str, doc: &Document, filter: &Filter) -> Result<Value, Error
     };
     let mut out = Vec::new();
     for track in &doc.tracks {
-        for (i, clip) in track.clips.iter().enumerate() {
+        for clip in &track.clips {
             let on = |t: Tick| t >= clip.start && t < clip.end();
-            let keep = filter.clip.as_ref().is_none_or(|id| *id == clip.id)
-                && filter.track.as_ref().is_none_or(|t| *t == track.id)
-                && filter.index.is_none_or(|n| n == i + 1)
+            let keep = filter
+                .clip
+                .as_ref()
+                .is_none_or(|id| *id == clip.id || *id == clip.at)
+                && filter
+                    .track
+                    .as_ref()
+                    .is_none_or(|t| *t == track.id || *t == track.at)
+                && filter.index.is_none_or(|n| n == clip.index)
                 && at.is_none_or(on)
                 && filter.marker.as_ref().is_none_or(|name| {
                     (clip.markers.iter()).any(|m| m["name"].as_str() == Some(name))
@@ -69,7 +75,7 @@ pub fn query(text: &str, doc: &Document, filter: &Filter) -> Result<Value, Error
                 && (filter.meta.iter())
                     .all(|(k, v)| (clip.metadata.as_ref()).is_some_and(|m| meta_has(m, k, v)));
             if keep {
-                let mut info = found(doc, track, i, clip, at, &program)?;
+                let mut info = found(doc, track, clip, at, &program)?;
                 if let Some(line) = line(text, &clip.at) {
                     info["line"] = json!(line);
                 }
@@ -87,7 +93,6 @@ pub fn query(text: &str, doc: &Document, filter: &Filter) -> Result<Value, Error
 fn found(
     doc: &Document,
     track: &Track,
-    i: usize,
     clip: &Clip,
     at: Option<Tick>,
     program: &dyn Fn(Tick) -> String,
@@ -95,7 +100,9 @@ fn found(
     let mut info = json!({
         "id": clip.id,
         "track": track.id,
-        "index": i + 1,
+        "trackAt": track.at,
+        "path": clip.at,
+        "index": clip.index,
         "start": clip.start.seconds_text().parse::<f64>().unwrap_or_default(),
         "end": clip.end().seconds_text().parse::<f64>().unwrap_or_default(),
         "program": [program(clip.start), program(clip.end())],
@@ -357,7 +364,9 @@ mod tests {
         assert_eq!(r["count"], 1);
         let c = &r["clips"][0];
         assert_eq!(c["track"], "V1");
-        assert_eq!(c["index"], 2);
+        assert_eq!(c["index"], 1);
+        assert_eq!(c["path"], "tracks.visual[0].items[1]");
+        assert_eq!(c["trackAt"], "tracks.visual[0]");
         assert_eq!(c["line"], 12);
         assert_eq!(c["program"], json!(["01:00:02:00", "01:00:04:00"]));
         assert_eq!(c["source"], json!(["10:00:04:00", "10:00:06:00"]));
@@ -400,12 +409,12 @@ mod tests {
         assert_eq!(ids(ask(meta("take", "3"))), ["c1"]);
         assert_eq!(ids(ask(meta("scene.take", "3"))), ["c1"]);
         assert!(ids(ask(meta("take", "4"))).is_empty());
-        let second = Filter {
+        let first = Filter {
             track: Some("V1".into()),
-            index: Some(1),
+            index: Some(0),
             ..Filter::default()
         };
-        assert_eq!(ids(ask(second)), ["c1"]);
+        assert_eq!(ids(ask(first)), ["c1"]);
     }
 
     #[test]
@@ -414,5 +423,42 @@ mod tests {
         let map = SourceTime::Map(vec![(s("0"), s("1")), (s("2"), s("5"))]);
         assert_eq!(source_at(&map, s("1")), s("3"));
         assert_eq!(source_at(&map, s("3")), s("5"));
+    }
+
+    #[test]
+    fn paths_and_indices_address_the_written_arrays_not_time_sorted_clips() {
+        let text = r#"{"canvas":{"width":64,"height":36,"fps":30},"tracks":{"visual":[
+          {"id":"sequence","items":[
+            {"id":"a","kind":"solid","color":"red","duration":1},
+            {"gap":1},
+            {"id":"b","kind":"solid","color":"blue","duration":1}
+          ]},
+          {"id":"overlay","clips":[
+            {"id":"late","kind":"solid","color":"red","start":4,"duration":1},
+            {"id":"early","kind":"solid","color":"blue","start":0,"duration":1}
+          ]}
+        ]}}"#;
+        let doc = crate::parse(text).unwrap();
+        for track in ["sequence", "tracks.visual[0]"] {
+            let filter = Filter {
+                track: Some(track.into()),
+                index: Some(2),
+                ..Filter::default()
+            };
+            let result = query(text, &doc, &filter).unwrap();
+            assert_eq!(result["clips"][0]["id"], "b");
+            assert_eq!(result["clips"][0]["index"], 2);
+        }
+        for clip in ["late", "tracks.visual[1].clips[0]"] {
+            let filter = Filter {
+                clip: Some(clip.into()),
+                index: Some(0),
+                ..Filter::default()
+            };
+            assert_eq!(
+                query(text, &doc, &filter).unwrap()["clips"][0]["id"],
+                "late"
+            );
+        }
     }
 }

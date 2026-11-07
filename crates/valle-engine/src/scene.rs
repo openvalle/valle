@@ -169,10 +169,7 @@ impl Scene {
         }
         // Then those its boxes draw, frame by frame: empty until the GPU draws them.
         for _ in &front.drawn {
-            images.push(Image {
-                size: [c.width, c.height],
-                pixels: Arc::from([]),
-            });
+            images.push(Image::new([c.width, c.height], Arc::from([])));
             pictures.push(Picture::Image {
                 image: (images.len() - 1) as u32,
                 size: [c.width, c.height],

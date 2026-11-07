@@ -43,10 +43,7 @@ impl Scene {
             .ok_or_else(|| format!("the scene declares no video resource {name}"))?;
         let size = video.size();
         let pixels = vec![0; size[0] as usize * size[1] as usize * 4];
-        self.images.push(Image {
-            size,
-            pixels: pixels.into(),
-        });
+        self.images.push(Image::new(size, pixels.into()));
         let image = self.images.len() - 1;
         self.pictures[slot] = Picture::Image {
             image: image as u32,
@@ -69,7 +66,17 @@ impl Scene {
         styles: &[Style],
     ) -> Result<(), Error> {
         let mut asked: Vec<Option<Tick>> = vec![None; self.videos.len()];
+        // `display: none` removes a whole subtree, including a timeline clip outside its span.
+        // A child's computed display alone does not say whether its ancestors are shown.
+        let mut hidden = vec![false; template.nodes.len()];
         for (i, node) in template.nodes.iter().enumerate() {
+            hidden[i] |= styles[i].layout.display == taffy::Display::None;
+            if hidden[i] {
+                for &child in &node.children {
+                    hidden[child as usize] = true;
+                }
+                continue;
+            }
             let Kind::Image {
                 resource,
                 video: Some(time),
@@ -78,7 +85,7 @@ impl Scene {
                 continue;
             };
             let s = &styles[i];
-            if s.layout.display == taffy::Display::None || !s.visible {
+            if !s.visible {
                 continue;
             }
             let r = *resource as usize;
@@ -168,6 +175,50 @@ mod tests {
     }
 
     #[test]
+    fn hidden_ancestors_do_not_decode_video_but_visible_descendants_can() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        struct Count(Rc<RefCell<Vec<Tick>>>);
+        impl Video for Count {
+            fn size(&self) -> [u32; 2] {
+                [2, 2]
+            }
+            fn frame(&mut self, at: Tick) -> Result<Image, String> {
+                self.0.borrow_mut().push(at);
+                Ok(Image::new([2, 2], vec![255; 16].into()))
+            }
+        }
+        big_stack(|| {
+            let mut scene = load(indoc! {"
+                export const composition = { width: 32, height: 32, fps: 30, duration: 2 };
+                export const controls = { resources: { clip: resource({kind:'video', default:'./clip.mp4'}) } };
+                export default function Scene() {
+                  const {seconds} = useCurrentTime();
+                  return <View style={{display: seconds < 1 ? 'none' : 'flex'}}>
+                    <View style={{visibility:'hidden'}}>
+                      <Video src='resource://clip' style={{visibility:'visible', width:32, height:32}} />
+                    </View>
+                  </View>;
+                }
+            "}).unwrap();
+            let calls = Rc::new(RefCell::new(Vec::new()));
+            scene
+                .set_video("clip", Box::new(Count(calls.clone())))
+                .unwrap();
+            scene.frame(Tick::ZERO).unwrap();
+            assert!(calls.borrow().is_empty());
+            let later = Tick::from_seconds(1.0).unwrap();
+            scene.frame(later).unwrap();
+            assert_eq!(&*calls.borrow(), &[later]);
+            scene.frame(Tick::ZERO).unwrap();
+            assert_eq!(calls.borrow().len(), 1);
+            scene.frame(later).unwrap();
+            assert_eq!(calls.borrow().len(), 1);
+        });
+    }
+
+    #[test]
     fn changing_a_video_sources_natural_size_invalidates_layout() {
         struct Solid([u32; 2]);
         impl Video for Solid {
@@ -175,10 +226,10 @@ mod tests {
                 self.0
             }
             fn frame(&mut self, _: Tick) -> Result<Image, String> {
-                Ok(Image {
-                    size: self.0,
-                    pixels: vec![255; (self.0[0] * self.0[1] * 4) as usize].into(),
-                })
+                Ok(Image::new(
+                    self.0,
+                    vec![255; (self.0[0] * self.0[1] * 4) as usize].into(),
+                ))
             }
         }
         big_stack(|| {

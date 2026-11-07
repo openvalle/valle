@@ -10,11 +10,13 @@ publish.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-# Only the browser's build has anything: the SDK's engine, which `cargo xtask build` makes.
+[dependencies]
+valle-engine = { path = "../valle-engine" }
+
+# The SDK's browser bindings, built by `cargo xtask build-web`.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
 serde_json.workspace = true
-valle-engine = { path = "../valle-engine" }
 valle-timeline = { path = "../valle-timeline" }
 # The CLI that makes the module's JavaScript must be this version, as `cargo xtask build` checks.
 wasm-bindgen = "=0.2.128"

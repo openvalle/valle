@@ -74,6 +74,41 @@ export default function Scene() {
 }`,
   );
   await Bun.write(join(project, "notes.md"), "Notes for this project.");
+  await Bun.write(
+    join(project, "empty.timeline.json"),
+    JSON.stringify({ canvas: CUT.canvas, tracks: {} }),
+  );
+  const linked = join(project, "linked.timeline.json");
+  await Bun.write(
+    linked,
+    JSON.stringify({
+      canvas: CUT.canvas,
+      tracks: {
+        visual: [
+          {
+            items: [
+              CUT.tracks.visual[0].items[0],
+              { transition: "fade", inOffset: 0.1, outOffset: 0.1 },
+              CUT.tracks.visual[0].items[1],
+            ],
+          },
+        ],
+        caption: [
+          { clips: [{ id: "title", text: "Title", start: { clip: "b" }, duration: 0.5 }] },
+          {
+            clips: [
+              {
+                id: "detail",
+                text: "Detail",
+                start: { clip: "title", offset: 0.5 },
+                duration: 0.5,
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  );
   run(["timeline", "render", cut, "--frame", "20", "-o", join(dir, "native.png")]);
 
   const service = Bun.spawn([valle, "project", "studio", project, "--port", "0", "--events"], {
@@ -249,7 +284,7 @@ export default function Scene() {
       await page.locator(`button.file[title="${path}"]`).click();
       await until(`preview ${path}`, () =>
         evaluate(
-          `return studio.player?.info.width === ${width} && !studio.shadowRoot.querySelector(".error");`,
+          `return studio.player?.info.width === ${width} && !studio.shadowRoot.querySelector(".error") && !studio.shadowRoot.textContent.includes("Updating preview");`,
         ),
       );
     };
@@ -298,7 +333,9 @@ export default function Scene() {
         studio.shadowRoot.querySelector('button.file[title="' + path + '"]').click();
       }`);
     await until("the last selection", () =>
-      evaluate("return studio.player?.info.width === 160 && !studio.timeline;"),
+      evaluate(
+        "return studio.player?.info.width === 160 && !studio.timeline && !studio.shadowRoot.textContent.includes('Updating preview');",
+      ),
     );
     expect(
       await evaluate("return studio.player.currentFrame === 0;"),
@@ -310,7 +347,28 @@ export default function Scene() {
     await evaluate("await studio.undo();");
     expect((await evaluate("return studio.drafts;")).length === 0, "undone, nothing is changed");
     await evaluate("await studio.redo();");
+    await page.locator('.clip[data-at="tracks.visual[0].items[1]"]').click();
     await evaluate(`await studio.edit({ op: "move", clip: "b", index: 0 });`);
+    expect(
+      (await page.getByRole("textbox", { name: "Clip name" }).getAttribute("placeholder")) === "b",
+      "reordering keeps the moved clip selected",
+    );
+    await evaluate(
+      `await studio.edit({ op: "set", clip: "b", field: "name", value: "Moved clip" });`,
+    );
+    await openFile("other.motion.tsx", 160);
+    await page.getByRole("button", { name: "Undo", exact: true }).click();
+    await until("undo navigates to the affected file", () =>
+      evaluate(
+        'return studio.timeline && studio.player?.info.width === 320 && studio.shadowRoot.textContent.includes("Undid edit in cut.timeline.json");',
+      ),
+    );
+    expect(
+      await evaluate(
+        'return !JSON.parse(studio.text("cut.timeline.json")).tracks.visual[0].items[0].name;',
+      ),
+      "cross-file undo restores the clip and shows its timeline",
+    );
     const first = await evaluate("return studio.layout.tracks[0].clips[0].id;");
     expect(first === "b", `the sequence starts with ${first}`);
 
@@ -449,6 +507,145 @@ export default function Scene() {
       "a replacement approved by the system dialog needs no second confirmation",
     );
     savePath = undefined;
+    await page.getByRole("button", { name: "Close export" }).click();
+    await Bun.write(join(project, "source.mp4"), Bun.file(join(project, "renders/cut.mp4")));
+    await page.getByRole("tab", { name: "Files", exact: true }).click();
+    await page.locator('button.file[title="empty.timeline.json"]').click();
+    await until("empty timeline", () =>
+      evaluate("return studio.timeline && studio.layout?.duration === 0 && !studio.player;"),
+    );
+    expect(
+      await page.getByRole("button", { name: "Export", exact: true }).isDisabled(),
+      "an empty timeline cannot export",
+    );
+    await page.getByRole("tab", { name: "Media", exact: true }).click();
+    await page.locator('button.asset[title="source.mp4"]').click();
+    await page.getByRole("button", { name: "Add to timeline", exact: true }).click();
+    await until("first media preview", () =>
+      evaluate(
+        "return studio.player?.info.duration === 2 && studio.layout?.tracks[0].clips.length === 1 && !studio.shadowRoot.textContent.includes('Updating preview');",
+      ),
+    );
+    expect(
+      await evaluate(
+        'return JSON.parse(studio.text("empty.timeline.json")).resources.source === "source.mp4";',
+      ),
+      "adding media creates the first track and resource binding",
+    );
+    await evaluate(
+      'window.lastValid = studio.player; window.lastText = studio.text("empty.timeline.json"); await studio.edit({op:"trim",clip:"source",duration:20});',
+    );
+    expect(
+      await evaluate(
+        'return studio.player === window.lastValid && studio.text("empty.timeline.json") === window.lastText && studio.shadowRoot.textContent.includes("Edit not applied");',
+      ),
+      "an overlong trim keeps the valid document and preview",
+    );
+    await evaluate('await studio.edit({op:"delete",clip:"source"});');
+    expect(
+      await evaluate("return studio.layout.duration === 0 && !studio.player;"),
+      "deleting the last clip leaves an editable empty timeline",
+    );
+    await evaluate("await studio.undo();");
+    expect(
+      await evaluate("return studio.player.info.duration === 2;"),
+      "undo restores the last deleted clip",
+    );
+    await evaluate(
+      'await Promise.all([studio.edit({op:"set",clip:"source",field:"name",value:"Queued edit"}), studio.edit({op:"trim",clip:"source",duration:1})]);',
+    );
+    expect(
+      await evaluate(
+        'const c=JSON.parse(studio.text("empty.timeline.json")).tracks.visual[0].items[0]; return c.name === "Queued edit" && c.duration === 1;',
+      ),
+      "concurrent edits are applied in order without losing either change",
+    );
+    // Navigation waits for an edit's media validation instead of cancelling it halfway.
+    await page.getByRole("tab", { name: "Files", exact: true }).click();
+    await evaluate(
+      'window.pendingEdit = studio.edit({op:"set",clip:"source",field:"name",value:"Before navigation"});',
+    );
+    await openFile("other.motion.tsx", 160);
+    await evaluate("await window.pendingEdit;");
+    expect(
+      await evaluate(
+        'return !studio.timeline && JSON.parse(studio.text("empty.timeline.json")).tracks.visual[0].items[0].name === "Before navigation";',
+      ),
+      "switching files during an edit keeps the edit and selected file",
+    );
+    // Rename through the inspector, then delete through the timeline: both update relations
+    // as one undoable edit, and the saved JSON is usable by the native CLI too.
+    await openFile("linked.timeline.json", 320);
+    await page.locator('.clip[data-at="tracks.visual[0].items[2]"]').click();
+    await page.getByText("Advanced · clip JSON", { exact: true }).click();
+    const clipJson = page.getByRole("textbox", { name: "Clip JSON", exact: true });
+    const renamed = JSON.parse(await clipJson.inputValue());
+    renamed.id = "hero";
+    await clipJson.fill(JSON.stringify(renamed));
+    await clipJson.press("Tab");
+    await until("renamed clip and preview", () =>
+      evaluate(
+        'return studio.layout.tracks[0].clips[1].id === "hero" && !studio.shadowRoot.textContent.includes("Updating preview");',
+      ),
+    );
+    expect(
+      (await page.getByRole("textbox", { name: "Clip name" }).getAttribute("placeholder")) ===
+        "hero",
+      "changing an id through Advanced JSON keeps the clip selected",
+    );
+    expect(
+      await evaluate(
+        'const d=JSON.parse(studio.text("linked.timeline.json")); return d.tracks.caption[0].clips[0].start.clip === "hero" && d.tracks.caption[1].clips[0].start.clip === "title";',
+      ),
+      "renaming updates the direct anchor and keeps the dependent chain",
+    );
+    await evaluate("await studio.save();");
+    expect(
+      JSON.parse(await Bun.file(linked).text()).tracks.caption[0].clips[0].start.clip === "hero",
+      "saving persists the renamed anchor",
+    );
+    await evaluate(
+      'window.linkedText = studio.text("linked.timeline.json"); window.linkedPlayer = studio.player; await studio.edit({op:"set",clip:"hero",field:"id",value:"a"});',
+    );
+    expect(
+      await evaluate(
+        'return studio.text("linked.timeline.json") === window.linkedText && studio.player === window.linkedPlayer;',
+      ),
+      "a duplicate id keeps the document and player unchanged",
+    );
+    await page.locator('.clip[data-at="tracks.visual[0].items[2]"]').click();
+    await page.keyboard.press("Delete");
+    await until("linked deletion", () =>
+      evaluate(
+        'return studio.layout.tracks.flatMap(t=>t.clips).length === 1 && !studio.shadowRoot.textContent.includes("Updating preview");',
+      ),
+    );
+    expect(
+      await evaluate(
+        'const d=JSON.parse(studio.text("linked.timeline.json")); return d.tracks.visual[0].items.length === 1 && d.tracks.caption.every(t=>t.clips.length === 0);',
+      ),
+      "deleting a clip removes its transition and recursively anchored captions",
+    );
+    expect(
+      (await page.getByRole("textbox", { name: "Clip name" }).count()) === 0,
+      "deleting clears the removed selection",
+    );
+    await evaluate("await studio.undo();");
+    expect(
+      await evaluate(
+        'return studio.text("linked.timeline.json") === window.linkedText && studio.player.info.duration === 2;',
+      ),
+      "one undo restores the clip, transition and all anchored captions",
+    );
+    await evaluate("await studio.redo(); await studio.save();");
+    expect(
+      JSON.parse(await Bun.file(linked).text()).tracks.visual[0].items.length === 1,
+      "redo and save persist the whole linked deletion",
+    );
+    expect(
+      JSON.parse(run(["timeline", "check", linked, "--json"])).status === "ok",
+      "the saved linked edit passes native timeline check",
+    );
     // Standalone Studio does not have the renders/ directory created with a project.
     for (const kind of ["motion", "timeline"] as const) {
       const folder = join(dir, kind);

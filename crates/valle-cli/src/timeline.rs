@@ -16,24 +16,41 @@ use crate::Failure;
 use crate::args::Args;
 
 /// The document at `args.file`: its path, text, and what it parses to.
-fn document(args: &Args) -> Result<(String, String, valle_timeline::Document), Failure> {
+fn document(
+    args: &Args,
+    allow_empty: bool,
+) -> Result<(String, String, valle_timeline::Document), Failure> {
     let path = args.file.replace('\\', "/");
     let text = std::fs::read_to_string(&path)
         .map_err(|e| Failure::new("timeline", format!("{path}: {e}")))?;
-    let doc = valle_timeline::parse(&text)
+    let root = serde_json::from_str(&text)
         .map_err(|e| Failure::new("timeline", format!("{path}: {e}")))?;
+    let doc = match allow_empty {
+        true => valle_timeline::Document::read_edit(&root),
+        false => valle_timeline::Document::read(&root),
+    }
+    .map_err(|e| Failure::new("timeline", format!("{path}: {e}")))?;
     Ok((path, text, doc))
 }
 
 /// The document edited by `--op`, as Studio edits it, and written back whole or not at all.
 pub fn edit(args: &Args) -> Result<Value, Failure> {
-    let (path, text, _) = document(args)?;
+    let path = args.file.replace('\\', "/");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| Failure::new("timeline", format!("{path}: {e}")))?;
     let op = args
         .option("op")
         .ok_or_else(|| Failure::new("usage", "edit needs --op <json|@file>"))?;
     let op = crate::args::json(op, "--op")?;
     let edited = valle_timeline::edit::apply(&text, &op)
         .map_err(|e| Failure::new("timeline", format!("{path}: {e}")))?;
+    let root =
+        serde_json::from_str(&edited).map_err(|e| Failure::new("timeline", e.to_string()))?;
+    let doc =
+        valle_timeline::Document::read_edit(&root).map_err(|e| Failure::new("timeline", e))?;
+    if doc.duration > Tick::ZERO {
+        lower_document(&path, &doc)?;
+    }
     valle_project::write(Path::new(&path), edited.as_bytes(), true)
         .map_err(|e| Failure::new("timeline", e))?;
     Ok(json!({ "status": "ok", "summary": format!("edited {path}"), "file": path }))
@@ -41,7 +58,7 @@ pub fn edit(args: &Args) -> Result<Value, Failure> {
 
 /// The clips the options pick: `--clip`, `--track`, `--index`, `--at`, `--marker`, `--meta`.
 pub fn query(args: &Args) -> Result<Value, Failure> {
-    let (path, text, doc) = document(args)?;
+    let (path, text, doc) = document(args, true)?;
     let mut filter = Filter::default();
     for (k, v) in &args.options {
         let v = v.clone();
@@ -49,8 +66,11 @@ pub fn query(args: &Args) -> Result<Value, Failure> {
             "clip" => filter.clip = Some(v),
             "track" => filter.track = Some(v),
             "index" => {
-                filter.index = Some(v.parse().ok().filter(|n| *n > 0).ok_or_else(|| {
-                    Failure::new("usage", format!("--index is a place from 1, not {v}"))
+                filter.index = Some(v.parse().map_err(|_| {
+                    Failure::new(
+                        "usage",
+                        format!("--index is a JSON array position from 0, not {v}"),
+                    )
                 })?)
             }
             "at" => filter.at = Some(v),
@@ -100,7 +120,7 @@ pub fn query(args: &Args) -> Result<Value, Failure> {
 
 /// The mixer of the document's sound, its files decoded.
 pub fn mixer(args: &Args) -> Result<Mixer, Failure> {
-    let (path, _, doc) = document(args)?;
+    let (path, _, doc) = document(args, false)?;
     let read = |p: &str| std::fs::read_to_string(p).ok();
     let sound = |p: &str| media::sound(Path::new(p));
     let host = mix::Host {
@@ -122,13 +142,17 @@ pub fn lower(args: &Args) -> Result<Lowered, Failure> {
         )
         .hint("--props, --data, --resource, --input and --caption are for valle motion"));
     }
-    let (path, _, doc) = document(args)?;
+    let (path, _, doc) = document(args, false)?;
+    lower_document(&path, &doc)
+}
+
+/// Probe source bounds before accepting an edit, using the same rules as check and render.
+fn lower_document(path: &str, doc: &valle_timeline::Document) -> Result<Lowered, Failure> {
     let read = |p: &str| std::fs::read_to_string(p).ok();
     let length = |p: &str| media::length(Path::new(p)).ok().map(Tick);
     let host = Host {
         read: &read,
         length: &length,
     };
-    timeline::lower(&path, &doc, &host)
-        .map_err(|e| Failure::new("timeline", format!("{path}: {e}")))
+    timeline::lower(path, doc, &host).map_err(|e| Failure::new("timeline", format!("{path}: {e}")))
 }

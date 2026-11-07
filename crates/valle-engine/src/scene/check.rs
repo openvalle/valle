@@ -311,10 +311,10 @@ mod tests {
                     return Err("broken video frame".into());
                 }
                 let size = if t >= at("1") { [3, 2] } else { [2, 2] };
-                Ok(Image {
+                Ok(Image::new(
                     size,
-                    pixels: vec![255; (size[0] * size[1] * 4) as usize].into(),
-                })
+                    vec![255; (size[0] * size[1] * 4) as usize].into(),
+                ))
             }
         }
         run(|| {

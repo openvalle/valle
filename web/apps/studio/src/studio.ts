@@ -6,6 +6,7 @@
 import { html, LitElement, nothing } from "lit";
 import { styles } from "./styles.ts";
 import { icon } from "./icons.ts";
+import { addMedia, find, selection } from "./edit.ts";
 import { createPlayer, type Player, type Stats } from "../../../packages/engine/src/index.ts";
 
 import {
@@ -50,6 +51,8 @@ export class ValleStudio extends LitElement {
   #selected: string | undefined;
   #undo: Step[] = [];
   #redo: Step[] = [];
+  /** Finish or reject a media edit before navigation or another mutation. */
+  #editing: Promise<void> | undefined;
   #status = "";
   #time = 0;
   #shownFrame = 0;
@@ -107,10 +110,11 @@ export class ValleStudio extends LitElement {
 
   /** Opens `entry`: its text, the folder's files, and a player of it. */
   async #load(entry: string): Promise<void> {
+    if (this.#editing) await this.#editing;
     const opening = ++this.#opening;
     const changed = entry !== this.#entry;
     const playing = this.player?.playing ?? false;
-    const time = changed ? 0 : (this.player?.currentTime ?? 0);
+    const time = changed ? 0 : this.#busy ? this.#time : (this.player?.currentTime ?? 0);
     clearTimeout(this.#reload);
     this.player?.pause();
     if (changed) {
@@ -170,7 +174,7 @@ export class ValleStudio extends LitElement {
   async #play(
     time = this.player?.currentTime ?? this.#time,
     playing = this.player?.playing ?? false,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const opening = ++this.#opening;
     this.#scrub = undefined;
     this.#busy = true;
@@ -179,21 +183,30 @@ export class ValleStudio extends LitElement {
     const entry = this.#entry;
     const loop = this.player?.loop ?? false;
     const muted = this.player?.muted ?? false;
-    await this.player?.close();
-    if (opening !== this.#opening) return;
-    this.player = undefined;
+    const previous = this.player;
+    previous?.pause();
+    if (opening !== this.#opening) return false;
     this.#stats = undefined;
     const canvas = document.createElement("canvas");
     const stage = this.renderRoot.querySelector(".canvas");
-    stage?.replaceChildren(canvas);
+
     const files: Record<string, Blob> = {};
     for (const [path, text] of this.#drafts) {
       files[path] = new Blob([text]);
     }
     try {
       const layout = this.timeline ? (await service.edit(this.text(entry))).layout : undefined;
-      if (opening !== this.#opening) return;
+      if (opening !== this.#opening) return false;
       this.layout = layout;
+      if (layout?.duration === 0) {
+        this.player = undefined;
+        await previous?.close();
+        stage?.replaceChildren();
+        this.#error = "";
+        this.#busy = false;
+        this.requestUpdate();
+        return true;
+      }
       const player = await createPlayer({
         canvas,
         runtime: "/valle/",
@@ -208,9 +221,11 @@ export class ValleStudio extends LitElement {
       });
       if (opening !== this.#opening) {
         await player.close();
-        return;
+        return false;
       }
       this.player = player;
+      stage?.replaceChildren(canvas);
+      await previous?.close();
       this.#shownFrame = player.currentFrame;
       this.#error = "";
       player.on("time", ({ time, frame }) => {
@@ -247,6 +262,7 @@ export class ValleStudio extends LitElement {
     }
     if (opening === this.#opening) this.#busy = false;
     this.requestUpdate();
+    return opening === this.#opening && !this.#error;
   }
 
   /** Plays the drafts once typing stops. */
@@ -257,20 +273,48 @@ export class ValleStudio extends LitElement {
 
   /** Does `op` to the timeline open: a draft of it, which can be undone. */
   async edit(op: unknown): Promise<void> {
-    const path = this.#entry;
-    const before = this.text(path);
+    return this.#mutate(async () => {
+      const path = this.#entry;
+      const before = this.text(path);
+      try {
+        const { text, layout } = await service.edit(before, op);
+        const selected = selection(this.layout, layout, this.#selected, op);
+        await this.#accept({ path, before, after: text }, layout, selected);
+      } catch (error) {
+        this.#status = (error as Error).message;
+        this.requestUpdate();
+      }
+    });
+  }
+
+  /** Serialize mutations through validation; switching files and saving wait for them too. */
+  async #mutate(action: () => Promise<void>): Promise<void> {
+    const pending = (this.#editing ?? Promise.resolve()).then(action, action);
+    this.#editing = pending;
     try {
-      const { text, layout } = await service.edit(before, op);
-      this.#change({ path, before, after: text });
-      this.layout = layout;
-      this.#undo.push({ path, before, after: text });
-      this.#redo = [];
-      this.#status = "";
-      await this.#play();
-    } catch (error) {
-      this.#status = (error as Error).message;
-      this.requestUpdate();
+      await pending;
+    } finally {
+      if (this.#editing === pending) this.#editing = undefined;
     }
+  }
+
+  /** Keep the last valid preview and reject an edit that cannot be played. */
+  async #accept(step: Step, layout: Layout, selected?: string): Promise<void> {
+    const previous = { layout: this.layout, selected: this.#selected };
+    this.#change(step);
+    this.layout = layout;
+    this.#selected = selected;
+    if (await this.#play()) {
+      this.#undo.push(step);
+      this.#redo = [];
+    } else {
+      this.#change({ path: step.path, after: step.before });
+      this.layout = previous.layout;
+      this.#selected = previous.selected;
+      this.#status = `Edit not applied: ${this.#error}`;
+      this.#error = "";
+    }
+    this.requestUpdate();
   }
 
   #change(step: { path: string; after: string }): void {
@@ -283,26 +327,33 @@ export class ValleStudio extends LitElement {
   }
 
   async undo(): Promise<void> {
+    if (this.#editing) await this.#editing;
     const step = this.#undo.pop();
     if (step) {
       this.#change({ path: step.path, after: step.before });
       this.#redo.push(step);
-      await this.#play();
+      await this.#load(step.path);
+      this.#status = `Undid edit in ${step.path}`;
+      this.requestUpdate();
     }
   }
 
   async redo(): Promise<void> {
+    if (this.#editing) await this.#editing;
     const step = this.#redo.pop();
     if (step) {
       this.#change(step);
       this.#undo.push(step);
-      await this.#play();
+      await this.#load(step.path);
+      this.#status = `Redid edit in ${step.path}`;
+      this.requestUpdate();
     }
   }
 
   /** Writes the drafts: sources first, the timeline last, each over the file as it was read.
    * A file changed outside keeps its draft and is said to conflict. */
   async save(): Promise<void> {
+    if (this.#editing) await this.#editing;
     const paths = [...this.#drafts.keys()].sort(
       (a, b) => Number(a === this.#entry) - Number(b === this.#entry),
     );
@@ -337,6 +388,7 @@ export class ValleStudio extends LitElement {
   }
 
   async #event(event: Record<string, any>): Promise<void> {
+    if (this.#editing) await this.#editing;
     if (event.event === "change") {
       const path = event.path as string;
       if (this.#drafts.has(path)) {
@@ -421,8 +473,8 @@ export class ValleStudio extends LitElement {
       event.preventDefault();
       void (event.shiftKey ? this.redo() : this.undo());
     } else if (!typing && (event.key === "Delete" || event.key === "Backspace") && this.#selected) {
+      event.preventDefault();
       void this.edit({ op: "delete", clip: this.#selected });
-      this.#selected = undefined;
     } else if (
       !typing &&
       !(target instanceof HTMLElement && target.closest("button, a, [role=button]")) &&
@@ -550,6 +602,7 @@ export class ValleStudio extends LitElement {
             </span>
           </div>
           <div class="canvas"></div>
+          ${this.layout?.duration === 0 ? html`<div class="empty">Choose a file in Media, then add it to the timeline.</div>` : nothing}
           ${
             this.#error
               ? html`<div class="error" role="alert">
@@ -708,7 +761,7 @@ export class ValleStudio extends LitElement {
               </button>
               <button
                 class="primary"
-                ?disabled=${this.#busy || !this.player}
+                ?disabled=${this.#busy || !this.player || !!this.#error}
                 @click=${async () => {
                   await this.updateComplete;
                   this.renderRoot.querySelector<HTMLDialogElement>("#export-dialog")?.showModal();
@@ -1131,7 +1184,54 @@ ${Array.from({ length: source.split("\n").length }, (_, i) => i + 1).join("\n")}
       <p style="overflow-wrap:anywhere">${file.path}</p>
       <div class="field">Size<span>${size(file.size)}</span></div>
       <a href=${url} target="_blank" rel="noopener">Open file ↗</a>
+      ${this.timeline && kind !== "file" ? html`<p><button class="primary" ?disabled=${this.#busy} @click=${() => this.#run(() => this.#addMedia(file))}>Add to timeline</button></p>` : nothing}
     </section>`;
+  }
+
+  async #addMedia(file: Listed): Promise<void> {
+    return this.#mutate(async () => {
+      const kind = mediaKind(file.path);
+      let duration = 3;
+      if (kind === "film" || kind === "music") {
+        const media = this.renderRoot.querySelector<HTMLMediaElement>(".media-preview")!;
+        if (media.readyState < 1) {
+          await new Promise<void>((resolve, reject) => {
+            const finish = (error?: Error) => {
+              clearTimeout(timer);
+              media.removeEventListener("loadedmetadata", loaded);
+              media.removeEventListener("error", failed);
+              if (error) reject(error);
+              else resolve();
+            };
+            const loaded = () => finish();
+            const failed = () => finish(new Error(`Cannot read ${file.path}`));
+            const timer = setTimeout(
+              () => finish(new Error(`Timed out reading ${file.path}`)),
+              10000,
+            );
+            media.addEventListener("loadedmetadata", loaded);
+            media.addEventListener("error", failed);
+          });
+        }
+        duration = media.duration;
+        if (!Number.isFinite(duration) || duration <= 0)
+          throw new Error("The media has no finite duration.");
+      }
+      const path = this.#entry;
+      const before = this.text(path);
+      const added = addMedia(
+        before,
+        path,
+        file.path,
+        kind === "film" ? "video" : kind === "music" ? "audio" : "image",
+        duration,
+      );
+      const { text, layout } = await service.edit(added.text);
+      const at = layout.tracks.flatMap((t) => t.clips).find((c) => c.id === added.id)?.at;
+      await this.#accept({ path, before, after: text }, layout, at);
+      this.#asset = undefined;
+      this.requestUpdate();
+    });
   }
 
   #inspector() {
@@ -1312,33 +1412,44 @@ ${Array.from({ length: source.split("\n").length }, (_, i) => i + 1).join("\n")}
 
   /** Sets each field of the clip at `at` that `text` changes, as one step to undo. */
   async #apply(at: string, before: Record<string, unknown>, text: string): Promise<void> {
-    let after: Record<string, unknown>;
-    try {
-      after = JSON.parse(text);
-    } catch (error) {
-      this.#status = (error as Error).message;
-      this.requestUpdate();
-      return;
-    }
-    const path = this.#entry;
-    const start = this.text(path);
-    let current = start;
-    try {
-      for (const field of new Set([...Object.keys(before), ...Object.keys(after)])) {
-        if (JSON.stringify(before[field]) !== JSON.stringify(after[field])) {
-          const op = { op: "set", clip: at, field, value: after[field] ?? null };
-          ({ text: current } = await service.edit(current, op));
-        }
+    return this.#mutate(async () => {
+      let after: Record<string, unknown>;
+      try {
+        after = JSON.parse(text);
+      } catch (error) {
+        this.#status = (error as Error).message;
+        this.requestUpdate();
+        return;
       }
-    } catch (error) {
-      this.#status = (error as Error).message;
-      this.requestUpdate();
-      return;
-    }
-    this.#change({ path, after: current });
-    this.#undo.push({ path, before: start, after: current });
-    this.#redo = [];
-    await this.#play();
+      const path = this.#entry;
+      const start = this.text(path);
+      let current = start;
+      try {
+        for (const field of new Set([...Object.keys(before), ...Object.keys(after)])) {
+          if (JSON.stringify(before[field]) !== JSON.stringify(after[field])) {
+            const op = { op: "set", clip: at, field, value: after[field] ?? null };
+            ({ text: current } = await service.edit(current, op));
+          }
+        }
+      } catch (error) {
+        this.#status = (error as Error).message;
+        this.requestUpdate();
+        return;
+      }
+      const { layout } = await service.edit(current);
+      await this.#accept(
+        { path, before: start, after: current },
+        layout,
+        selection(
+          this.layout,
+          layout,
+          at,
+          before.id !== after.id
+            ? { op: "set", clip: at, field: "id", value: after.id }
+            : undefined,
+        ),
+      );
+    });
   }
 
   /** A scene's props, as its controls declare them: values the preview is played with. */
@@ -1469,19 +1580,6 @@ ${Array.from({ length: source.split("\n").length }, (_, i) => i + 1).join("\n")}
         <button @click=${() => void create()}>Create a project…</button>
       </div>`;
   }
-}
-
-/** The value at a document path such as `tracks.visual[0].items[2]`. */
-function find(root: any, path: string): Record<string, unknown> | undefined {
-  let here = root;
-  for (const part of path.split(".")) {
-    const [key, ...indices] = part.split("[");
-    here = here?.[key];
-    for (const index of indices) {
-      here = here?.[Number(index.slice(0, -1))];
-    }
-  }
-  return here;
 }
 
 function clock(seconds: number): string {

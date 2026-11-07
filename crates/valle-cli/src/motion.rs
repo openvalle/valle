@@ -142,10 +142,7 @@ impl Video for Pooled {
         pool.readers[k].1 = uses;
         let size = pool.size;
         let pixels = pool.readers[k].0.frame(at.0)?;
-        Ok(Image {
-            size,
-            pixels: pixels.into(),
-        })
+        Ok(Image::new(size, pixels.into()))
     }
 }
 

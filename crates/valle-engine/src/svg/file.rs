@@ -510,10 +510,7 @@ mod tests {
   <g><image href=\"data:image/png;base64,\n{TILE}\n\" /></g>
 </svg>"
         );
-        let mut images = vec![crate::image::Image {
-            size: [1, 1],
-            pixels: [0; 4].into(),
-        }];
+        let mut images = vec![crate::image::Image::new([1, 1], [0; 4].into())];
         let d = Document::parse(&text, &mut images).unwrap();
         assert_eq!(tags(&d), ["svg", "rect", "image", "g", "image"]);
         // After the images the scene has.

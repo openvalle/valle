@@ -19,7 +19,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 use std::task::{Context, Poll, Waker};
 
 use wgpu::util::DeviceExt;
@@ -36,7 +36,9 @@ use crate::template::Error;
 use crate::text::{Face, color};
 use crate::transition;
 
+mod mipmap;
 mod plan;
+mod video;
 use plan::{Plan, Reach, Seen, Under};
 
 const WORK: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -114,6 +116,8 @@ pub struct Gpu {
     rects: wgpu::RenderPipeline,
     gradients: wgpu::RenderPipeline,
     images: wgpu::RenderPipeline,
+    mipmap: mipmap::Mipmap,
+    video: video::Video,
     glyphs: wgpu::RenderPipeline,
     layers: wgpu::RenderPipeline,
     adds: wgpu::RenderPipeline,
@@ -317,6 +321,8 @@ impl Gpu {
             rects: pipeline(&drawing, "rect", rect, WORK, over),
             gradients: pipeline(&drawing, "gradient", gradient, WORK, over),
             images: pipeline(&imaging, "image", picture, WORK, over),
+            mipmap: mipmap::Mipmap::new(&device),
+            video: video::Video::new(&device),
             glyphs: pipeline(&drawing, "slug", glyph, WORK, over),
             layers: pipeline(&imaging, "layer", layer, WORK, over),
             adds: pipeline(&imaging, "layer", layer, WORK, add),
@@ -453,44 +459,7 @@ fn texture(device: &wgpu::Device, size: [u32; 2], format: wgpu::TextureFormat) -
 
 /// A texture of `image` with its mipmap, from the first level the GPU's textures fit.
 fn mipmapped(gpu: &Gpu, image: &Image) -> wgpu::Texture {
-    let most = gpu.device.limits().max_texture_dimension_2d;
-    let mipmap = image.mipmap();
-    let levels: Vec<&Image> = (std::iter::once(image).chain(&mipmap))
-        .filter(|i| i.size.iter().all(|&n| n <= most))
-        .collect();
-    let size = |i: &Image| wgpu::Extent3d {
-        width: i.size[0],
-        height: i.size[1],
-        depth_or_array_layers: 1,
-    };
-    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-        label: None,
-        size: size(levels[0]),
-        mip_level_count: levels.len() as u32,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    for (level, i) in levels.into_iter().enumerate() {
-        gpu.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: level as u32,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &i.pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * i.size[0]),
-                rows_per_image: Some(i.size[1]),
-            },
-            size(i),
-        );
-    }
-    texture
+    gpu.mipmap.texture(gpu, image)
 }
 
 /// A texture to draw into, and its bind group for reading it as an image.
@@ -668,7 +637,7 @@ pub struct Renderer<'a> {
     draw: Option<wgpu::BindGroup>,
     /// The textures of the images the last frames showed, and of each of this frame's images, the
     /// index of its texture.
-    images: Vec<(Arc<[u8]>, Surface)>,
+    images: Vec<(Image, Surface)>,
     shown: Vec<usize>,
     /// Layer textures: all of them, and the free ones.
     pool: Vec<Surface>,
@@ -1020,17 +989,12 @@ impl<'a> Renderer<'a> {
         letterbox: bool,
     ) -> Result<wgpu::CommandEncoder, Error> {
         // The images' textures, kept while frames show them, and color glyphs'.
-        let rasters = || self.colors.values().flatten().map(|(i, _)| &i.pixels);
-        self.images.retain(|(p, _)| {
-            images.iter().any(|i| Arc::ptr_eq(&i.pixels, p)) || rasters().any(|r| Arc::ptr_eq(r, p))
-        });
+        let rasters = || self.colors.values().flatten().map(|(i, _)| i);
+        self.images
+            .retain(|(p, _)| images.iter().any(|i| i.same(p)) || rasters().any(|r| r.same(p)));
         self.shown = (images.iter())
             .map(|i| {
-                match self
-                    .images
-                    .iter()
-                    .position(|(p, _)| Arc::ptr_eq(&i.pixels, p))
-                {
+                match self.images.iter().position(|(p, _)| i.same(p)) {
                     Some(k) => k,
                     None => {
                         // One without pixels is a picture a box draws.
@@ -1038,8 +1002,7 @@ impl<'a> Renderer<'a> {
                             true => texture(&self.gpu.device, self.picture_size(i.size), WORK),
                             false => mipmapped(self.gpu, i),
                         };
-                        self.images
-                            .push((i.pixels.clone(), Surface::new(self.gpu, t)));
+                        self.images.push((i.clone(), Surface::new(self.gpu, t)));
                         self.images.len() - 1
                     }
                 }
@@ -1826,16 +1789,12 @@ impl<'a> Renderer<'a> {
         let Some((image, at)) = raster else {
             return Ok(None);
         };
-        let (pixels, size, at) = (image.pixels.clone(), image.size, *at);
-        let k = match self
-            .images
-            .iter()
-            .position(|(p, _)| Arc::ptr_eq(p, &pixels))
-        {
+        let (size, at) = (image.size, *at);
+        let k = match self.images.iter().position(|(p, _)| image.same(p)) {
             Some(k) => k,
             None => {
                 let t = mipmapped(self.gpu, image);
-                self.images.push((pixels, Surface::new(self.gpu, t)));
+                self.images.push((image.clone(), Surface::new(self.gpu, t)));
                 self.images.len() - 1
             }
         };
