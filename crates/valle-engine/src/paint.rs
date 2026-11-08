@@ -61,7 +61,7 @@ use crate::style::color::Rgba;
 use crate::style::filter;
 use crate::style::gradient::Image;
 use crate::style::transform::Function;
-use crate::style::{Blend, DecorationStyle, Fit, Shadow, Style};
+use crate::style::{Blend, DecorationStyle, Fit, PaintPart, Shadow, Style};
 use crate::svg::Element;
 use crate::template::{Kind, Template};
 use crate::text::{Glyph, Stripe};
@@ -1641,15 +1641,23 @@ impl Painter<'_> {
                 false => None,
             };
             let glyphs = |shadow: Option<[f32; 4]>, by: [f32; 2]| -> Vec<Item> {
-                // The stroke and the fill under it cast one shadow: both opaque, in one layer.
+                // The stroke and fill cast one shadow: both opaque, in one layer.
                 let layer = shadow.filter(|c| stroke.is_some() && c[3] < 1.0);
                 let shadow = match layer {
                     Some(c) => Some(c.map(|v| v / c[3])),
                     None => shadow,
                 };
-                let mut items: Vec<Item> = drawn(0.0, shadow.unwrap_or(fill), by).collect();
-                if let Some((width, color)) = stroke {
-                    items.extend(drawn(width, shadow.unwrap_or(color), by));
+                let mut items = Vec::new();
+                for part in s.paint_order {
+                    match part {
+                        PaintPart::Fill => items.extend(drawn(0.0, shadow.unwrap_or(fill), by)),
+                        PaintPart::Stroke => {
+                            if let Some((width, color)) = stroke {
+                                items.extend(drawn(width, shadow.unwrap_or(color), by));
+                            }
+                        }
+                        PaintPart::Markers => {}
+                    }
                 }
                 match layer {
                     Some(c) => vec![Item::Group {
@@ -3223,6 +3231,38 @@ mod tests {
             ("WebkitTextStrokeWidth", "1px"),
         ];
         assert_eq!(painted(vec![text_node("x", &outlined)], &[0]), ["text red"]);
+    }
+
+    #[test]
+    fn stroke_first_text_keeps_its_fill_and_a_single_translucent_shadow() {
+        let style = [
+            ("color", "white"),
+            ("WebkitTextStroke", "2px black"),
+            ("paintOrder", "markers stroke"),
+            ("textShadow", "1px 1px rgb(255 0 0 / 0.5)"),
+        ];
+        let (items, _) = paint_of(vec![text_node("字", &style)], &[0]);
+        assert_eq!(
+            names(&items),
+            [
+                "group 0.5 [\"text red\", \"text red\"]",
+                "text black",
+                "text white",
+            ]
+        );
+        let Item::Group { items: shadow, .. } = &items[0] else {
+            unreachable!()
+        };
+        for drawn in [&items[1..], shadow.as_slice()] {
+            let strokes: Vec<_> = drawn
+                .iter()
+                .map(|item| match item {
+                    Item::Glyphs { stroke, .. } => *stroke,
+                    _ => unreachable!(),
+                })
+                .collect();
+            assert_eq!(strokes, [2.0, 0.0]);
+        }
     }
 
     #[test]

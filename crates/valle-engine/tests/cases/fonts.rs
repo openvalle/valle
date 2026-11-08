@@ -14,7 +14,7 @@ pub fn prepare() -> Result<(), String> {
         .get_or_init(|| {
             let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/resources");
             let cache = UrlCache::global()?;
-            for file in ["NotoSans.ttf", "NotoSansItalic.ttf"] {
+            for file in ["NotoSans.ttf", "NotoSansItalic.ttf", "NotoSansSC.ttf"] {
                 let font = BUILT_IN
                     .iter()
                     .find(|font| font.file == file)

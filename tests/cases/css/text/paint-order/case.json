@@ -1,0 +1,61 @@
+{
+  "spec": "https://svgwg.org/svg2-draft/painting.html#PaintOrderProperty",
+  "assertion": "Text inherits paint-order. Painting the centered stroke before the opaque fill preserves the interiors of CJK and Latin glyphs without changing line layout.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All three browsers preserve opaque CJK and Latin interiors with stroke before fill. Chrome, Firefox and Valle agree on the baselines (66/136); WebKit differs by 0.092px. Reviewed Chrome differences are 12902 glyph-edge pixels (max 235), plus 13 adjacent pixels outside the contour mask (max 87). Flat regions remain checked. Reverting to normal order fails both budgets; missing or displaced text must also fail.",
+    "pixels": {
+      "maxDifference": 90,
+      "maxPixels": 20
+    },
+    "textEdges": {
+      "key": "text",
+      "pixels": {
+        "maxDifference": 240,
+        "maxPixels": 13200
+      }
+    }
+  },
+  "layout": [
+    {
+      "key": "text",
+      "border": {
+        "x": 20,
+        "y": 10,
+        "width": 600,
+        "height": 140
+      },
+      "padding": {
+        "x": 20,
+        "y": 10,
+        "width": 600,
+        "height": 140
+      },
+      "content": {
+        "x": 20,
+        "y": 10,
+        "width": 600,
+        "height": 140
+      }
+    }
+  ],
+  "lines": [
+    {
+      "key": "text",
+      "text": ["第 0001 句：字幕测试", "Caption 012 ABC / Valle"],
+      "geometry": [
+        {
+          "x": 20,
+          "baseline": 66,
+          "height": 70
+        },
+        {
+          "x": 20,
+          "baseline": 136,
+          "height": 70
+        }
+      ]
+    }
+  ]
+}

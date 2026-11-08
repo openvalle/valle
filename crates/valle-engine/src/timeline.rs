@@ -1915,6 +1915,22 @@ mod tests {
                 let font = &f.styles[i].font;
                 assert_eq!(font.size, size);
                 assert_eq!(font.stroke, stroke);
+                assert_eq!(
+                    f.styles[i].paint_order,
+                    [
+                        crate::style::PaintPart::Stroke,
+                        crate::style::PaintPart::Fill,
+                        crate::style::PaintPart::Markers,
+                    ]
+                );
+                // Split characters inherit the caption's order too, so karaoke and
+                // typewriter paint the same clean letter shapes as a plain caption.
+                assert!(
+                    lines
+                        .runs
+                        .iter()
+                        .all(|r| f.styles[r.node as usize].paint_order == f.styles[i].paint_order)
+                );
                 assert_eq!(font.shadows.len(), usize::from(shadow));
                 if shadow {
                     assert_eq!(font.shadows[0].offset, [0.0, 4.0]);

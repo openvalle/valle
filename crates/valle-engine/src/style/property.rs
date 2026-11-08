@@ -277,6 +277,7 @@ pub(super) enum Field {
     WebkitTextStroke,
     WebkitTextStrokeWidth,
     WebkitTextStrokeColor,
+    PaintOrder,
     TextShadow,
 }
 
@@ -310,7 +311,7 @@ pub(super) enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 257] = [
+const FIELDS: [(&str, Field); 258] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -614,6 +615,7 @@ const FIELDS: [(&str, Field); 257] = [
     ("fill", Field::Fill),
     ("fillOpacity", Field::FillOpacity),
     ("fillRule", Field::FillRule),
+    ("paintOrder", Field::PaintOrder),
     ("stroke", Field::Stroke),
     ("strokeOpacity", Field::StrokeOpacity),
     ("strokeWidth", Field::StrokeWidth),
@@ -708,6 +710,7 @@ impl Field {
             Field::Fill
                 | Field::FillOpacity
                 | Field::FillRule
+                | Field::PaintOrder
                 | Field::Stroke
                 | Field::StrokeOpacity
                 | Field::StrokeWidth
@@ -780,6 +783,7 @@ impl Field {
                 | Field::TextShadow
                 | Field::WebkitTextFillColor
                 | Field::WebkitTextStrokeColor
+                | Field::PaintOrder
         )
     }
 
@@ -836,6 +840,7 @@ impl Field {
                 | Field::WebkitTextStrokeWidth
                 | Field::WebkitTextStrokeColor
                 | Field::TextShadow
+                | Field::PaintOrder
         )
     }
 }

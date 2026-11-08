@@ -28,6 +28,17 @@ pub enum Paint {
     Url(Rc<str>),
 }
 
+/// The operations ordered by `paint-order`; text has no markers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaintPart {
+    Fill,
+    Stroke,
+    Markers,
+}
+
+pub(super) const PAINT_ORDER: [PaintPart; 3] =
+    [PaintPart::Fill, PaintPart::Stroke, PaintPart::Markers];
+
 /// How an SVG shape is stroked (`stroke-*`): its paint and the opacity it strokes at; its width,
 /// its dashes and their offset, px and fractions of the viewport's normalized diagonal; how its
 /// open ends are capped and its corners joined, and how far a miter may reach, in widths.
@@ -160,6 +171,8 @@ pub struct Style {
     pub mask_alpha: bool,
     /// The `<marker>`s at a path's start, middle and end vertices, by id.
     pub markers: [Option<Rc<str>>; 3],
+    /// Inherited `paint-order`, including the operations omitted by the declaration.
+    pub paint_order: [PaintPart; 3],
     /// An SVG element's geometry, as its attributes have it at the frame.
     pub svg: Option<Rc<svg::Computed>>,
     /// A `<use>`'s copy.
@@ -306,6 +319,7 @@ impl Style {
             clip_even_odd: _,
             mask_alpha: _,
             markers: _,
+            paint_order: _,
             instance: _,
             color: _,
         } = self;
@@ -750,6 +764,9 @@ pub(super) fn compute(
             Some(m) => m.clone(),
             None => parent.and_then(|p| p.markers[k].clone()),
         }),
+        paint_order: d
+            .paint_order
+            .unwrap_or_else(|| parent.map_or(PAINT_ORDER, |p| p.paint_order)),
         svg: None,
         instance: None,
         shader: None,
@@ -838,6 +855,7 @@ mod tests {
             &[("fontSize", num(20.0))],
             &[("fontSize", num(21.0))]
         ));
+        assert!(alike(&[], &[("paintOrder", text("stroke fill"))]));
         // A transform makes it the containing block of the boxes out of flow in it.
         assert!(!alike(&[wide()], &[wide(), ("translate", text("5px"))]));
     }

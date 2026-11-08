@@ -1,0 +1,50 @@
+{
+  "size": [640, 160],
+  "sources": {
+    "tests/baselines/browser/css/text/paint-order/scene.html": "66df19d12285fa4a4da2ef42bd5d69c23cf1542122555694ff345b026d00f83c",
+    "tests/resources/NotoSansSC.ttf": "6cbd3ac22ef454e4e9bcfb67369ea94297002a218e9abebc90852534afee096a"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "text",
+        "border": {
+          "x": 20,
+          "y": 10,
+          "width": 600,
+          "height": 140
+        },
+        "padding": {
+          "x": 20,
+          "y": 10,
+          "width": 600,
+          "height": 140
+        },
+        "content": {
+          "x": 20,
+          "y": 10,
+          "width": 600,
+          "height": 140
+        }
+      }
+    ],
+    "lines": [
+      {
+        "key": "text",
+        "text": ["第 0001 句：字幕测试", "Caption 012 ABC / Valle"],
+        "geometry": [
+          {
+            "x": 20,
+            "baseline": 65.908203125,
+            "height": 70
+          },
+          {
+            "x": 20,
+            "baseline": 135.908203125,
+            "height": 70
+          }
+        ]
+      }
+    ]
+  }
+}

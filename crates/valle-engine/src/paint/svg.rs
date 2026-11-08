@@ -11,7 +11,7 @@ use crate::layout::{Natural, Rect};
 use crate::path::Path;
 use crate::style::color;
 use crate::style::math::Calc;
-use crate::style::{Instance, Paint, Style};
+use crate::style::{Instance, Paint, PaintPart, Style};
 use crate::svg::file::{Document, Embedded};
 use crate::svg::{self, Element};
 use crate::template::Template;
@@ -96,9 +96,9 @@ impl<'a> Drawing<'a> {
 
     /// An element in an `<svg>`, or an SVG file's root, and its children, in user units of a
     /// viewport `size` units big, which `matrix` takes to px, with its style in `copy` if that
-    /// holds it: a shape filled, then stroked, unless it is hidden, each opacity on its paint's
-    /// alpha; a `<use>`'s copy; then its mask, its clip path, and its opacity on all it draws as
-    /// one layer, and its transform.
+    /// holds it: a shape's fill, stroke and markers in paint order, unless hidden, each opacity
+    /// on its paint's alpha; a `<use>`'s copy; then its mask, its clip path, and its opacity on all
+    /// it draws as one layer, and its transform.
     pub fn element<'s>(
         &'s self,
         i: usize,
@@ -160,7 +160,7 @@ impl<'a> Drawing<'a> {
                 let diagonal = ((w * w + h * h) / 2.0).sqrt() as f32;
                 let length = |l: &Calc| f64::from(l.resolve(diagonal));
                 let width = length(&k.width);
-                let stroke = self
+                let mut stroke = self
                     .paint(&k.paint, k.opacity, s, size, bbox)
                     .and_then(|paint| {
                         let pen = svg::Pen {
@@ -178,9 +178,9 @@ impl<'a> Drawing<'a> {
                         let cover = svg::bounds(&outline);
                         painted(outline, false, paint, cover, scale)
                     });
-                let markers = self.markers(s, shape, &path, width, size, matrix);
+                let mut markers = self.markers(s, shape, &path, width, size, matrix);
                 let fill = self.paint(&s.fill, s.fill_opacity, s, size, bbox);
-                items.extend(fill.and_then(|f| {
+                let mut fill = fill.and_then(|f| {
                     // Solid ellipses share one outline. Their center and radii belong to their
                     // transform, so a dot field does not encode a new path at every position.
                     if let Fill::Color(color) = &f
@@ -203,9 +203,14 @@ impl<'a> Drawing<'a> {
                         });
                     }
                     painted(path, s.even_odd, f, bbox, scale)
-                }));
-                items.extend(stroke);
-                items.extend(markers);
+                });
+                for part in s.paint_order {
+                    match part {
+                        PaintPart::Fill => items.extend(fill.take()),
+                        PaintPart::Stroke => items.extend(stroke.take()),
+                        PaintPart::Markers => items.append(&mut markers),
+                    }
+                }
             }
             Element::Image { .. } if s.visible => {
                 let Some((viewport, first, image)) = self.image(i, size, copy) else {
@@ -745,4 +750,74 @@ fn painted(path: Path, even_odd: bool, fill: Fill, cover: [f64; 4], scale: f64) 
             items: vec![gradient],
         }],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::front::Inputs;
+    use crate::scene::Scene;
+    use crate::time::Tick;
+
+    #[test]
+    fn inline_and_file_shapes_order_fill_stroke_and_markers() {
+        fn colors(items: &[Item]) -> Vec<[f32; 4]> {
+            items
+                .iter()
+                .flat_map(|item| match item {
+                    Item::Path { color, .. } => vec![*color],
+                    Item::Transform { items, .. }
+                    | Item::Clip { items, .. }
+                    | Item::Group { items, .. } => colors(items),
+                    _ => panic!("unexpected paint {item:?}"),
+                })
+                .collect()
+        }
+        for (order, expected) in [
+            ("normal", ["red", "blue", "green"]),
+            ("fill markers stroke", ["red", "green", "blue"]),
+            ("stroke", ["blue", "red", "green"]),
+            ("stroke markers fill", ["blue", "green", "red"]),
+            ("markers", ["green", "red", "blue"]),
+            ("markers stroke fill", ["green", "blue", "red"]),
+        ] {
+            let attribute = format!("paint-order=\"{order}\"");
+            for inherited in [true, false] {
+                let (root, shape) = if inherited {
+                    (attribute.as_str(), "")
+                } else {
+                    ("", attribute.as_str())
+                };
+                let xml = format!(
+                    r##"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" {root}>
+                <defs><marker id="m" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse">
+                    <path d="M0 0H8V8Z" fill="green" />
+                </marker></defs>
+                <path d="M20 20H60V60Z" {shape} fill="red" stroke="blue" stroke-width="10" marker-start="url(#m)" />
+            </svg>"##
+                );
+                let doc = Document::parse(&xml, &mut Vec::new()).unwrap();
+                let first = rect([0.0, 0.0, 80.0, 80.0]);
+                let file = document(&doc, first, &Cache::default()).unwrap();
+                let source = format!(
+                    "export const composition = {{ width: 80, height: 80, fps: 1, duration: 1 }};\n\
+                 export default function Scene() {{ return ({}); }}",
+                    xml.replace("paint-order", "paintOrder")
+                        .replace("stroke-width", "strokeWidth")
+                        .replace("marker-start", "markerStart")
+                );
+                let mut scene = Scene::load(
+                    "stroke.motion.tsx",
+                    &|_| Some(source.as_bytes().to_vec()),
+                    &Inputs::default(),
+                    crate::testing::fonts(),
+                )
+                .unwrap();
+                let inline = scene.frame(Tick::ZERO).unwrap();
+                let expected = expected.map(|c| work(color::parse(c).unwrap()));
+                assert_eq!(colors(&[file]), expected, "file: {order}");
+                assert_eq!(colors(&inline.items), expected, "inline: {order}");
+            }
+        }
+    }
 }

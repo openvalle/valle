@@ -795,6 +795,48 @@ mod tests {
     };
 
     #[test]
+    fn paint_order_inherits_completes_omitted_parts_and_rejects_duplicates() {
+        use PaintPart::{Fill, Markers, Stroke};
+        assert_eq!(one(&[]).paint_order, [Fill, Stroke, Markers]);
+        for (value, expected) in [
+            ("normal", [Fill, Stroke, Markers]),
+            ("stroke", [Stroke, Fill, Markers]),
+            ("markers stroke", [Markers, Stroke, Fill]),
+            ("fill markers stroke", [Fill, Markers, Stroke]),
+            ("STROKE FILL", [Stroke, Fill, Markers]),
+        ] {
+            assert_eq!(one(&[("paintOrder", text(value))]).paint_order, expected);
+        }
+        for value in [
+            "",
+            "none",
+            "fill fill",
+            "normal stroke",
+            "fill stroke markers fill",
+        ] {
+            assert!(error(&[("paintOrder", text(value))]).contains("paintOrder"));
+        }
+        for (value, expected) in [
+            ("inherit", [Markers, Stroke, Fill]),
+            ("unset", [Markers, Stroke, Fill]),
+            ("initial", [Fill, Stroke, Markers]),
+            ("normal", [Fill, Stroke, Markers]),
+        ] {
+            let tree = vec![
+                view(&[("paintOrder", text("markers stroke"))], &[1, 2]),
+                view(&[], &[]),
+                view(
+                    &[("paintOrder", text("fill")), ("paintOrder", text(value))],
+                    &[],
+                ),
+            ];
+            let s = styles(tree, &[]).unwrap();
+            assert_eq!(s[1].paint_order, [Markers, Stroke, Fill]);
+            assert_eq!(s[2].paint_order, expected);
+        }
+    }
+
+    #[test]
     fn visibility_inherits() {
         let tree = vec![
             view(&[("visibility", text("hidden"))], &[1, 2]),

@@ -9,7 +9,7 @@ use taffy::{
 };
 
 use super::color::Rgba;
-use super::computed::{BLENDS, Blend, BorderStyle, Cap, Fit, Join, Paint};
+use super::computed::{BLENDS, Blend, BorderStyle, Cap, Fit, Join, PAINT_ORDER, Paint, PaintPart};
 use super::font::{
     Collapse, DecorationStyle, Family, Feature, FontStyle, Leading, OverflowWrap, TextAlign,
     TextTransform, VARIANTS, Variation, Weight, WordBreak, families, features, font_style, leading,
@@ -177,6 +177,7 @@ pub(super) struct Declared {
     pub(super) mask_alpha: Option<bool>,
     /// Each declared or not, `none` or an id.
     pub(super) markers: [Option<Option<Rc<str>>>; 3],
+    pub(super) paint_order: Option<[PaintPart; 3]>,
     pub(super) color: Option<Rgba>,
     pub(super) font_size: Option<Len>,
     pub(super) font_weight: Option<Weight>,
@@ -303,6 +304,7 @@ impl Default for Declared {
             clip_even_odd: None,
             mask_alpha: None,
             markers: [None, None, None],
+            paint_order: None,
             color: None,
             font_size: None,
             font_weight: None,
@@ -1220,6 +1222,7 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::Fill => d.svg_fill = Some(paint(v)?),
         F::FillOpacity => d.fill_opacity = Some(alpha(v)?),
         F::FillRule => d.even_odd = Some(keyword(v, &[("nonzero", false), ("evenodd", true)])?),
+        F::PaintOrder => d.paint_order = paint_order(v)?,
         F::Stroke if inherits(v) => d.svg_stroke = None,
         F::Stroke => d.svg_stroke = Some(paint(v)?),
         F::StrokeOpacity => d.stroke_opacity = Some(alpha(v)?),
@@ -1477,6 +1480,42 @@ pub(super) fn decoration_style(s: &str) -> Result<DecorationStyle, String> {
             DECORATION_STYLES.join(", ")
         )),
     }
+}
+
+/// Operations not listed in `paint-order` follow in their normal order.
+fn paint_order(v: &V) -> Result<Option<[PaintPart; 3]>, String> {
+    let s = text(v)?;
+    match s.as_str() {
+        "inherit" | "unset" => return Ok(None),
+        "normal" | "initial" => return Ok(Some(PAINT_ORDER)),
+        _ => {}
+    }
+    let words = css::words(&s);
+    if words.is_empty() || words.len() > 3 {
+        return Err(format!("{s:?} is not a paint order"));
+    }
+    let mut order = PAINT_ORDER;
+    let mut n = 0;
+    for word in words {
+        let part = match word {
+            "fill" => PaintPart::Fill,
+            "stroke" => PaintPart::Stroke,
+            "markers" => PaintPart::Markers,
+            _ => return Err(format!("{word} is not fill, stroke or markers")),
+        };
+        if order[..n].contains(&part) {
+            return Err(format!("{s} repeats {word}"));
+        }
+        order[n] = part;
+        n += 1;
+    }
+    for part in PAINT_ORDER {
+        if !order[..n].contains(&part) {
+            order[n] = part;
+            n += 1;
+        }
+    }
+    Ok(Some(order))
 }
 
 /// `-webkit-text-stroke`: a width and a color in either order, each at most once, and the

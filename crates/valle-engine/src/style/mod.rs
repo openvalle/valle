@@ -28,7 +28,8 @@ pub mod transform;
 mod units;
 
 pub use computed::{
-    Blend, BorderStyle, Cap, Fit, Instance, Join, Paint, Shaded, Shadow, Source, Stroke, Style,
+    Blend, BorderStyle, Cap, Fit, Instance, Join, Paint, PaintPart, Shaded, Shadow, Source, Stroke,
+    Style,
 };
 pub use font::{
     Collapse, Decoration, DecorationStyle, Family, Feature, Font, FontStyle, LineHeight,

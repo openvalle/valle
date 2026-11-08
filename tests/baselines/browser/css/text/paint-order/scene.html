@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh">
+  <meta charset="utf-8" /><title>Text paint order</title>
+  <style>
+    @font-face {
+      font-family: StrokeCJK;
+      src: url("/tests/resources/NotoSansSC.ttf");
+      font-weight: 100 900;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+    }
+    #canvas {
+      width: 640px;
+      height: 160px;
+      position: relative;
+      background: #607a90;
+      paint-order: stroke fill;
+    }
+    #text {
+      position: absolute;
+      left: 20px;
+      top: 10px;
+      width: 600px;
+      height: 140px;
+      font-family: StrokeCJK;
+      font-size: 48px;
+      font-weight: 500;
+      line-height: 70px;
+      white-space: pre;
+      color: white;
+      -webkit-text-stroke: 2px #14141a;
+    }
+  </style>
+  <div id="canvas">
+    <!-- prettier-ignore -->
+    <div id="text" data-key="text" data-text="text">第 0001 句：字幕测试&#10;Caption 012 ABC / Valle</div>
+  </div>
+</html>

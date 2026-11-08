@@ -126,6 +126,8 @@ export default function Caption({
             whiteSpace: "pre-line",
             color: textColor,
             WebkitTextStroke: `${strokeWidth}px ${strokeColor}`,
+            // Keep the letter's fill over the stroke, including overlapping CJK contours.
+            paintOrder: "stroke fill",
             textShadow: shadow ? "0px 4px 14px #000000B0" : "none",
           }}
         >

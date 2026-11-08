@@ -1,6 +1,6 @@
 # Fixed test resources
 
-`NotoSans.ttf` and `NotoSansItalic.ttf` are generated, ignored files used by both
+`NotoSans.ttf`, `NotoSansItalic.ttf` and `NotoSansSC.ttf` are generated, ignored files used by both
 the Rust text renderer and the browser's `@font-face`. Their URLs and SHA-256
 hashes come directly from `BUILT_IN` in
 [`text.rs`](../../crates/valle-engine/src/text.rs). The SIL Open Font License 1.1
