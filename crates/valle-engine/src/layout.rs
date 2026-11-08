@@ -6,6 +6,8 @@
 //! and fixed boxes in it, as CSS has it. A mask's source is laid out after the mask, as the canvas
 //! is but in the mask's border box.
 
+use std::collections::HashMap;
+
 use taffy::{
     AvailableSpace, BlockContext, BoxGenerationMode, BoxSizing, Cache, CacheTree, Contain,
     ContainingBlockClaims, CoreStyle, DetailedGridInfo, DetailedLayoutInfo, Dimension, Direction,
@@ -19,10 +21,10 @@ use taffy::{
 
 use crate::image::Picture;
 use crate::style::math::{self, Calc};
-use crate::style::{DecorationStyle, Style};
+use crate::style::{DecorationStyle, SkipInk, Style};
 use crate::svg::Element;
 use crate::template::{self, Error, Kind, Prop, Tag, Template, V};
-use crate::text::{Content, Lines, Piece, Stripe, Text, wave};
+use crate::text::{Content, Lines, Piece, Stripe, Text, cjk_ranges, wave};
 
 /// A rectangle in canvas px, y down.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -391,6 +393,28 @@ fn decorations(
     text: &mut Text,
 ) -> Result<Vec<Stripe>, Error> {
     let mut out = Vec::new();
+    // A shaping/font boundary does not restart a decorating box's dots, dashes or waves.
+    // Collect its full interval on each line once; glyph runs still clip their own pieces.
+    let mut spans = HashMap::new();
+    for run in &lines.runs {
+        for d in &styles[run.node as usize].decorations {
+            spans
+                .entry((run.line, d.by))
+                .and_modify(|x: &mut [f32; 2]| {
+                    x[0] = x[0].min(run.x[0]);
+                    x[1] = x[1].max(run.x[1]);
+                })
+                .or_insert(run.x);
+        }
+    }
+    let cjk = if lines.runs.iter().any(|run| {
+        let s = &styles[run.node as usize];
+        s.font.skip_ink == SkipInk::Auto && !s.decorations.is_empty()
+    }) {
+        cjk_ranges(&lines.string)
+    } else {
+        Vec::new()
+    };
     for (k, run) in lines.runs.iter().enumerate() {
         let style = &styles[run.node as usize];
         if style.decorations.is_empty() {
@@ -460,9 +484,16 @@ fn decorations(
                     _ => (vec![[y, y + height]], [top, top + thickness]),
                 };
                 let mut gaps = Vec::new();
-                if !through && style.font.skip_ink {
+                if !through && style.font.skip_ink != SkipInk::None {
                     let dilation = thickness.min(13.0);
                     for g in glyphs {
+                        if style.font.skip_ink == SkipInk::Auto {
+                            let at = g.cluster as usize;
+                            let k = cjk.partition_point(|r| r.end <= at);
+                            if cjk.get(k).is_some_and(|r| r.contains(&at)) {
+                                continue;
+                            }
+                        }
                         let below = |y: f32| y - at[1] - g.y;
                         let band = [below(band[0]) + 0.5, below(band[1]) - 0.5];
                         let size = style.font.size as f32;
@@ -483,7 +514,7 @@ fn decorations(
                     if g0.min(end) > x {
                         out.extend(rows.iter().map(|&[y0, y1]| Stripe {
                             rect: [x - at[0], y0 - at[1], g0.min(end) - at[0], y1 - at[1]],
-                            along: run.x,
+                            along: spans[&(run.line, d.by)],
                             style,
                             thickness,
                             color: d.color,
@@ -1417,6 +1448,69 @@ mod tests {
         assert_eq!(through.len(), 1);
         assert_eq!(through[0].rect[1], (b - 7.0 - 1.0).round());
         assert_eq!(style("none").decorations.len(), 2);
+    }
+
+    #[test]
+    fn cjk_decorations_stay_continuous_in_auto_but_all_still_skips_ink() {
+        for kind in ["solid", "double", "dotted", "dashed", "wavy"] {
+            let decoration = format!("underline {kind} 2px");
+            let lines = |words: &str, skip: &str| {
+                let l = lay(
+                    vec![text_node(
+                        words,
+                        &[
+                            ("fontSize", "72px"),
+                            ("fontWeight", "800"),
+                            ("whiteSpace", "pre"),
+                            ("textDecoration", &decoration),
+                            ("textDecorationSkipInk", skip),
+                        ],
+                    )],
+                    &[0],
+                )
+                .unwrap();
+                l.lines[0].clone().unwrap()
+            };
+            let cjk = lines("强调随行，", "none");
+            assert_eq!(
+                lines("强调随行，", "auto").decorations,
+                cjk.decorations,
+                "{kind}"
+            );
+            assert_ne!(
+                lines("强调随行，", "all").decorations,
+                cjk.decorations,
+                "{kind}"
+            );
+            let latin = lines("gyp", "auto");
+            assert_eq!(lines("gyp", "all").decorations, latin.decorations, "{kind}");
+            assert_ne!(
+                lines("gyp", "none").decorations,
+                latin.decorations,
+                "{kind}"
+            );
+            // Latin descenders still make gaps when CJK shares their text box and font.
+            let mixed = lines("强调 gyp", "auto");
+            let along = [
+                mixed.runs.first().unwrap().x[0],
+                mixed.runs.last().unwrap().x[1],
+            ];
+            assert!(
+                mixed.decorations.iter().all(|d| d.along == along),
+                "{kind}: shaping must not reset the pattern"
+            );
+            let first = mixed.decorations.first().unwrap();
+            assert_eq!(
+                [first.rect[0], first.rect[2]],
+                mixed.runs[0].x,
+                "{kind}: CJK ink must not cut the first shaping run"
+            );
+            assert_ne!(
+                mixed.decorations,
+                lines("强调 gyp", "none").decorations,
+                "{kind}"
+            );
+        }
     }
 
     #[test]

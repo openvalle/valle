@@ -161,6 +161,8 @@ pub struct Run {
     pub text: String,
     pub start: Tick,
     pub end: Tick,
+    /// Overrides of the caption's text style; a custom presenter receives them too.
+    pub style: Map<String, Value>,
 }
 
 /// A Motion component and what it is given: props (constants or keyframes), data, and its
@@ -1247,17 +1249,16 @@ fn caption(o: &Map<String, Value>, w: &str, duration: Tick) -> Result<Content, E
             for (i, r) in array(runs, &rw)?.iter().enumerate() {
                 let iw = format!("{rw}[{i}]");
                 let ro = object(r, &iw)?;
-                if ro.contains_key("fontSize") || ro.contains_key("color") {
-                    return Err(format!(
-                        "{iw}: a run has text, start and end; style words with a presenter"
-                    ));
-                }
-                only(ro, &iw, &["text", "start", "end"])?;
+                only(ro, &iw, &["text", "start", "end", "style"])?;
                 let get = |k: &str| ro.get(k).ok_or(format!("{iw}.{k}: the run has none"));
                 let run = Run {
                     text: text(get("text")?, &format!("{iw}.text"))?.to_string(),
                     start: seconds(get("start")?, &format!("{iw}.start"))?,
                     end: seconds(get("end")?, &format!("{iw}.end"))?,
+                    style: match ro.get("style") {
+                        Some(v) => object(v, &format!("{iw}.style"))?.clone(),
+                        None => Map::new(),
+                    },
                 };
                 let after = out.last().map_or(Tick::ZERO, |l| l.end);
                 if run.start < after || run.end <= run.start || run.end > duration {
@@ -1509,6 +1510,34 @@ mod tests {
         assert_eq!(d.clip("t").unwrap().start, s("2.5"));
         assert_eq!(d.clip("V2.1").unwrap().start, s("3.5"));
         assert_eq!(d.clip("audio0.0").unwrap().start, s("0"));
+    }
+
+    #[test]
+    fn caption_runs_keep_optional_style_overrides() {
+        let value = serde_json::json!({
+            "canvas": { "width": 640, "height": 360, "fps": 30 },
+            "tracks": { "caption": [{ "clips": [{ "start": 0, "duration": 2, "runs": [
+                { "text": "Hello ", "start": 0, "end": 1 },
+                { "text": "世界", "start": 1, "end": 2,
+                  "style": { "fontWeight": 800, "textColor": "#ffcc00" } }
+            ] }] }] }
+        });
+        let doc = Document::read(&value).unwrap();
+        let Content::Caption { text, runs } = &doc.tracks[0].clips[0].content else {
+            panic!("not a caption")
+        };
+        assert_eq!(text, "Hello 世界");
+        assert!(runs[0].style.is_empty());
+        assert_eq!(runs[1].style["fontWeight"], 800);
+        assert_eq!(runs[1].start, Tick::from_seconds(1.0).unwrap());
+        for invalid in [Value::Null, serde_json::json!([]), serde_json::json!("red")] {
+            let mut bad = value.clone();
+            bad["tracks"]["caption"][0]["clips"][0]["runs"][1]["style"] = invalid;
+            let Err(error) = Document::read(&bad) else {
+                panic!("invalid style accepted")
+            };
+            assert!(error.contains("runs[1].style"), "{error}");
+        }
     }
 
     #[test]

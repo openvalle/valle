@@ -109,6 +109,15 @@ pub enum DecorationStyle {
     Wavy,
 }
 
+/// Whether underlines and overlines leave gaps where glyphs cross them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SkipInk {
+    /// Skip alphabetic ink, but keep the line continuous through CJK script runs.
+    Auto,
+    All,
+    None,
+}
+
 /// The inherited text properties, computed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Font {
@@ -153,9 +162,7 @@ pub struct Font {
     pub stroke_color: Option<Rgba>,
     /// `text-shadow`, the first on top.
     pub shadows: Rc<[TextShadow]>,
-    /// `text-decoration-skip-ink: auto` (or `all`): underlines and overlines leave gaps where
-    /// glyphs cross them.
-    pub skip_ink: bool,
+    pub skip_ink: SkipInk,
     /// `text-underline-offset`, which a decoration takes from the box that declares it.
     pub underline_offset: Option<Calc>,
 }
@@ -197,7 +204,7 @@ impl Font {
             stroke: 0.0,
             stroke_color: None,
             shadows: Rc::new([]),
-            skip_ink: true,
+            skip_ink: SkipInk::Auto,
             underline_offset: None,
         }
     }
@@ -728,6 +735,26 @@ mod tests {
     }
 
     #[test]
+    fn ink_skipping_distinguishes_auto_all_and_none_and_inherits() {
+        for (value, expected) in [
+            ("auto", SkipInk::Auto),
+            ("all", SkipInk::All),
+            ("none", SkipInk::None),
+        ] {
+            let s = styles(
+                vec![
+                    view(&[("textDecorationSkipInk", text(value))], &[1]),
+                    view(&[], &[]),
+                ],
+                &[],
+            )
+            .unwrap();
+            assert_eq!(s[0].font.skip_ink, expected);
+            assert_eq!(s[1].font.skip_ink, expected);
+        }
+    }
+
+    #[test]
     fn text_decorations_pass_to_the_text_in_flow_inside() {
         let tree = vec![
             view(
@@ -774,7 +801,8 @@ mod tests {
             (px(&d[1].thickness), px(&d[1].offset)),
             (Some(3.0), Some(2.0))
         );
-        assert!(s[0].font.skip_ink && !s[1].font.skip_ink);
+        assert_eq!(s[0].font.skip_ink, SkipInk::Auto);
+        assert_eq!(s[1].font.skip_ink, SkipInk::None);
         assert!(s[2].decorations.is_empty());
     }
 
@@ -1260,7 +1288,7 @@ mod tests {
             stroke: 0.0,
             stroke_color: None,
             shadows: Rc::new([]),
-            skip_ink: true,
+            skip_ink: crate::style::SkipInk::Auto,
             underline_offset: None,
         };
         assert_eq!(*s[0].font, initial);
@@ -1315,7 +1343,7 @@ mod tests {
             stroke: 2.0,
             stroke_color: Some(color::parse("#0f0").unwrap()),
             shadows: Rc::new([]),
-            skip_ink: true,
+            skip_ink: crate::style::SkipInk::Auto,
             underline_offset: None,
         };
         assert_eq!(*s[1].font, brand);

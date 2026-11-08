@@ -1,0 +1,333 @@
+{
+  "size": [640, 336],
+  "sources": {
+    "tests/baselines/browser/css/text/decoration-cjk/scene.html": "be041c6b45c30078b19e5ac8b5fad6fc503834cf03dd2e24997318c035a530cd",
+    "tests/resources/NotoSansSC.ttf": "6cbd3ac22ef454e4e9bcfb67369ea94297002a218e9abebc90852534afee096a"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "solid-0",
+        "border": {
+          "x": 16,
+          "y": 0,
+          "width": 300,
+          "height": 64
+        },
+        "padding": {
+          "x": 16,
+          "y": 0,
+          "width": 300,
+          "height": 64
+        },
+        "content": {
+          "x": 16,
+          "y": 0,
+          "width": 300,
+          "height": 64
+        }
+      },
+      {
+        "key": "solid-1",
+        "border": {
+          "x": 336,
+          "y": 0,
+          "width": 300,
+          "height": 64
+        },
+        "padding": {
+          "x": 336,
+          "y": 0,
+          "width": 300,
+          "height": 64
+        },
+        "content": {
+          "x": 336,
+          "y": 0,
+          "width": 300,
+          "height": 64
+        }
+      },
+      {
+        "key": "double-0",
+        "border": {
+          "x": 16,
+          "y": 64,
+          "width": 300,
+          "height": 64
+        },
+        "padding": {
+          "x": 16,
+          "y": 64,
+          "width": 300,
+          "height": 64
+        },
+        "content": {
+          "x": 16,
+          "y": 64,
+          "width": 300,
+          "height": 64
+        }
+      },
+      {
+        "key": "double-1",
+        "border": {
+          "x": 336,
+          "y": 64,
+          "width": 300,
+          "height": 64
+        },
+        "padding": {
+          "x": 336,
+          "y": 64,
+          "width": 300,
+          "height": 64
+        },
+        "content": {
+          "x": 336,
+          "y": 64,
+          "width": 300,
+          "height": 64
+        }
+      },
+      {
+        "key": "dotted-0",
+        "border": {
+          "x": 16,
+          "y": 128,
+          "width": 300,
+          "height": 64
+        },
+        "padding": {
+          "x": 16,
+          "y": 128,
+          "width": 300,
+          "height": 64
+        },
+        "content": {
+          "x": 16,
+          "y": 128,
+          "width": 300,
+          "height": 64
+        }
+      },
+      {
+        "key": "dotted-1",
+        "border": {
+          "x": 336,
+          "y": 128,
+          "width": 300,
+          "height": 64
+        },
+        "padding": {
+          "x": 336,
+          "y": 128,
+          "width": 300,
+          "height": 64
+        },
+        "content": {
+          "x": 336,
+          "y": 128,
+          "width": 300,
+          "height": 64
+        }
+      },
+      {
+        "key": "dashed-0",
+        "border": {
+          "x": 16,
+          "y": 192,
+          "width": 300,
+          "height": 64
+        },
+        "padding": {
+          "x": 16,
+          "y": 192,
+          "width": 300,
+          "height": 64
+        },
+        "content": {
+          "x": 16,
+          "y": 192,
+          "width": 300,
+          "height": 64
+        }
+      },
+      {
+        "key": "dashed-1",
+        "border": {
+          "x": 336,
+          "y": 192,
+          "width": 300,
+          "height": 64
+        },
+        "padding": {
+          "x": 336,
+          "y": 192,
+          "width": 300,
+          "height": 64
+        },
+        "content": {
+          "x": 336,
+          "y": 192,
+          "width": 300,
+          "height": 64
+        }
+      },
+      {
+        "key": "wavy-0",
+        "border": {
+          "x": 16,
+          "y": 256,
+          "width": 300,
+          "height": 64
+        },
+        "padding": {
+          "x": 16,
+          "y": 256,
+          "width": 300,
+          "height": 64
+        },
+        "content": {
+          "x": 16,
+          "y": 256,
+          "width": 300,
+          "height": 64
+        }
+      },
+      {
+        "key": "wavy-1",
+        "border": {
+          "x": 336,
+          "y": 256,
+          "width": 300,
+          "height": 64
+        },
+        "padding": {
+          "x": 336,
+          "y": 256,
+          "width": 300,
+          "height": 64
+        },
+        "content": {
+          "x": 336,
+          "y": 256,
+          "width": 300,
+          "height": 64
+        }
+      }
+    ],
+    "lines": [
+      {
+        "key": "solid-0",
+        "text": ["强调随行，gyp"],
+        "geometry": [
+          {
+            "x": 16,
+            "baseline": 46,
+            "height": 64
+          }
+        ]
+      },
+      {
+        "key": "solid-1",
+        "text": ["强调随行，gyp"],
+        "geometry": [
+          {
+            "x": 336,
+            "baseline": 46,
+            "height": 64
+          }
+        ]
+      },
+      {
+        "key": "double-0",
+        "text": ["强调随行，gyp"],
+        "geometry": [
+          {
+            "x": 16,
+            "baseline": 110,
+            "height": 64
+          }
+        ]
+      },
+      {
+        "key": "double-1",
+        "text": ["强调随行，gyp"],
+        "geometry": [
+          {
+            "x": 336,
+            "baseline": 110,
+            "height": 64
+          }
+        ]
+      },
+      {
+        "key": "dotted-0",
+        "text": ["强调随行，gyp"],
+        "geometry": [
+          {
+            "x": 16,
+            "baseline": 174,
+            "height": 64
+          }
+        ]
+      },
+      {
+        "key": "dotted-1",
+        "text": ["强调随行，gyp"],
+        "geometry": [
+          {
+            "x": 336,
+            "baseline": 174,
+            "height": 64
+          }
+        ]
+      },
+      {
+        "key": "dashed-0",
+        "text": ["强调随行，gyp"],
+        "geometry": [
+          {
+            "x": 16,
+            "baseline": 238,
+            "height": 64
+          }
+        ]
+      },
+      {
+        "key": "dashed-1",
+        "text": ["强调随行，gyp"],
+        "geometry": [
+          {
+            "x": 336,
+            "baseline": 238,
+            "height": 64
+          }
+        ]
+      },
+      {
+        "key": "wavy-0",
+        "text": ["强调随行，gyp"],
+        "geometry": [
+          {
+            "x": 16,
+            "baseline": 302,
+            "height": 64
+          }
+        ]
+      },
+      {
+        "key": "wavy-1",
+        "text": ["强调随行，gyp"],
+        "geometry": [
+          {
+            "x": 336,
+            "baseline": 302,
+            "height": 64
+          }
+        ]
+      }
+    ]
+  }
+}

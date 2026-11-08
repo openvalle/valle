@@ -2416,6 +2416,7 @@ version = "0.1.0"
 dependencies = [
  "fearless_simd",
  "i_overlay",
+ "icu_properties",
  "image-webp",
  "indoc",
  "kurbo",

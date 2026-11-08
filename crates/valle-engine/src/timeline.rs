@@ -638,6 +638,58 @@ impl Lowering<'_> {
         Ok(out)
     }
 
+    /// Resolve font resources and check caption styles against the template's controls.
+    /// Runs share the text controls; placement and animation belong to the whole caption.
+    fn caption_style(
+        &mut self,
+        style: &Map<String, Value>,
+        d: &Declared,
+        at: &str,
+        run: bool,
+    ) -> Result<Map<String, Value>, Error> {
+        let mut out = Map::new();
+        for (k, v) in style {
+            let w = format!("{at}.{k}");
+            if run
+                && matches!(
+                    k.as_str(),
+                    "background"
+                        | "backgroundColor"
+                        | "position"
+                        | "margin"
+                        | "maxWidth"
+                        | "animation"
+                        | "transition"
+                        | "textAlign"
+                )
+            {
+                return Err(format!(
+                    "{w}: {k} belongs to the caption track's style, not a run"
+                ));
+            }
+            if k == "font" {
+                let alias = v
+                    .as_str()
+                    .ok_or_else(|| format!("{w}: the alias of a font resource"))?;
+                let files = self.files(alias, &w)?;
+                out.insert(
+                    "fontFamily".into(),
+                    Value::String(self.resource(Holds::Font, files)),
+                );
+                continue;
+            }
+            let p = d
+                .props
+                .iter()
+                .find(|p| p.name == *k && k != "fontFamily")
+                .ok_or_else(|| format!("{w}: a caption style has no {k}"))?;
+            let value =
+                front::controls::check(&p.kind, v.clone()).map_err(|e| format!("{w}: {e}"))?;
+            out.insert(k.clone(), value);
+        }
+        Ok(out)
+    }
+
     /// A caption track: each caption a clip of the table, drawn by its presenter or by the
     /// standard template in the track's style, given its `caption`, `{ text, runs }`.
     fn captions(&mut self, track: &Track, fill: &str) -> Result<String, Error> {
@@ -672,31 +724,12 @@ impl Lowering<'_> {
                     data: None,
                     resources: BTreeMap::new(),
                 };
-                for (k, v) in track.style.iter().flatten() {
-                    let w = format!("{at}.style.{k}");
-                    let value = match k.as_str() {
-                        "font" => {
-                            let alias = v
-                                .as_str()
-                                .ok_or_else(|| format!("{w}: the alias of a font resource"))?;
-                            let files = self.files(alias, &w)?;
-                            Value::String(self.resource(Holds::Font, files))
-                        }
-                        _ if k != "fontFamily" && d.props.iter().any(|p| p.name == *k) => v.clone(),
-                        _ => {
-                            let mut names: Vec<&str> = (d.props.iter())
-                                .map(|p| p.name.as_str())
-                                .filter(|n| *n != "fontFamily")
-                                .collect();
-                            names.insert(0, "font");
-                            return Err(format!(
-                                "{w}: a caption style has no {k}; it takes {}",
-                                names.join(", ")
-                            ));
-                        }
-                    };
-                    let k = if k == "font" { "fontFamily" } else { k };
-                    c.props.push((k.to_string(), Animated::Constant(value)));
+                if let Some(style) = &track.style {
+                    c.props = self
+                        .caption_style(style, &d, &format!("{at}.style"), false)?
+                        .into_iter()
+                        .map(|(k, v)| (k, Animated::Constant(v)))
+                        .collect();
                 }
                 (Some(c), d, name)
             }
@@ -724,15 +757,28 @@ impl Lowering<'_> {
                     (intro + outro).seconds_text()
                 ));
             }
-            let runs: Vec<Value> = (runs.iter())
-                .map(|r| {
-                    serde_json::json!({
-                        "text": r.text,
-                        "start": r.start.seconds(),
-                        "end": r.end.seconds(),
-                    })
+            let runs: Vec<Value> = runs
+                .iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    let mut run = serde_json::json!({ "text": r.text,
+                    "start": r.start.seconds(), "end": r.end.seconds() });
+                    if !r.style.is_empty() {
+                        let style = if made.is_some() {
+                            self.caption_style(
+                                &r.style,
+                                &d,
+                                &format!("{}.runs[{i}].style", clip.at),
+                                true,
+                            )?
+                        } else {
+                            r.style.clone()
+                        };
+                        run["style"] = Value::Object(style);
+                    }
+                    Ok(run)
                 })
-                .collect();
+                .collect::<Result<_, Error>>()?;
             captions.push(serde_json::json!({ "text": text, "runs": runs }));
             let table = template::Clip {
                 start: clip.start,
@@ -1670,6 +1716,270 @@ mod tests {
                     }
                 }
             }
+        });
+    }
+
+    #[test]
+    fn caption_run_styles_inherit_override_and_reset_text_properties() {
+        run(|| {
+            let mut scene = caption(
+                json!({ "fontSize": 28, "fontWeight": 500, "fontStyle": "italic",
+                    "lineHeight": 1.8, "letterSpacing": 2, "wordSpacing": 3,
+                    "strokeWidth": 2, "strokeColor": "blue", "shadow": true,
+                    "textShadow": "2px 3px 4px red", "textDecoration": "underline",
+                    "textUnderlineOffset": "12px", "textDecorationSkipInk": "none" }),
+                json!([{ "start": 0, "duration": 3, "runs": [
+                    { "text": "AB ", "start": 0, "end": 1 },
+                    { "text": "CD ", "start": 1, "end": 2, "style": {
+                        "fontSize": 40, "fontWeight": 800, "fontStyle": "normal", "textColor": "red",
+                        "lineHeight": 1.2, "letterSpacing": 0, "wordSpacing": 1,
+                        "strokeWidth": 4, "strokeColor": "lime", "shadow": false,
+                        "textDecoration": "line-through", "textUnderlineOffset": "0.2em",
+                        "textDecorationSkipInk": "all" } },
+                    { "text": "EF", "start": 2, "end": 3,
+                      "style": { "strokeWidth": 0, "textDecoration": "none" } }
+                ] }]),
+            );
+            let f = frame(&mut scene, 0.5);
+            let (_, lines) = caption_lines(&f, &["AB CD EF"]);
+            for (cluster, size, weight, spacing, stroke, shadow, decoration) in [
+                (0, 28.0, 500.0, 2.0, 2.0, true, Some([true, false, false])),
+                (3, 40.0, 800.0, 0.0, 4.0, false, Some([false, false, true])),
+                (6, 28.0, 500.0, 2.0, 0.0, true, None),
+            ] {
+                let g = lines.glyphs.iter().find(|g| g.cluster == cluster).unwrap();
+                let s = &f.styles[g.node as usize];
+                assert_eq!(s.font.size, size);
+                assert_eq!(s.font.weight, weight);
+                assert_eq!(s.font.spacing, spacing);
+                assert_eq!(s.font.stroke, stroke);
+                assert_eq!(
+                    s.font
+                        .underline_offset
+                        .as_ref()
+                        .unwrap()
+                        .resolve(size as f32),
+                    if cluster == 3 { 8.0 } else { 12.0 }
+                );
+                assert_eq!(
+                    s.font.skip_ink,
+                    if cluster == 3 {
+                        crate::style::SkipInk::All
+                    } else {
+                        crate::style::SkipInk::None
+                    }
+                );
+                assert_eq!(s.font.shadows.len(), usize::from(shadow));
+                assert_eq!(s.decorations.last().map(|d| d.lines), decoration);
+                assert_eq!(s.font.word_spacing, if cluster == 3 { 1.0 } else { 3.0 });
+                assert_eq!(
+                    s.font.line_height,
+                    crate::style::LineHeight::Factor(if cluster == 3 { 1.2 } else { 1.8 })
+                );
+                assert_eq!(
+                    s.font.style,
+                    if cluster == 3 {
+                        crate::style::FontStyle::Normal
+                    } else {
+                        crate::style::FontStyle::Italic
+                    }
+                );
+                if cluster == 3 {
+                    assert_eq!(s.color, [1.0, 0.0, 0.0, 1.0]);
+                    assert_eq!(s.font.stroke_color, Some([0.0, 1.0, 0.0, 1.0]));
+                } else {
+                    assert_eq!(s.font.shadows[0].offset, [2.0, 3.0]);
+                    assert_eq!(s.font.shadows[0].blur, 4.0);
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn plain_captions_do_not_restart_decorations_at_each_character() {
+        run(|| {
+            for animation in ["none", "fade", "pop", "slide"] {
+                let mut scene = caption(
+                    json!({ "animation": animation, "fontSize": 40,
+                        "textDecoration": "underline wavy 2px", "textUnderlineOffset": "12px" }),
+                    json!([{ "text": "强调 Valle gyp", "start": 0, "duration": 2 }]),
+                );
+                let f = frame(&mut scene, 0.5);
+                let (_, lines) = caption_lines(&f, &["强调 Valle gyp"]);
+                let along = [
+                    lines.runs.first().unwrap().x[0],
+                    lines.runs.last().unwrap().x[1],
+                ];
+                assert!(!lines.decorations.is_empty());
+                assert!(
+                    lines.decorations.iter().all(|d| d.along == along),
+                    "{animation}: every character must share the same decorating box"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn caption_run_style_errors_name_the_field_even_on_later_clips() {
+        for (style, field) in [
+            (json!({ "fontSize": -1 }), "fontSize"),
+            (json!({ "fontWeight": 1001 }), "fontWeight"),
+            (json!({ "textColor": "bad-color" }), "textColor"),
+            (json!({ "shadow": 1 }), "shadow"),
+            (json!({ "fontStyle": "bad-style" }), "fontStyle"),
+            (json!({ "strokeWidth": -1 }), "strokeWidth"),
+            (json!({ "animation": "pop" }), "animation"),
+            (json!({ "bogus": true }), "bogus"),
+        ] {
+            let value = json!({ "canvas": { "width": 640, "height": 360, "fps": 30 },
+                "tracks": { "caption": [{ "clips": [
+                    { "text": "valid", "start": 0, "duration": 1 },
+                    { "start": 20, "duration": 1, "runs": [
+                        { "text": "later", "start": 0, "end": 1, "style": style }
+                    ] }
+                ] }] } });
+            let doc = Document::read(&value).unwrap();
+            let Err(error) = lower(
+                "test.timeline.json",
+                &doc,
+                &Host {
+                    read: &|_| None,
+                    length: &|_| None,
+                },
+            ) else {
+                panic!("accepted {style}");
+            };
+            assert!(
+                error.contains(&format!("clips[1].runs[0].style.{field}")),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn styled_caption_runs_keep_layout_when_highlighting_revealing_and_seeking() {
+        run(|| {
+            let mut scene = fixture("styled");
+            for start in [2.0, 4.0] {
+                let last = frame(&mut scene, start + 59.0 / 30.0);
+                let i = last.layout.lines.iter().position(Option::is_some).unwrap();
+                let reference = last.layout.lines[i].as_ref().unwrap();
+                for offset in [0.0, 0.5, 0.6, 1.0, 1.3, 1.8, 0.6, 0.0] {
+                    let f = frame(&mut scene, start + offset);
+                    let j = f.layout.lines.iter().position(Option::is_some).unwrap();
+                    let lines = f.layout.lines[j].as_ref().unwrap();
+                    assert_eq!(lines, reference, "at {}", start + offset);
+                    assert_eq!(f.layout.boxes[j], last.layout.boxes[i]);
+                    if start == 2.0 {
+                        for (cluster, begins, before, after) in [
+                            (0, 0.0, [148, 163, 184], [244, 114, 182]),
+                            (7, 0.6, [100, 116, 139], [52, 211, 153]),
+                            (14, 1.3, [255, 255, 255], [251, 191, 36]),
+                        ] {
+                            let glyph = lines.glyphs.iter().find(|g| g.cluster == cluster).unwrap();
+                            let [r, g, b] = if offset < begins { before } else { after };
+                            assert_eq!(
+                                f.styles[glyph.node as usize].color,
+                                [r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0, 1.0]
+                            );
+                        }
+                    }
+                    if start == 4.0 {
+                        // A whole timed run, including its spaces' decorations, is hidden.
+                        for (cluster, begins) in [(0, 0.0), (11, 0.6), (23, 1.3)] {
+                            let g = lines.glyphs.iter().find(|g| g.cluster == cluster).unwrap();
+                            assert_eq!(f.styles[g.node as usize].visible, offset >= begins);
+                        }
+                        assert_eq!(lines.text.len(), 2);
+                        for word in ["Alpha", "beta", "gamma", "delta", "👩🏽‍💻"] {
+                            assert!(
+                                lines
+                                    .text
+                                    .iter()
+                                    .any(|r| lines.string[r.clone()].contains(word))
+                            );
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn caption_run_fonts_resolve_from_timeline_resources() {
+        let doc = Document::read(&json!({
+            "canvas": { "width": 640, "height": 360, "fps": 30 },
+            "resources": { "body": "body.ttf", "accent": ["regular.ttf", "italic.ttf"] },
+            "tracks": { "caption": [{ "style": { "font": "body" }, "clips": [
+                { "start": 0, "duration": 1, "runs": [
+                    { "text": "Hello", "start": 0, "end": 1, "style": { "font": "accent" } }
+                ] }
+            ] }] }
+        }))
+        .unwrap();
+        let lowered = lower(
+            "edit/timeline.json",
+            &doc,
+            &Host {
+                read: &|_| None,
+                length: &|_| None,
+            },
+        )
+        .unwrap();
+        assert_eq!(lowered.inputs.resources.len(), 2);
+        assert!(
+            lowered
+                .inputs
+                .resources
+                .values()
+                .any(|f| f == &["edit/body.ttf"])
+        );
+        assert!(
+            lowered
+                .inputs
+                .resources
+                .values()
+                .any(|f| f == &["edit/regular.ttf", "edit/italic.ttf"])
+        );
+    }
+
+    #[test]
+    fn custom_caption_presenters_receive_run_styles_without_interpretation() {
+        run(|| {
+            let mut scene = scene(
+                "edit.timeline.json",
+                &json!({
+                    "canvas": { "width": 640, "height": 360, "fps": 30 },
+                    "resources": { "presenter": "words.tsx" },
+                    "tracks": { "caption": [{ "presenter": { "component": "presenter" }, "clips": [
+                        { "start": 0, "duration": 1, "runs": [
+                            { "text": "A", "start": 0, "end": 1,
+                              "style": { "ink": "red", "weight": 750 } }
+                        ] }
+                    ] }] }
+                }),
+                &|path| {
+                    (path == "words.tsx").then(|| {
+                        r#"
+                export const composition = { width: 640, height: 360, fps: 30, duration: 1 };
+                export const role = captionPresenter();
+                export default function Words({ caption }) {
+                  return <Text>{caption.runs.map((r, i) =>
+                    <Span key={i} style={{ color: r.style.ink, fontWeight: r.style.weight }}>
+                      {r.text}
+                    </Span>
+                  )}</Text>;
+                }
+            "#
+                        .into()
+                    })
+                },
+            );
+            let f = frame(&mut scene, 0.5);
+            let (_, lines) = caption_lines(&f, &["A"]);
+            let s = &f.styles[lines.glyphs[0].node as usize];
+            assert_eq!(s.color, [1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(s.font.weight, 750.0);
         });
     }
 

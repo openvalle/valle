@@ -12,11 +12,32 @@ export const controls = {
     fontFamily: string({ default: "sans-serif", label: "Font" }),
     fontSize: number({ default: 60, min: 1, label: "Font size" }),
     fontWeight: number({ default: 600, min: 1, max: 1000, label: "Weight" }),
+    fontStyle: select({
+      default: "normal",
+      values: ["normal", "italic", "oblique"],
+      label: "Font style",
+    }),
+    lineHeight: number({ default: 1.3, min: 0, label: "Line height" }),
+    letterSpacing: number({ default: 0, label: "Letter spacing" }),
+    wordSpacing: number({ default: 0, label: "Word spacing" }),
+    textAlign: select({
+      default: "center",
+      values: ["left", "center", "right", "justify"],
+      label: "Alignment",
+    }),
+    textDecoration: string({ default: "none", label: "Text decoration" }),
+    textUnderlineOffset: string({ default: "auto", label: "Underline offset" }),
+    textDecorationSkipInk: select({
+      default: "auto",
+      values: ["auto", "all", "none"],
+      label: "Skip glyph ink",
+    }),
     textColor: color({ default: "#FFFFFF", label: "Text" }),
     highlight: color({ default: "#FFD23F", label: "Highlight" }),
     strokeWidth: number({ default: 0, min: 0, label: "Stroke width" }),
     strokeColor: color({ default: "#14141A", label: "Stroke" }),
     shadow: boolean({ default: true, label: "Shadow" }),
+    textShadow: string({ default: "0px 4px 14px #000000B0", label: "Text shadow" }),
     background: select({ default: "box", values: ["box", "bar", "none"], label: "Background" }),
     backgroundColor: color({ default: "#000000A6", label: "Background color" }),
     position: select({ default: "bottom", values: ["bottom", "top", "middle"], label: "Position" }),
@@ -31,43 +52,106 @@ export const controls = {
   },
 };
 
-export default function Caption({
-  caption,
-  fontFamily,
-  fontSize,
-  fontWeight,
-  textColor,
-  highlight,
-  strokeWidth,
-  strokeColor,
-  shadow,
-  background,
-  backgroundColor,
-  position,
-  margin,
-  maxWidth,
-  animation,
-  transition,
-}) {
+// The same basic text properties apply to the whole caption and to individual runs.
+function textStyle(s) {
+  return {
+    fontFamily: s.fontFamily,
+    fontSize: s.fontSize,
+    fontWeight: s.fontWeight,
+    fontStyle: s.fontStyle,
+    lineHeight: s.lineHeight,
+    letterSpacing: s.letterSpacing,
+    wordSpacing: s.wordSpacing,
+    color: s.textColor,
+    textDecoration: s.textDecoration,
+    textUnderlineOffset: s.textUnderlineOffset,
+    textDecorationSkipInk: s.textDecorationSkipInk,
+    WebkitTextStroke: `${s.strokeWidth}px ${s.strokeColor}`,
+    // Keep the fill over the stroke, including overlapping CJK contours.
+    paintOrder: "stroke fill",
+    textShadow: s.shadow ? s.textShadow : "none",
+  };
+}
+
+function Words({ run, base, animation, seconds, duration }) {
+  for (const [key, value] of Object.entries(run.style ?? {})) {
+    if (!Object.hasOwn(base, key)) throw new Error(`caption run.style has no ${key}`);
+    if (typeof value !== typeof base[key]) {
+      throw new Error(`caption run.style.${key} must be a ${typeof base[key]}`);
+    }
+  }
+  const style = { ...base, ...run.style };
+  const activeStyle = (start) => ({
+    color: animation === "karaoke" && seconds >= start ? style.highlight : style.textColor,
+    visibility: animation === "typewriter" && seconds < start ? "hidden" : "visible",
+  });
+  // Only untimed karaoke/typewriter captions need character splitting. Static text and timed
+  // runs keep one decorating box, including their spaces.
+  if (run.start !== undefined || (animation !== "karaoke" && animation !== "typewriter")) {
+    return <Span style={{ ...textStyle(style), ...activeStyle(run.start ?? 0) }}>{run.text}</Span>;
+  }
+  return (
+    <Span
+      style={{ ...textStyle(style), textDecoration: "none" }}
+      split="char"
+      perUnit={(unit) => ({
+        // Decorations follow the revealed characters, too, not the spaces between them.
+        textDecoration: style.textDecoration,
+        ...activeStyle((unit.index * Math.max(duration - 0.3, 0.1)) / Math.max(unit.count, 1)),
+      })}
+    >
+      {run.text}
+    </Span>
+  );
+}
+
+export default function Caption({ caption, ...props }) {
+  const {
+    fontFamily,
+    fontSize,
+    fontWeight,
+    fontStyle,
+    lineHeight,
+    letterSpacing,
+    wordSpacing,
+    textColor,
+    highlight,
+    strokeWidth,
+    strokeColor,
+    shadow,
+    textShadow,
+    textDecoration,
+    textUnderlineOffset,
+    textDecorationSkipInk,
+    textAlign,
+    background,
+    backgroundColor,
+    position,
+    margin,
+    maxWidth,
+    animation,
+    transition,
+  } = props;
+  const base = {
+    fontFamily,
+    fontSize,
+    fontWeight,
+    fontStyle,
+    lineHeight,
+    letterSpacing,
+    wordSpacing,
+    textColor,
+    highlight,
+    strokeWidth,
+    strokeColor,
+    shadow,
+    textShadow,
+    textDecoration,
+    textUnderlineOffset,
+    textDecorationSkipInk,
+  };
   const { clipSeconds } = useCurrentTime();
   const { width, height, clipDuration } = useComposition();
-  // When each character lights up: at its run's start, or evenly over the caption, finishing a
-  // little before it ends.
-  const runs = caption.runs;
-  const offsets = [];
-  let offset = 0;
-  for (const r of runs) {
-    offsets.push(offset);
-    offset += r.text.length;
-  }
-  const lights = (unit) => {
-    if (runs.length === 0) {
-      return (unit.index * Math.max(clipDuration - 0.3, 0.1)) / Math.max(unit.count, 1);
-    }
-    let k = 0;
-    while (k + 1 < runs.length && offsets[k + 1] <= unit.start) k++;
-    return runs[k].start;
-  };
   const span = Math.max(transition, 0.001);
   const enter = clamp(clipSeconds / span, 0, 1);
   const leave = clamp((clipDuration - clipSeconds) / span, 0, 1);
@@ -86,6 +170,7 @@ export default function Caption({
       : position === "middle"
         ? { top: height / 2 }
         : { bottom: margin };
+  const runs = caption.runs.length ? caption.runs : [{ text: caption.text }];
   return (
     <View
       style={{
@@ -109,29 +194,18 @@ export default function Caption({
         }}
       >
         <Text
-          split="char"
-          perUnit={(unit) => {
-            const lit = clipSeconds >= lights(unit);
-            return {
-              color: animation === "karaoke" && lit ? highlight : textColor,
-              opacity: animation === "typewriter" && !lit ? 0 : 1,
-            };
-          }}
-          style={{
-            fontFamily,
-            fontSize,
-            fontWeight,
-            lineHeight: 1.3,
-            textAlign: "center",
-            whiteSpace: "pre-line",
-            color: textColor,
-            WebkitTextStroke: `${strokeWidth}px ${strokeColor}`,
-            // Keep the letter's fill over the stroke, including overlapping CJK contours.
-            paintOrder: "stroke fill",
-            textShadow: shadow ? "0px 4px 14px #000000B0" : "none",
-          }}
+          style={{ ...textStyle(base), textAlign, whiteSpace: "pre-line", textDecoration: "none" }}
         >
-          {caption.text}
+          {runs.map((run, i) => (
+            <Words
+              key={i}
+              run={run}
+              base={base}
+              animation={animation}
+              seconds={clipSeconds}
+              duration={clipDuration}
+            />
+          ))}
         </Text>
       </View>
     </View>

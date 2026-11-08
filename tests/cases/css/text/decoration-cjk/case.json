@@ -1,0 +1,337 @@
+{
+  "spec": "https://drafts.csswg.org/css-text-decor-4/#text-decoration-skip-ink-property",
+  "assertion": "Auto ink skipping keeps CJK glyphs and punctuation continuously decorated, while Latin descenders still make gaps. Solid, double, dotted, dashed and wavy underlines share this rule; an explicit offset moves the line without changing text layout. Transparent glyph fill isolates the decoration pixels without removing the glyph ink used to compute gaps.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All three browsers keep CJK underlines continuous and skip Latin descenders. Their default offsets and wave/dash shapes differ; Chrome is the visual baseline for those details. With transparent glyph fill, dots and dashes match exactly; solid/double lines differ only at 22 endpoint pixels (max 17), and the wave at 869 rasterized edge pixels (max 96). The allowance covers those reviewed edges. The old engine fails with 2531 changed pixels (max 191), including missing CJK segments and pattern restarts at shaping boundaries. This capture uses the environment recorded beside its PNGs; older cases retain their shared capture environment.",
+    "pixels": {
+      "maxDifference": 100,
+      "maxPixels": 950
+    }
+  },
+  "layout": [
+    {
+      "key": "solid-0",
+      "border": {
+        "x": 16,
+        "y": 0,
+        "width": 300,
+        "height": 64
+      },
+      "padding": {
+        "x": 16,
+        "y": 0,
+        "width": 300,
+        "height": 64
+      },
+      "content": {
+        "x": 16,
+        "y": 0,
+        "width": 300,
+        "height": 64
+      }
+    },
+    {
+      "key": "solid-1",
+      "border": {
+        "x": 336,
+        "y": 0,
+        "width": 300,
+        "height": 64
+      },
+      "padding": {
+        "x": 336,
+        "y": 0,
+        "width": 300,
+        "height": 64
+      },
+      "content": {
+        "x": 336,
+        "y": 0,
+        "width": 300,
+        "height": 64
+      }
+    },
+    {
+      "key": "double-0",
+      "border": {
+        "x": 16,
+        "y": 64,
+        "width": 300,
+        "height": 64
+      },
+      "padding": {
+        "x": 16,
+        "y": 64,
+        "width": 300,
+        "height": 64
+      },
+      "content": {
+        "x": 16,
+        "y": 64,
+        "width": 300,
+        "height": 64
+      }
+    },
+    {
+      "key": "double-1",
+      "border": {
+        "x": 336,
+        "y": 64,
+        "width": 300,
+        "height": 64
+      },
+      "padding": {
+        "x": 336,
+        "y": 64,
+        "width": 300,
+        "height": 64
+      },
+      "content": {
+        "x": 336,
+        "y": 64,
+        "width": 300,
+        "height": 64
+      }
+    },
+    {
+      "key": "dotted-0",
+      "border": {
+        "x": 16,
+        "y": 128,
+        "width": 300,
+        "height": 64
+      },
+      "padding": {
+        "x": 16,
+        "y": 128,
+        "width": 300,
+        "height": 64
+      },
+      "content": {
+        "x": 16,
+        "y": 128,
+        "width": 300,
+        "height": 64
+      }
+    },
+    {
+      "key": "dotted-1",
+      "border": {
+        "x": 336,
+        "y": 128,
+        "width": 300,
+        "height": 64
+      },
+      "padding": {
+        "x": 336,
+        "y": 128,
+        "width": 300,
+        "height": 64
+      },
+      "content": {
+        "x": 336,
+        "y": 128,
+        "width": 300,
+        "height": 64
+      }
+    },
+    {
+      "key": "dashed-0",
+      "border": {
+        "x": 16,
+        "y": 192,
+        "width": 300,
+        "height": 64
+      },
+      "padding": {
+        "x": 16,
+        "y": 192,
+        "width": 300,
+        "height": 64
+      },
+      "content": {
+        "x": 16,
+        "y": 192,
+        "width": 300,
+        "height": 64
+      }
+    },
+    {
+      "key": "dashed-1",
+      "border": {
+        "x": 336,
+        "y": 192,
+        "width": 300,
+        "height": 64
+      },
+      "padding": {
+        "x": 336,
+        "y": 192,
+        "width": 300,
+        "height": 64
+      },
+      "content": {
+        "x": 336,
+        "y": 192,
+        "width": 300,
+        "height": 64
+      }
+    },
+    {
+      "key": "wavy-0",
+      "border": {
+        "x": 16,
+        "y": 256,
+        "width": 300,
+        "height": 64
+      },
+      "padding": {
+        "x": 16,
+        "y": 256,
+        "width": 300,
+        "height": 64
+      },
+      "content": {
+        "x": 16,
+        "y": 256,
+        "width": 300,
+        "height": 64
+      }
+    },
+    {
+      "key": "wavy-1",
+      "border": {
+        "x": 336,
+        "y": 256,
+        "width": 300,
+        "height": 64
+      },
+      "padding": {
+        "x": 336,
+        "y": 256,
+        "width": 300,
+        "height": 64
+      },
+      "content": {
+        "x": 336,
+        "y": 256,
+        "width": 300,
+        "height": 64
+      }
+    }
+  ],
+  "lines": [
+    {
+      "key": "solid-0",
+      "text": ["强调随行，gyp"],
+      "geometry": [
+        {
+          "x": 16,
+          "baseline": 46,
+          "height": 64
+        }
+      ]
+    },
+    {
+      "key": "solid-1",
+      "text": ["强调随行，gyp"],
+      "geometry": [
+        {
+          "x": 336,
+          "baseline": 46,
+          "height": 64
+        }
+      ]
+    },
+    {
+      "key": "double-0",
+      "text": ["强调随行，gyp"],
+      "geometry": [
+        {
+          "x": 16,
+          "baseline": 110,
+          "height": 64
+        }
+      ]
+    },
+    {
+      "key": "double-1",
+      "text": ["强调随行，gyp"],
+      "geometry": [
+        {
+          "x": 336,
+          "baseline": 110,
+          "height": 64
+        }
+      ]
+    },
+    {
+      "key": "dotted-0",
+      "text": ["强调随行，gyp"],
+      "geometry": [
+        {
+          "x": 16,
+          "baseline": 174,
+          "height": 64
+        }
+      ]
+    },
+    {
+      "key": "dotted-1",
+      "text": ["强调随行，gyp"],
+      "geometry": [
+        {
+          "x": 336,
+          "baseline": 174,
+          "height": 64
+        }
+      ]
+    },
+    {
+      "key": "dashed-0",
+      "text": ["强调随行，gyp"],
+      "geometry": [
+        {
+          "x": 16,
+          "baseline": 238,
+          "height": 64
+        }
+      ]
+    },
+    {
+      "key": "dashed-1",
+      "text": ["强调随行，gyp"],
+      "geometry": [
+        {
+          "x": 336,
+          "baseline": 238,
+          "height": 64
+        }
+      ]
+    },
+    {
+      "key": "wavy-0",
+      "text": ["强调随行，gyp"],
+      "geometry": [
+        {
+          "x": 16,
+          "baseline": 302,
+          "height": 64
+        }
+      ]
+    },
+    {
+      "key": "wavy-1",
+      "text": ["强调随行，gyp"],
+      "geometry": [
+        {
+          "x": 336,
+          "baseline": 302,
+          "height": 64
+        }
+      ]
+    }
+  ]
+}

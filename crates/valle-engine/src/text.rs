@@ -126,6 +126,68 @@ pub fn wave(thickness: f32) -> [f32; 2] {
     [2.0, 3.0].map(|k| 0.5 + (k * thickness + 0.5).round())
 }
 
+/// Byte ranges where `text-decoration-skip-ink: auto` keeps CJK underlines continuous.
+/// Unicode Script_Extensions covers shared kana marks and punctuation too. Other Common or
+/// Inherited characters follow the preceding script; leading and opening punctuation follow
+/// the next script. A Span boundary does not start a new script context.
+pub(crate) fn cjk_ranges(text: &str) -> Vec<Range<usize>> {
+    use icu_properties::CodePointMapData;
+    use icu_properties::props::{GeneralCategory, Script};
+    use icu_properties::script::ScriptWithExtensions;
+
+    let scripts = ScriptWithExtensions::new();
+    let categories = CodePointMapData::<GeneralCategory>::new();
+    let mut ranges = Vec::new();
+    let (mut start, mut previous) = (0, None);
+    let mut opening = None;
+    for (i, c) in text.char_indices() {
+        if matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
+            if previous == Some(true) {
+                ranges.push(start..i);
+            }
+            (start, previous) = (i + c.len_utf8(), None);
+            opening = None;
+            continue;
+        }
+        let cjk = scripts.get_script_extensions_val(c).iter().any(|s| {
+            matches!(
+                s,
+                Script::Han
+                    | Script::Hiragana
+                    | Script::Katakana
+                    | Script::Bopomofo
+                    | Script::Hangul
+            )
+        });
+        if !cjk
+            && matches!(
+                scripts.get_script_val(c),
+                Script::Common | Script::Inherited
+            )
+        {
+            if matches!(
+                categories.get(c),
+                GeneralCategory::OpenPunctuation | GeneralCategory::InitialPunctuation
+            ) {
+                opening.get_or_insert(i);
+            }
+            continue;
+        }
+        let boundary = opening.take().unwrap_or(i);
+        if previous.is_some_and(|p| p != cjk) {
+            if previous == Some(true) {
+                ranges.push(start..boundary);
+            }
+            start = boundary;
+        }
+        previous = Some(cjk);
+    }
+    if previous == Some(true) {
+        ranges.push(start..text.len());
+    }
+    ranges
+}
+
 /// A paragraph broken into lines at a width and aligned in it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lines {
@@ -1292,6 +1354,28 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn cjk_ink_skipping_keeps_script_extensions_and_contextual_punctuation() {
+        let parts = |s: &str| {
+            cjk_ranges(s)
+                .into_iter()
+                .map(|r| s[r].to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            parts("(汉字), abc がー。 한글 ㄅ˪"),
+            ["(汉字), ", "がー。 한글 ㄅ˪"]
+        );
+        assert_eq!(parts("Latin（中文） gyp"), ["（中文） "]);
+        assert_eq!(
+            parts("...汉\u{301}字!\n...gyp\n...かな。"),
+            ["...汉\u{301}字!", "...かな。"]
+        );
+        assert_eq!(parts("𠀀𰀀"), ["𠀀𰀀"]);
+        assert!(parts("gyp, ... 123").is_empty());
+        assert!(parts("...").is_empty());
+    }
+
     fn text() -> Text {
         crate::testing::text()
     }
@@ -1334,7 +1418,7 @@ mod tests {
             stroke: 0.0,
             stroke_color: None,
             shadows: Rc::new([]),
-            skip_ink: true,
+            skip_ink: crate::style::SkipInk::Auto,
             underline_offset: None,
         }
     }

@@ -11,9 +11,9 @@ use taffy::{
 use super::color::Rgba;
 use super::computed::{BLENDS, Blend, BorderStyle, Cap, Fit, Join, PAINT_ORDER, Paint, PaintPart};
 use super::font::{
-    Collapse, DecorationStyle, Family, Feature, FontStyle, Leading, OverflowWrap, TextAlign,
-    TextTransform, VARIANTS, Variation, Weight, WordBreak, families, features, font_style, leading,
-    stretch, variants, variations, weight,
+    Collapse, DecorationStyle, Family, Feature, FontStyle, Leading, OverflowWrap, SkipInk,
+    TextAlign, TextTransform, VARIANTS, Variation, Weight, WordBreak, families, features,
+    font_style, leading, stretch, variants, variations, weight,
 };
 use super::property::{BorderPart, Field, NO_FLOW, NO_SCROLL, Sides, USE_FLEX};
 use super::units::{
@@ -204,7 +204,7 @@ pub(super) struct Declared {
     pub(super) stroke: Option<Len>,
     pub(super) stroke_color: Option<Option<Rgba>>,
     pub(super) text_shadows: Option<Vec<Shadowed>>,
-    pub(super) skip_ink: Option<bool>,
+    pub(super) skip_ink: Option<SkipInk>,
     pub(super) underline_offset: Option<Len>,
 }
 
@@ -1366,7 +1366,11 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::TextDecorationStyle => d.decoration_style = decoration_style(&text(v)?)?,
         F::TextDecorationThickness => d.decoration_thickness = thickness_of(v)?,
         F::TextDecorationSkipInk => {
-            let skips = [("auto", true), ("all", true), ("none", false)];
+            let skips = [
+                ("auto", SkipInk::Auto),
+                ("all", SkipInk::All),
+                ("none", SkipInk::None),
+            ];
             d.skip_ink = Some(keyword(v, &skips)?);
         }
         F::TextUnderlineOffset => d.underline_offset = Some(length(v, UNDERLINE_OFFSET)?),

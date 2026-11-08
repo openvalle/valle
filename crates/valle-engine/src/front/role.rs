@@ -188,7 +188,8 @@ pub fn caption(bound: Option<&Value>, role: Role, duration: Tick) -> Result<Valu
             .collect();
         return Ok(serde_json::json!({ "text": PLACEHOLDER, "runs": runs }));
     };
-    let shape = "is { text, runs }, each run { text, start, end } with its seconds into the clip";
+    let shape =
+        "is { text, runs }, each run { text, start, end, style? } with its seconds into the clip";
     let Value::Object(o) = bound else {
         return Err(format!("caption {shape}"));
     };
@@ -205,8 +206,18 @@ pub fn caption(bound: Option<&Value>, role: Role, duration: Tick) -> Result<Valu
             return Err(format!("caption runs[{i}] {shape}"));
         };
         let words = run.get("text").is_some_and(Value::is_string);
-        if !words || run.as_object().is_some_and(|r| r.len() != 3) {
+        if !words
+            || run.as_object().is_none_or(|r| {
+                r.keys()
+                    .any(|k| !matches!(k.as_str(), "text" | "start" | "end" | "style"))
+            })
+        {
             return Err(format!("caption runs[{i}] {shape}"));
+        }
+        if run.get("style").is_some_and(|s| !s.is_object()) {
+            return Err(format!(
+                "caption runs[{i}].style is an object of style overrides"
+            ));
         }
         if start < last || end < start {
             return Err(format!(
@@ -284,6 +295,17 @@ mod tests {
             { "text": "there", "start": 1, "end": 1.5 },
         ] });
         assert_eq!(caption(Some(&bound), role, s(10.0)), Ok(bound));
+        let styled = serde_json::json!({ "text": "Hello", "runs": [
+            { "text": "Hello", "start": 0, "end": 1, "style": { "textColor": "red" } }
+        ] });
+        assert_eq!(caption(Some(&styled), role, s(10.0)), Ok(styled.clone()));
+        let mut invalid = styled;
+        invalid["runs"][0]["style"] = serde_json::json!([]);
+        assert!(
+            caption(Some(&invalid), role, s(10.0))
+                .unwrap_err()
+                .contains("runs[0].style")
+        );
         let late = serde_json::json!({ "text": "a b", "runs": [
             { "text": "a", "start": 2, "end": 3 },
             { "text": "b", "start": 1, "end": 2 },

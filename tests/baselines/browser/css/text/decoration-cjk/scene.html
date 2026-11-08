@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh">
+  <meta charset="utf-8" /><title>CJK text decorations</title>
+  <style>
+    @font-face {
+      font-family: CJK;
+      src: url("/tests/resources/NotoSansSC.ttf");
+      font-weight: 100 900;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+    }
+    #canvas {
+      position: relative;
+      width: 640px;
+      height: 336px;
+      background: white;
+    }
+    .text {
+      position: absolute;
+      width: 300px;
+      height: 64px;
+      font-family: CJK;
+      font-size: 32px;
+      font-weight: 500;
+      line-height: 64px;
+      white-space: pre;
+      color: #202030;
+      -webkit-text-fill-color: transparent;
+      text-decoration-color: #c04060;
+      text-decoration-line: underline;
+      text-decoration-thickness: 2px;
+    }
+  </style>
+  <div id="canvas">
+    <!-- prettier-ignore -->
+    <div
+      class="text"
+      data-key="solid-0"
+      data-text="solid-0"
+      style="left: 16px; top: 0px; text-decoration-style: solid; text-underline-offset: auto"
+    >强调随行，gyp</div>
+    <!-- prettier-ignore -->
+    <div
+      class="text"
+      data-key="solid-1"
+      data-text="solid-1"
+      style="left: 336px; top: 0px; text-decoration-style: solid; text-underline-offset: 12px"
+    >强调随行，gyp</div>
+    <!-- prettier-ignore -->
+    <div
+      class="text"
+      data-key="double-0"
+      data-text="double-0"
+      style="left: 16px; top: 64px; text-decoration-style: double; text-underline-offset: auto"
+    >强调随行，gyp</div>
+    <!-- prettier-ignore -->
+    <div
+      class="text"
+      data-key="double-1"
+      data-text="double-1"
+      style="left: 336px; top: 64px; text-decoration-style: double; text-underline-offset: 12px"
+    >强调随行，gyp</div>
+    <!-- prettier-ignore -->
+    <div
+      class="text"
+      data-key="dotted-0"
+      data-text="dotted-0"
+      style="left: 16px; top: 128px; text-decoration-style: dotted; text-underline-offset: auto"
+    >强调随行，gyp</div>
+    <!-- prettier-ignore -->
+    <div
+      class="text"
+      data-key="dotted-1"
+      data-text="dotted-1"
+      style="left: 336px; top: 128px; text-decoration-style: dotted; text-underline-offset: 12px"
+    >强调随行，gyp</div>
+    <!-- prettier-ignore -->
+    <div
+      class="text"
+      data-key="dashed-0"
+      data-text="dashed-0"
+      style="left: 16px; top: 192px; text-decoration-style: dashed; text-underline-offset: auto"
+    >强调随行，gyp</div>
+    <!-- prettier-ignore -->
+    <div
+      class="text"
+      data-key="dashed-1"
+      data-text="dashed-1"
+      style="left: 336px; top: 192px; text-decoration-style: dashed; text-underline-offset: 12px"
+    >强调随行，gyp</div>
+    <!-- prettier-ignore -->
+    <div
+      class="text"
+      data-key="wavy-0"
+      data-text="wavy-0"
+      style="left: 16px; top: 256px; text-decoration-style: wavy; text-underline-offset: auto"
+    >强调随行，gyp</div>
+    <!-- prettier-ignore -->
+    <div
+      class="text"
+      data-key="wavy-1"
+      data-text="wavy-1"
+      style="left: 336px; top: 256px; text-decoration-style: wavy; text-underline-offset: 12px"
+    >强调随行，gyp</div>
+  </div>
+</html>

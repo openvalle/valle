@@ -1373,7 +1373,7 @@
   const PROPS = {
     view: ["layoutId"],
     text: ["layoutId", "split", "perUnit"],
-    span: [],
+    span: ["split", "perUnit"],
     mask: ["source", "mode", "invert", "layoutId"],
     image: ["src", "layoutId"],
     video: ["src", "trimStart", "rate", "time", "layoutId"],
@@ -1881,7 +1881,10 @@
     if (kind === "shader") shaderOf(node, props, at);
     if (key !== null) G.keys.push(key);
     try {
-      if (kind === "text" && (props.split !== undefined || props.perUnit !== undefined)) {
+      if (
+        (kind === "text" || kind === "span") &&
+        (props.split !== undefined || props.perUnit !== undefined)
+      ) {
         splitOf(node, props, children, type, at);
       } else if (kind === "text" || kind === "span") {
         contentOf(node, children, type, at);

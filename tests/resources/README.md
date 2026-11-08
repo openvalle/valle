@@ -25,6 +25,13 @@ preserved.
 Web/native rendering checks. These have no committed PNG baselines. `words.motion.tsx`
 is a caption presenter with timed runs, configurable color and an intro/outro;
 its paths resolve beside the Timeline that uses it.
+`styled.timeline.json` covers inherited and overridden run styles, decoration/stroke
+resets, mixed sizes, emoji, and stable word wrapping during karaoke and typewriter
+playback. The native and Web players compare these frames live.
+Caption and run styles also share `textUnderlineOffset` (a CSS length or `auto`)
+and `textDecorationSkipInk` (`auto`, `all`, `none`). The CSS `decoration-cjk` case
+checks all five underline styles against browser captures with transparent glyph
+fill, so font antialiasing cannot hide a broken decoration.
 
 `svg/pixels.png` is a shared 4×2 opaque color grid authored for object-fit and
 integer `pixelated` scaling. Dedicated SVG drawings live beside their file cases

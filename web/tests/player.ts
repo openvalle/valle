@@ -36,6 +36,10 @@ const CASES: { entry: string; frames: number[]; props?: Record<string, unknown> 
     frames: [0, 60, 120],
   },
   {
+    entry: "tests/resources/timeline/captions/styled.timeline.json",
+    frames: [15, 60, 75, 105, 120, 150, 179, 210],
+  },
+  {
     entry: "tests/resources/timeline/captions/boundaries.timeline.json",
     frames: [45, 75],
   },
@@ -79,8 +83,9 @@ const PAGE = `<!doctype html>
     window.player = await createPlayer({ canvas, entry, base: "/", fonts: "/fonts/", fetch: fetching });
     if (props) await window.player.setProps(props);
     // The canvas laid out at its size now, not once the worker's first frame reaches the page.
-    canvas.style.width = window.player.info.width + "px";
-    canvas.style.height = window.player.info.height + "px";
+    const { width, height } = window.player.info;
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
     await window.player.draw(index);
     const ms = Math.round(performance.now() - started);
     const [x, y] = [await window.player.pixels(), await decoded(native)];
@@ -96,12 +101,14 @@ const PAGE = `<!doctype html>
       most = Math.max(most, d);
       if (d > 1) {
         differ++;
-        const [px, py] = [(i / 4) % canvas.width, Math.floor(i / 4 / canvas.width)];
+        const [px, py] = [(i / 4) % width, Math.floor(i / 4 / width)];
         [box[0], box[1]] = [Math.min(box[0], px), Math.min(box[1], py)];
         [box[2], box[3]] = [Math.max(box[2], px), Math.max(box[3], py)];
       }
     }
-    return { most, differ, box, pixels: x.length / 4, ms, size: [canvas.width, canvas.height] };
+    // A transferred canvas's DOM width/height may still be the initial 300x150 here.
+    // Use the composition size for the screenshot, as for its CSS size above.
+    return { most, differ, box, pixels: x.length / 4, ms, size: [width, height] };
   };
   /** The frame the player drew last, as a PNG's data address. */
   window.drawn = async () => {

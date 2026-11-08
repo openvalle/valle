@@ -1,0 +1,199 @@
+{
+  "canvas": {
+    "width": 640,
+    "height": 360,
+    "fps": 30,
+    "background": "#172033"
+  },
+  "tracks": {
+    "caption": [
+      {
+        "id": "style0",
+        "style": {
+          "fontSize": 28,
+          "fontWeight": 500,
+          "margin": 24,
+          "maxWidth": 560,
+          "position": "middle",
+          "background": "none",
+          "shadow": true,
+          "textShadow": "0px 2px 3px #000000AA",
+          "strokeWidth": 1,
+          "animation": "none",
+          "textDecoration": "underline",
+          "textUnderlineOffset": "4px"
+        },
+        "clips": [
+          {
+            "id": "caption0",
+            "start": 0,
+            "duration": 2,
+            "runs": [
+              {
+                "text": "混合 ",
+                "start": 0,
+                "end": 0.6
+              },
+              {
+                "text": "Styles ",
+                "start": 0.6,
+                "end": 1.3,
+                "style": {
+                  "fontSize": 36,
+                  "fontStyle": "italic",
+                  "fontWeight": 800,
+                  "textColor": "#FFD23F",
+                  "strokeWidth": 2,
+                  "strokeColor": "#14141A",
+                  "shadow": false,
+                  "textDecoration": "line-through"
+                }
+              },
+              {
+                "text": "👩🏽‍💻",
+                "start": 1.3,
+                "end": 2,
+                "style": {
+                  "textDecoration": "none",
+                  "strokeWidth": 0
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "style1",
+        "style": {
+          "fontSize": 28,
+          "fontWeight": 500,
+          "margin": 24,
+          "maxWidth": 560,
+          "position": "middle",
+          "background": "none",
+          "shadow": true,
+          "textShadow": "0px 2px 3px #000000AA",
+          "strokeWidth": 1,
+          "animation": "karaoke"
+        },
+        "clips": [
+          {
+            "id": "caption1",
+            "start": 2,
+            "duration": 2,
+            "runs": [
+              {
+                "text": "逐词 ",
+                "start": 0,
+                "end": 0.6,
+                "style": {
+                  "textColor": "#94A3B8",
+                  "highlight": "#F472B6",
+                  "fontWeight": 800
+                }
+              },
+              {
+                "text": "点亮 ",
+                "start": 0.6,
+                "end": 1.3,
+                "style": {
+                  "textColor": "#64748B",
+                  "highlight": "#34D399",
+                  "textDecoration": "underline wavy 2px",
+                  "textUnderlineOffset": "5px"
+                }
+              },
+              {
+                "text": "Valle",
+                "start": 1.3,
+                "end": 2,
+                "style": {
+                  "fontStyle": "italic",
+                  "highlight": "#FBBF24",
+                  "shadow": false
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "style2",
+        "style": {
+          "fontSize": 28,
+          "fontWeight": 500,
+          "margin": 24,
+          "maxWidth": 300,
+          "position": "middle",
+          "background": "none",
+          "shadow": true,
+          "textShadow": "0px 2px 3px #000000AA",
+          "strokeWidth": 1,
+          "animation": "typewriter"
+        },
+        "clips": [
+          {
+            "id": "caption2",
+            "start": 4,
+            "duration": 2,
+            "runs": [
+              {
+                "text": "Alpha beta ",
+                "start": 0,
+                "end": 0.6,
+                "style": {
+                  "fontSize": 24,
+                  "textColor": "#60A5FA",
+                  "letterSpacing": 1
+                }
+              },
+              {
+                "text": "gamma delta ",
+                "start": 0.6,
+                "end": 1.3,
+                "style": {
+                  "fontSize": 24,
+                  "fontWeight": 800,
+                  "textColor": "#FBBF24",
+                  "strokeWidth": 0
+                }
+              },
+              {
+                "text": "保持完整 👩🏽‍💻",
+                "start": 1.3,
+                "end": 2,
+                "style": {
+                  "textColor": "#34D399",
+                  "textDecoration": "underline",
+                  "textUnderlineOffset": "4px",
+                  "textDecorationSkipInk": "none"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "style3",
+        "style": {
+          "fontSize": 32,
+          "maxWidth": 560,
+          "position": "middle",
+          "background": "none",
+          "shadow": false,
+          "animation": "none",
+          "textDecoration": "underline wavy 2px #C4B5FD",
+          "textUnderlineOffset": "8px"
+        },
+        "clips": [
+          {
+            "id": "caption3",
+            "start": 6,
+            "duration": 2,
+            "text": "连续波浪线 Valle gyp"
+          }
+        ]
+      }
+    ]
+  }
+}
