@@ -37,10 +37,11 @@ impl Named {
 }
 
 impl Project {
-    /// The timeline at `rel` in the project, parsed.
+    /// The timeline at `rel` in the project, including an empty edit with imported resources.
     pub fn document(&self, rel: &str) -> Result<Document, Error> {
         let text = (fs::read_to_string(self.root.join(rel))).map_err(|e| format!("{rel}: {e}"))?;
-        valle_timeline::parse(&text).map_err(|e| format!("{rel}: {e}"))
+        let value = serde_json::from_str(&text).map_err(|e| format!("{rel}: {e}"))?;
+        Document::read_edit(&value).map_err(|e| format!("{rel}: {e}"))
     }
 
     /// The files the resources of the timeline at `rel` name.
@@ -66,6 +67,33 @@ impl Project {
         out
     }
 
+    /// Resources of this timeline and those it nests, with paths relative to their own file.
+    pub fn dependencies(&self, rel: &str, doc: &Document) -> Vec<Named> {
+        let mut seen = BTreeSet::from([absolute(&self.root.join(rel))]);
+        let mut out = self.named(rel, doc);
+        let mut i = 0;
+        while i < out.len() {
+            let n = &out[i];
+            let parent = self.root.join(&n.timeline);
+            let full = absolute(&parent.parent().unwrap_or(&self.root).join(&n.written));
+            if !n.missing
+                && !n.written.starts_with("http://")
+                && !n.written.starts_with("https://")
+                && n.written.ends_with(".json")
+                && seen.insert(full.clone())
+            {
+                let path = self
+                    .relative(&full)
+                    .unwrap_or_else(|| full.display().to_string());
+                if let Ok(doc) = self.document(&path) {
+                    out.extend(self.named(&path, &doc));
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+
     /// The project at a glance: its canvas, timelines with their tracks and clips, resources,
     /// external and missing files, snapshots and the last render.
     pub fn show(&self) -> Result<Value, Error> {
@@ -87,12 +115,14 @@ impl Project {
                         "clips": clips,
                         "duration": doc.duration.seconds(),
                     }));
-                    named.extend(self.named(&rel, &doc));
+                    named.extend(self.dependencies(&rel, &doc));
                 }
                 Err(e) => timelines.push(json!({ "path": rel, "error": e })),
             }
         }
         let history = self.history()?;
+        let mut seen = BTreeSet::new();
+        named.retain(|n| seen.insert((n.timeline.clone(), n.alias.clone(), n.written.clone())));
         let listed = |pick: fn(&Named) -> bool| -> Vec<Value> {
             named.iter().filter(|n| pick(n)).map(Named::json).collect()
         };
@@ -114,32 +144,23 @@ impl Project {
     /// sees: missing files and components out of their folders; and its external files.
     pub fn check(&self, rel: &str) -> Result<(Vec<String>, Vec<Value>), Error> {
         let (mut problems, mut external) = (Vec::new(), Vec::new());
-        let mut seen = BTreeSet::new();
-        let mut todo = vec![rel.to_string()];
-        while let Some(rel) = todo.pop() {
-            if !seen.insert(rel.clone()) {
+        let doc = self.document(rel)?;
+        for n in self.dependencies(rel, &doc) {
+            if n.external {
+                external.push(n.json());
+            }
+            if n.missing {
+                problems.push(format!(
+                    "{}: resource {} names {}, which is not there",
+                    n.timeline, n.alias, n.written
+                ));
                 continue;
             }
-            let doc = self.document(&rel)?;
-            for n in self.named(&rel, &doc) {
-                if n.external {
-                    external.push(n.json());
-                }
-                if n.missing {
-                    problems.push(format!(
-                        "{rel}: resource {} names {}, which is not there",
-                        n.alias, n.written
-                    ));
-                    continue;
-                }
-                let Some(path) = &n.path else {
-                    continue;
-                };
-                if path.ends_with(".motion.tsx") {
-                    problems.extend(self.boundary(path));
-                } else if path.ends_with(".json") && self.document(path).is_ok() {
-                    todo.push(path.clone());
-                }
+            let Some(path) = &n.path else {
+                continue;
+            };
+            if path.ends_with(".motion.tsx") {
+                problems.extend(self.boundary(path));
             }
         }
         Ok((problems, external))

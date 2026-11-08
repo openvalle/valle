@@ -154,6 +154,36 @@ fn gpu() -> bool {
 }
 
 #[test]
+fn project_output_uses_color_alpha_instead_of_its_spelling() {
+    if !gpu() {
+        return;
+    }
+    let dir = folder("project-color");
+    valle(&["project", "create", "."], &dir);
+    std::fs::remove_dir(dir.join("renders")).unwrap();
+    for (color, ext) in [
+        ("#123456", "mp4"),
+        ("#123456ff", "mp4"),
+        ("black", "mp4"),
+        ("rgba(0, 0, 0, 1)", "mp4"),
+        ("#12345680", "mov"),
+    ] {
+        let doc = serde_json::json!({"canvas":{"width":64,"height":36,"fps":30,"background":color},
+            "tracks":{"visual":[{"items":[{"id":"one","kind":"solid","color":"transparent","duration":0.1}]}]}});
+        std::fs::write(dir.join("timeline.json"), doc.to_string()).unwrap();
+        let result = valle(&["project", "render"], &dir);
+        assert_eq!(
+            Path::new(result["file"].as_str().unwrap())
+                .extension()
+                .unwrap(),
+            ext,
+            "{color}: {result}"
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn ffmpeg_encodes_what_the_frame_shows() {
     if !gpu() {
         return;

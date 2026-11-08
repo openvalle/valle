@@ -60,7 +60,7 @@ usage: valle <command> [options]
                                        missing, snapshots and last render
   project add <file or folder>… [--link]
                                        copy files in (components/, else media/), or link them
-                                       where they are; gives each an alias and resource entry
+                                       where they are; binds each in the entry's resources
   project check [timeline] [--cost]    check a timeline, its files and components' folders;
                                        --cost also plans every frame
   project save [-m <message>]          save a snapshot of the sources
@@ -237,16 +237,16 @@ fn run(words: &[String]) -> (Result<Value, Failure>, bool) {
             _ => return Err(usage()),
         };
         let mut args = Args::parse(rest)?;
-        let document = args.file.ends_with(".timeline.json");
+        let document = args.file.ends_with(".json");
         args.timeline = group == "timeline";
         if group == "motion" && document {
-            return Err(Failure::new("usage", "a .timeline.json is a timeline")
+            return Err(Failure::new("usage", "a JSON document is a timeline")
                 .hint(format!("valle timeline {command} {}", args.file)));
         }
         if group == "timeline" && !document {
             return Err(Failure::new(
                 "usage",
-                "valle timeline takes a .timeline.json",
+                "valle timeline takes a JSON document",
             ));
         }
         match command {

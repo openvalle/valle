@@ -1,13 +1,13 @@
 //! `valle project add`: files and folders copied into the project, or linked where they are,
-//! each with a resource alias to bind it by and the entry a timeline's `resources` takes. A
-//! component goes to `components/`, anything else to `media/`. The timelines are not changed.
+//! each bound in the entry timeline's `resources`. A component goes to `components/`, anything
+//! else to `media/`. Importing resources does not add clips.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use crate::{Error, Project, absolute, digest};
+use crate::{Error, Project, absolute, digest, pretty, write};
 
 /// What `add` did with one file or folder.
 struct Added {
@@ -20,33 +20,71 @@ impl Project {
     /// could not be added, the others are then kept, and adding them again reuses them.
     pub fn add(&self, from: &[PathBuf], link: bool) -> Result<Value, Error> {
         let _lock = self.lock()?;
-        let mut aliases = self.aliases();
+        let entry = self.root.join(&self.timeline);
+        let bytes = fs::read(&entry).map_err(|e| format!("{}: {e}", entry.display()))?;
+        let mut doc: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        valle_timeline::Document::read_edit(&doc)?;
+        let before = doc.clone();
+        let resources = doc
+            .as_object_mut()
+            .ok_or("a timeline object")?
+            .entry("resources")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .ok_or("resources is an object")?;
+        let folder = entry.parent().unwrap_or(&self.root);
         let (mut added, mut failed) = (Vec::new(), Vec::new());
         for source in from {
             let shown = source.display().to_string();
             match self.add_one(source, link) {
                 Ok(a) => {
-                    let file = match self.component(&a.path) {
-                        Some(entry) => entry,
-                        None => a.path.clone(),
-                    };
-                    let alias = alias(&file, &aliases);
-                    aliases.push(alias.clone());
-                    let named = alias.clone();
-                    let resource = match link {
-                        true => file.clone(),
-                        false => self.for_entry(&file),
-                    };
-                    added.push(json!({
-                        "from": shown,
-                        "path": a.path,
-                        "reused": a.reused,
-                        "alias": named,
-                        "resource": Value::Object([(alias, json!(resource))].into_iter().collect()),
-                    }));
+                    let mut files = Vec::new();
+                    let component = self.component(&a.path);
+                    if let Some(entry) = &component {
+                        files.push(entry.clone());
+                    } else if self.root.join(&a.path).is_dir() {
+                        crate::history::walk(&self.root, &a.path, &mut files);
+                        files.sort();
+                    } else {
+                        files.push(a.path.clone());
+                    }
+                    if files.is_empty() {
+                        failed.push(json!({ "from": shown, "message": format!("{shown}: no files to add") }));
+                    }
+                    for file in files {
+                        let resource = if Path::new(&file).is_absolute() {
+                            file.clone()
+                        } else {
+                            self.for_entry(&file)
+                        };
+                        let full = absolute(&folder.join(&resource));
+                        let existing = resources.iter().find_map(|(name, v)| {
+                            let file = v.as_str().or_else(|| {
+                                v.as_array().filter(|a| a.len() == 1)?.first()?.as_str()
+                            })?;
+                            (absolute(&folder.join(file)) == full).then(|| name.clone())
+                        });
+                        let reused = a.reused || existing.is_some();
+                        let alias = existing.unwrap_or_else(|| {
+                            alias(&file, &resources.keys().cloned().collect::<Vec<_>>())
+                        });
+                        resources
+                            .entry(alias.clone())
+                            .or_insert_with(|| json!(resource));
+                        added.push(json!({
+                            "from": shown,
+                            "path": if component.is_some() { &a.path } else { &file },
+                            "reused": reused,
+                            "alias": alias,
+                            "resource": Value::Object([(alias.clone(), resources[&alias].clone())].into_iter().collect()),
+                        }));
+                    }
                 }
                 Err(message) => failed.push(json!({ "from": shown, "message": message })),
             }
+        }
+        if !added.is_empty() && before != doc {
+            write(&entry, &pretty(&doc), true)?;
         }
         if added.is_empty() && !failed.is_empty() {
             let first = failed[0]["message"]
@@ -77,11 +115,8 @@ impl Project {
                 reused: false,
             });
         }
-        if self.relative(source).is_some() {
-            return Err(format!(
-                "{}: in the project already; a timeline's resources name it by its path",
-                source.display()
-            ));
+        if let Some(path) = self.relative(source) {
+            return Ok(Added { path, reused: true });
         }
         let folder = if component { "components" } else { "media" };
         let dir = self.root.join(folder);
@@ -127,24 +162,6 @@ impl Project {
     fn for_entry(&self, path: &str) -> String {
         let depth = self.timeline.matches('/').count();
         format!("{}{path}", "../".repeat(depth))
-    }
-
-    /// The resource aliases of every timeline.
-    fn aliases(&self) -> Vec<String> {
-        (self.timelines().iter())
-            .filter_map(|t| fs::read_to_string(self.root.join(t)).ok())
-            .filter_map(|text| serde_json::from_str::<Value>(&text).ok())
-            .filter_map(|j| {
-                Some(
-                    j["resources"]
-                        .as_object()?
-                        .keys()
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .flatten()
-            .collect()
     }
 }
 

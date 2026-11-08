@@ -53,6 +53,27 @@ impl Drop for Timeline {
 }
 
 #[test]
+fn a_new_projects_default_timeline_can_be_edited_and_queried() {
+    let root = std::env::temp_dir().join(format!("valle-default-timeline-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let created = Command::new(VALLE)
+        .args(["project", "create"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(created.status.success(), "{created:?}");
+    let timeline = Timeline(root.join("timeline.json"));
+    assert_eq!(timeline.run("query", &[])["status"], "ok");
+    assert_eq!(
+        timeline.edit(json!({"op":"add","track":"tracks.visual[0]","clip":{
+            "id":"first","kind":"solid","color":"blue","duration":1
+        }}))["status"],
+        "ok"
+    );
+    assert_eq!(timeline.run("query", &[])["clips"][0]["id"], "first");
+}
+
+#[test]
 fn query_and_edit_share_addresses_and_zero_based_array_indices() {
     let timeline = Timeline::new(
         "addresses",

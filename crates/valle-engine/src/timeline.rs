@@ -379,6 +379,9 @@ impl Lowering<'_> {
         if let Some(c) = scope.composition {
             props.push(format!("composition={{{c}}}"));
         }
+        if let Some(origin) = scope.origin {
+            props.push(format!("origin={}", js(&origin)));
+        }
         if !scope.names.is_empty() {
             props.push(format!("resources={{{}}}", js(&scope.names)));
         }
@@ -1071,6 +1074,7 @@ impl Lowering<'_> {
         let (d, name) = self.component(&c.component, &format!("{at}.component"))?;
         let props = self.given(c, &d, at, None, scope)?;
         let composition = d.composition;
+        scope.origin = Some("~canvas");
         match d.role {
             Role::Clip => {
                 let length = Some(composition.duration);
@@ -1085,7 +1089,7 @@ impl Lowering<'_> {
                 let [cw, ch] = [composition.width, composition.height];
                 writeln!(scope.lets, "  const fit = [{}];", fit_scale(clip, [cw, ch])).unwrap();
                 Ok(format!(
-                    "<View style={{{{ position: \"absolute\", inset: 0, overflow: \"hidden\" }}}}><View style={{{{ position: \"absolute\", left: (size[0] - {cw} * fit[0]) / 2, top: (size[1] - {ch} * fit[1]) / 2, width: {cw}, height: {ch}, transformOrigin: \"0 0\", transform: `scale(${{fit[0]}}, ${{fit[1]}})`, overflow: \"hidden\" }}}}><{name} {{...{props}}} /></View></View>"
+                    "<View style={{{{ position: \"absolute\", inset: 0, overflow: \"hidden\" }}}}><View key=\"~canvas\" style={{{{ position: \"absolute\", left: (size[0] - {cw} * fit[0]) / 2, top: (size[1] - {ch} * fit[1]) / 2, width: {cw}, height: {ch}, transformOrigin: \"0 0\", transform: `scale(${{fit[0]}}, ${{fit[1]}})`, overflow: \"hidden\" }}}}><{name} {{...{props}}} /></View></View>"
                 ))
             }
             Role::Overlay { .. } => {
@@ -1131,7 +1135,7 @@ impl Lowering<'_> {
                     clip.duration.seconds_text()
                 ));
                 Ok(format!(
-                    "<View style={{{{ position: \"absolute\", inset: 0 }}}}><{name} {{...{props}}} /></View>"
+                    "<View key=\"~canvas\" style={{{{ position: \"absolute\", inset: 0 }}}}><{name} {{...{props}}} /></View>"
                 ))
             }
             Role::Transition | Role::Effect | Role::CaptionPresenter { .. } => Err(format!(
@@ -1263,6 +1267,8 @@ fn same_time() -> ClipTime {
 struct Scope {
     time: Option<ClipTime>,
     composition: Option<String>,
+    /// The fitted canvas whose origin bounds() uses, relative to the clip's key path.
+    origin: Option<&'static str>,
     names: Map<String, Value>,
     /// Constants of the clip's component its content reads, as JS.
     lets: String,
@@ -1678,6 +1684,78 @@ mod tests {
             .iter()
             .position(|n| n.children.contains(&(i as u32)))
             .unwrap()
+    }
+
+    #[test]
+    fn bounds_and_anchors_stay_local_to_each_motion_instance() {
+        run(|| {
+            let motion = r#"
+                export const composition = {width:320,height:180,fps:30,duration:4};
+                export default function Scene() {
+                    const b = bounds('target');
+                    const p = anchor('target', 'top-left');
+                    return <View>
+                        <View key="target" style={{position:'absolute',left:40,top:50,width:80,height:40}} />
+                        <View key="marker" style={{position:'absolute',left:0,top:0,width:80,height:40,
+                            transformOrigin:'0 0',translate:`${p.x}px ${p.y}px`,scale:`${b.width/80} ${b.height/40}`}} />
+                    </View>;
+                }
+            "#;
+            let base = json!({
+                "canvas":{"width":640,"height":360,"fps":30},
+                "resources":{"scene":"scene.motion.tsx"},
+                "tracks":{"visual":[{"clips":[
+                    {"id":"a","kind":"motion","component":"scene","start":0,"duration":2,"position":[180,100],"size":[320,180]}
+                ]}, {"clips":[
+                    {"id":"b","kind":"motion","component":"scene","start":0,"duration":2,"position":[470,240],"size":[200,90]}
+                ]}]}
+            });
+            let nested = json!({"canvas":base["canvas"],"resources":{"part":"part.json"},
+                "tracks":{"visual":[{"clips":[{"id":"nested","kind":"timeline","src":"part","start":0,"duration":2}]}]}});
+            let transition = json!({"canvas":base["canvas"],"resources":base["resources"],
+            "tracks":{"visual":[{"items":[
+                {"id":"a","kind":"motion","component":"scene","duration":1},
+                {"transition":"fade","inOffset":0.1,"outOffset":0.1},
+                {"id":"b","kind":"motion","component":"scene","duration":1,"trimStart":0.2}
+            ]}]}});
+            let read = |path: &str| match path {
+                "scene.motion.tsx" => Some(motion.to_string()),
+                "part.json" => Some(base.to_string()),
+                _ => None,
+            };
+            for doc in [&base, &nested, &transition] {
+                let mut s = scene("edit.json", doc, &read);
+                for time in [0.0, 0.95, 1.05, 1.5, 0.5] {
+                    let f = frame(&mut s, time);
+                    let mut count = 0;
+                    for (i, node) in f.template.nodes.iter().enumerate() {
+                        let Some(prefix) =
+                            node.path.as_deref().and_then(|p| p.strip_suffix("/target"))
+                        else {
+                            continue;
+                        };
+                        let marker = format!("{prefix}/marker");
+                        let j = f
+                            .template
+                            .nodes
+                            .iter()
+                            .position(|n| n.path.as_deref() == Some(&marker))
+                            .unwrap();
+                        let a = f.transforms[i].bounds(f.layout.boxes[i].border);
+                        let b = f.transforms[j].bounds(f.layout.boxes[j].border);
+                        assert!(
+                            (a.x - b.x).abs() < 0.01
+                                && (a.y - b.y).abs() < 0.01
+                                && (a.width - b.width).abs() < 0.01
+                                && (a.height - b.height).abs() < 0.01,
+                            "{marker} at {time}: {a:?}, {b:?}"
+                        );
+                        count += 1;
+                    }
+                    assert!(count > 0);
+                }
+            }
+        });
     }
 
     #[test]

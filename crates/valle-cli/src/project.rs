@@ -369,24 +369,26 @@ fn render(w: &Words) -> Result<Value, Failure> {
         false => (None, false),
     };
     if args.out.is_none() {
+        let directory = p.root.join("renders");
+        std::fs::create_dir_all(&directory)
+            .map_err(|e| failed(format!("{}: {e}", directory.display())))?;
         let stem = rel
             .rsplit('/')
             .next()
             .unwrap_or("timeline")
             .trim_end_matches(".json")
             .trim_end_matches(".timeline");
-        let transparent = !doc.canvas.background.to_ascii_lowercase().ends_with("ff");
+        let transparent =
+            valle_engine::style::color::parse(&doc.canvas.background.trim().to_ascii_lowercase())
+                .map_err(failed)?[3]
+                < 1.0;
         let mov = transparent || args.option("codec") == Some("prores");
         let name = match (snapshot, args.storyboard) {
             (Some(n), _) => format!("{stem}-{n}.{}", if mov { "mov" } else { "mp4" }),
             (None, true) => format!("{stem}-storyboard.png"),
             (None, false) => format!("{stem}-frames"),
         };
-        args.out = Some(
-            free(&p.root.join("renders").join(name))
-                .display()
-                .to_string(),
-        );
+        args.out = Some(free(&directory.join(name)).display().to_string());
     }
     let out = args.out.clone().expect("an output");
     let inputs = media(&p, &rel, &doc);
@@ -427,11 +429,11 @@ fn render(w: &Words) -> Result<Value, Failure> {
 
 /// The media files on disk a timeline names, with their SHA-256 before it renders.
 fn media(p: &Project, rel: &str, doc: &valle_timeline::Document) -> Vec<(String, String)> {
-    let folder = p.root.join(rel);
-    let folder = folder.parent().unwrap_or(&p.root).to_path_buf();
-    let mut files: Vec<(String, String)> = (p.named(rel, doc).into_iter())
+    let mut files: Vec<(String, String)> = (p.dependencies(rel, doc).into_iter())
         .filter(|n| !n.missing && !n.written.starts_with("http"))
         .filter_map(|n| {
+            let timeline = p.root.join(&n.timeline);
+            let folder = timeline.parent().unwrap_or(&p.root);
             let full = valle_project::absolute(&folder.join(&n.written));
             let sha = digest(&full).ok()?;
             Some((full.display().to_string(), sha))

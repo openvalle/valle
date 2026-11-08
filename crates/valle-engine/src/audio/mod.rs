@@ -100,7 +100,7 @@ pub struct Clip {
     /// On clip seconds.
     pub gain: Param,
     pub pan: Param,
-    /// A video's own sound: silent where the file has none.
+    /// A video's own sound: silent where the file has none, including a shorter audio tail.
     pub optional: bool,
     /// Samples it fades in over from its start, and out over to its end, as crossfades have
     /// them: equal power, sin and cos of a quarter turn.

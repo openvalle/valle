@@ -138,10 +138,7 @@ impl Mixer {
                     }
                     super::TimeMap::Points(p) => p.iter().map(|q| q.1).fold(0.0, f64::max),
                 };
-                if c.end_policy == End::Error
-                    && reach > seconds + 1.0 / FS
-                    && !(c.optional && frames == 0)
-                {
+                if c.end_policy == End::Error && reach > seconds + 1.0 / FS && !c.optional {
                     return Err(format!(
                         "{}: plays its source to {reach:.3} s, which is {seconds:.3} s long (end: \"hold\" or \"loop\" goes past it)",
                         c.what
@@ -381,7 +378,13 @@ impl Mixer {
             for s in lo..hi {
                 let x = (s - c.start) as f64 / FS;
                 let (src, speed) = c.time.at(x);
-                let v = self.read(pcm, src * FS, speed.abs(), c.end_policy);
+                // Holding a video's last picture does not hold its last audio sample.
+                let end = if c.optional && c.end_policy == End::Hold {
+                    End::Error
+                } else {
+                    c.end_policy
+                };
+                let v = self.read(pcm, src * FS, speed.abs(), end);
                 let g = c.gain.at(x) * fade(c, s);
                 let (l, r) = balance(c.pan.at(x));
                 let o = &mut out[(s - g0) as usize];
@@ -604,6 +607,46 @@ mod tests {
             m.render(c);
         }
         out
+    }
+
+    #[test]
+    fn a_videos_shorter_sound_ends_in_silence() {
+        let mut c = clip(
+            0,
+            1.0,
+            TimeMap::Linear {
+                trim: 0.0,
+                rate: 1.0,
+            },
+        );
+        c.end_policy = End::Error;
+        let mut mix = Mix {
+            sources: vec!["video".into()],
+            tracks: vec![Track {
+                id: "video".into(),
+                clips: vec![c],
+                strip: strip(vec![], Target::Master),
+            }],
+            buses: vec![],
+            master: strip(vec![], Target::Master),
+            length: RATE as i64,
+        };
+        let pcm = Pcm(vec![0.5; RATE as usize].into()); // Half a second, stereo.
+        assert!(Mixer::new(mix.clone(), vec![pcm.clone()]).is_err());
+        mix.tracks[0].clips[0].optional = true;
+        for end in [End::Error, End::Hold] {
+            mix.tracks[0].clips[0].end_policy = end;
+            let mut mixer = Mixer::new(mix.clone(), vec![pcm.clone()]).unwrap();
+            let mut out = vec![0.0; 2 * RATE as usize];
+            mixer.render(&mut out);
+            assert!(out[..RATE as usize].iter().all(|v| *v == 0.5));
+            assert!(out[RATE as usize..].iter().all(|v| *v == 0.0));
+        }
+        mix.tracks[0].clips[0].gain = Param::Const(0.0);
+        let mut mixer = Mixer::new(mix, vec![pcm]).unwrap();
+        let mut out = vec![1.0; 2 * RATE as usize];
+        mixer.render(&mut out);
+        assert!(out.iter().all(|v| *v == 0.0));
     }
 
     /// Any block size, the same samples.

@@ -39,6 +39,8 @@ test("file addresses encode each path segment while preserving folders", () => {
 test.each([
   ["/api/files/a.tsx?version=2", "/api/files/a.tsx?version=2"],
   ["http://localhost:3000/api/files/a.tsx", "/api/files/a.tsx"],
+  ["http://localhost:3000/Users/me/a%20b.mp4", "/api/linked?file=%2FUsers%2Fme%2Fa%20b.mp4"],
+  ["C:/videos/a%20b.mp4", "/api/linked?file=c%3A%2Fvideos%2Fa%20b.mp4"],
   [
     "https://assets.test/a b.png?q=1&v=2",
     "/api/url?u=https%3A%2F%2Fassets.test%2Fa%2520b.png%3Fq%3D1%26v%3D2",

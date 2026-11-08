@@ -914,7 +914,13 @@
     if (typeof path !== "string" || path === "") {
       throw new TypeError('bounds takes a key path, as "card/title"');
     }
-    const m = (k) => mk("bounds|" + k + "|" + path, []);
+    if (G.keyBase) path = G.keyBase + "/" + path;
+    const m = (k) => {
+      const value = mk("bounds|" + k + "|" + path, []);
+      return G.keyBase && (k === "x" || k === "y")
+        ? __b("-", value, mk("bounds|" + k + "|" + G.keyBase, []))
+        : value;
+    };
     return { x: m("x"), y: m("y"), width: m("width"), height: m("height") };
   }
   // `anchor("key/path", side)`: a point on that border box, `{ x, y }`.
@@ -1950,7 +1956,7 @@
     guard(on, { truthy: on.v }, "clip", at);
     if (!on.v) return;
     const local = mk(op("local"), [G.seconds]);
-    const outer = [G.seconds, G.progress, G.clip, G.composition, G.names, G.inputs];
+    const outer = [G.seconds, G.progress, G.clip, G.composition, G.names, G.inputs, G.keyBase];
     if (c !== undefined) {
       G.composition = { ...G.composition, ...c };
     }
@@ -1962,11 +1968,17 @@
     if (props.inputs !== undefined) G.inputs = props.inputs;
     const style = { ...props.style, display: "flex" };
     try {
-      element("View", { key: props.key, style }, [], out, at, false, f);
+      element("View", { key: props.key, style }, [], out, at, false, () => {
+        // A Motion's key paths start at its own composition, including repeated instances.
+        if (c !== undefined) {
+          G.keyBase = [...G.keys, ...(props.origin ? [props.origin] : [])].join("/");
+        }
+        f();
+      });
       if (props.picture !== undefined) out[out.length - 1].picture = props.picture;
     } finally {
       G.scopes.pop();
-      [G.seconds, G.progress, G.clip, G.composition, G.names, G.inputs] = outer;
+      [G.seconds, G.progress, G.clip, G.composition, G.names, G.inputs, G.keyBase] = outer;
     }
   }
 
@@ -2308,6 +2320,7 @@
       guards: [],
       when: [],
       keys: [],
+      keyBase: "",
       ops: 0,
       nodes: 0,
       // How deep in <svg> elements tracing is.

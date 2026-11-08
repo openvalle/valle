@@ -252,7 +252,7 @@ pub fn now() -> u64 {
 }
 
 /// Adds the files under `dir` of `root` to `paths`, but hidden ones and symbolic links.
-fn walk(root: &Path, dir: &str, paths: &mut Vec<String>) {
+pub(crate) fn walk(root: &Path, dir: &str, paths: &mut Vec<String>) {
     for entry in fs::read_dir(root.join(dir)).into_iter().flatten().flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         let Ok(kind) = entry.file_type() else {

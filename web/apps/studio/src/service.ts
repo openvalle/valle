@@ -124,7 +124,13 @@ export const service = {
 export function fetching(url: string): Promise<Response> {
   const at = new URL(url, location.href);
   if (at.origin === location.origin) {
-    return fetch(at.pathname + at.search);
+    return at.pathname.startsWith("/api/")
+      ? fetch(at.pathname + at.search)
+      : fetch(`/api/linked?file=${encodeURIComponent(decodeURIComponent(at.pathname))}`);
+  }
+  // Windows absolute paths are parsed by URL as a drive-letter scheme.
+  if (/^[a-z]:$/i.test(at.protocol)) {
+    return fetch(`/api/linked?file=${encodeURIComponent(decodeURIComponent(at.href))}`);
   }
   return fetch(`/api/url?u=${encodeURIComponent(at.href)}`);
 }

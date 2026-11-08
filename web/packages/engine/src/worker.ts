@@ -238,12 +238,13 @@ function opened(key: string, path: string): Promise<Reader | undefined> {
     const source = given.get(path);
     const url = source === undefined || typeof source === "string" ? source : undefined;
     // Through the page's `fetch`, a file is read whole.
-    const file = async () =>
-      source !== undefined && url === undefined
-        ? new Blob([source])
-        : proxied
-          ? new Blob([((await read(path)) ?? new Uint8Array()) as BlobPart])
-          : (url ?? new URL(path, base).href);
+    const file = async () => {
+      if (source !== undefined && url === undefined) return new Blob([source]);
+      if (!proxied) return url ?? new URL(path, base).href;
+      const bytes = await read(path);
+      if (!bytes) throw new Error("file not found");
+      return new Blob([bytes as BlobPart]);
+    };
     reader = file()
       .then(Reader.open)
       .catch((error: unknown) => {

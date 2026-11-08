@@ -315,6 +315,7 @@ impl Service {
             ("POST", "/api/edit") => edit(&request.body),
             ("GET", "/api/list") => self.list(),
             ("GET", "/api/url") => return url(request.query("u")),
+            ("GET", "/api/linked") => return self.linked(request.query("file")),
             ("GET", p) if p.starts_with("/api/fonts/") => return font(&p["/api/fonts/".len()..]),
             ("GET", p) if p.starts_with("/api/files/") => return self.read(&p[11..]),
             ("GET", p) if p.starts_with("/api/renders/") => return self.output(&p[13..]),
@@ -379,6 +380,47 @@ impl Service {
     fn root(&self) -> Option<PathBuf> {
         let session = self.session.lock().unwrap_or_else(|e| e.into_inner());
         session.root.clone()
+    }
+
+    /// A local file explicitly referenced by the project, outside its folder. It is read-only.
+    fn linked(&self, file: Option<&str>) -> Response {
+        let Some(file) = file.filter(|f| Path::new(f).is_absolute()) else {
+            return Response::new(400, "text/plain", "file=<an absolute local path>");
+        };
+        let project = self.root().and_then(|root| Project::open(&root).ok());
+        let Some(project) = project else {
+            return Response::new(403, "text/plain", "no project open");
+        };
+        let full = valle_project::absolute(Path::new(file));
+        let resolved = full.canonicalize().unwrap_or_else(|_| full.clone());
+        let allowed = project.timelines().iter().any(|rel| {
+            project.document(rel).is_ok_and(|doc| {
+                project.dependencies(rel, &doc).iter().any(|n| {
+                    if !n.external
+                        || n.written.starts_with("http://")
+                        || n.written.starts_with("https://")
+                    {
+                        return false;
+                    }
+                    let timeline = project.root.join(&n.timeline);
+                    let path = timeline.parent().unwrap_or(&project.root).join(&n.written);
+                    path.canonicalize()
+                        .unwrap_or_else(|_| valle_project::absolute(&path))
+                        == resolved
+                })
+            })
+        });
+        if !allowed {
+            return Response::new(
+                403,
+                "text/plain",
+                format!("{file}: not a resource of the open project"),
+            );
+        }
+        match std::fs::read(&full) {
+            Ok(bytes) => Response::new(200, http::kind(file), bytes),
+            Err(e) => Response::new(404, "text/plain", format!("{file}: {e}")),
+        }
     }
 
     /// The file at `path` in the folder, whose changes are said from now on.

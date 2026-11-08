@@ -416,3 +416,37 @@ fn a_project_studio_out_of_a_project_opens_the_home() {
     drop(studio);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn linked_files_are_readable_only_while_the_project_references_them() {
+    let dir = folder("linked");
+    let root = dir.join("project");
+    let project = valle_project::Project::create(&root, 64, 36, "30").unwrap();
+    let linked = dir.join("linked audio.bin");
+    std::fs::write(&linked, b"linked bytes").unwrap();
+    project.add(std::slice::from_ref(&linked), true).unwrap();
+    let mut doc: Value =
+        serde_json::from_slice(&std::fs::read(root.join("timeline.json")).unwrap()).unwrap();
+    doc["tracks"] = serde_json::json!({"visual":[{"items":[{"id":"one","kind":"solid","color":"red","duration":1}]}]});
+    std::fs::write(root.join("timeline.json"), doc.to_string()).unwrap();
+    let studio = Studio::start(&root, &dir.join("cache"));
+    let url = format!(
+        "/api/linked?file={}",
+        linked
+            .display()
+            .to_string()
+            .replace('\\', "/")
+            .replace(' ', "%20")
+    );
+    let reply = studio.get(&url);
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.body, b"linked bytes");
+    assert_eq!(studio.get("/api/linked?file=relative.txt").status, 400);
+    assert_eq!(studio.send("PUT", &url, &[], b"change").status, 404);
+    doc["resources"] = serde_json::json!({});
+    std::fs::write(root.join("timeline.json"), doc.to_string()).unwrap();
+    assert_eq!(studio.get(&url).status, 403);
+    assert_eq!(std::fs::read(linked).unwrap(), b"linked bytes");
+    drop(studio);
+    std::fs::remove_dir_all(dir).unwrap();
+}

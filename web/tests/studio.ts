@@ -646,6 +646,30 @@ export default function Scene() {
       JSON.parse(run(["timeline", "check", linked, "--json"])).status === "ok",
       "the saved linked edit passes native timeline check",
     );
+    // A linked video stays outside the project, but previews through the local service.
+    const outside = join(dir, "linked video.mp4");
+    await Bun.write(outside, Bun.file(join(project, "source.mp4")));
+    run(["project", "add", outside, "--link", "-C", project]);
+    await Bun.write(
+      join(project, "linked-media.timeline.json"),
+      JSON.stringify({
+        canvas: CUT.canvas,
+        resources: { video: outside },
+        tracks: {
+          visual: [{ items: [{ id: "video", kind: "video", src: "video", duration: 2 }] }],
+        },
+      }),
+    );
+    await page.reload();
+    await until("project reopened", () => evaluate("return !!studio.player;"));
+    await openFile("linked-media.timeline.json", 320);
+    expect(
+      await evaluate(
+        "await studio.player.draw(20); return (await studio.player.pixels()).length === 320 * 180 * 4;",
+      ),
+      "a video linked outside the project decodes and draws in Studio",
+    );
+
     // Standalone Studio does not have the renders/ directory created with a project.
     for (const kind of ["motion", "timeline"] as const) {
       const folder = join(dir, kind);
