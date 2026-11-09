@@ -28,6 +28,9 @@ pub struct Valle {
     pub reason: String,
     #[serde(default)]
     pub max_difference: u8,
+    /// How many pixels may differ, each by up to `max_difference`: any number when absent.
+    #[serde(default)]
+    pub max_pixels: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -87,6 +90,12 @@ pub struct Rectangle {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+}
+
+impl Valle {
+    pub fn accepts(&self, changed: usize, max: u8) -> bool {
+        self.max_pixels.is_none_or(|n| changed <= n) && max <= self.max_difference
+    }
 }
 
 impl Tolerance {

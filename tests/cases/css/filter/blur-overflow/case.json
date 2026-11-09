@@ -4,10 +4,10 @@
   "at": [0],
   "browser": {
     "selected": "chrome",
-    "reason": "Reviewed blur extents and the ancestor clipping edge in all three browsers. Chrome differs from Valle only within the blur ramps: 19158 pixels, at most 3 channel levels; flat regions agree. Firefox/WebKit blur approximation reaches 7 levels. A mutation check removes overflow clipping and must still fail this allowance.",
+    "reason": "Reviewed blur extents and the ancestor clipping edge in all three browsers. Chrome differs from Valle only within the blur ramps: 19158 pixels on Metal and 19282 on lavapipe, at most 3 channel levels; flat regions agree. Firefox/WebKit blur approximation reaches 7 levels. A mutation check removes overflow clipping and must still fail this allowance.",
     "pixels": {
       "maxDifference": 3,
-      "maxPixels": 19200
+      "maxPixels": 19300
     }
   }
 }

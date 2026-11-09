@@ -267,8 +267,11 @@ pixels must agree exactly too. No extra configuration is needed.
 
 `valle.maxDifference` bounds each channel's difference and defaults to zero.
 Some existing product baselines allow one level for rounding; use that only
-when justified by review. Product baselines are reviewed regressions, not
-independent proofs of correctness. There is no automatic accept command.
+when justified by review. `valle.maxPixels`, when present, also bounds how many
+pixels may differ, as `browser.pixels` does; use it when a few pixels differ
+by more between GPUs, and give the measured counts in `valle.reason`. Product
+baselines are reviewed regressions, not independent proofs of correctness.
+There is no automatic accept command.
 
 ## D3 calculations and charts
 

@@ -69,7 +69,7 @@ pub fn run(
         checks.push(Check {
             source: "valle".into(),
             required: true,
-            passed: pixels.max <= valle.max_difference,
+            passed: valle.accepts(pixels.changed, pixels.max),
             pixels,
             text_edges,
             measurement_error: None,
@@ -330,6 +330,53 @@ fn text_tolerance_cannot_hide_solid_changes_missing_text_or_displacement() {
         assert!(
             !accepts(&changed),
             "missing text or shifted glyphs {shift:?} must fail"
+        );
+    }
+}
+
+#[test]
+fn valle_pixel_allowances_reject_more_changed_pixels() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for (name, size) in [
+        ("tailwind/text", [320, 200]),
+        ("tailwind/paragraphs", [320, 320]),
+    ] {
+        let case = Case::read(&root.join("tests/cases").join(name).join("case.json")).unwrap();
+        let valle = case.valle.as_ref().unwrap();
+        let limit = valle.max_pixels.unwrap();
+        let path = root.join("tests/baselines/valle").join(name).join("0.png");
+        let baseline = read_png(&path, size).unwrap();
+        let accepts = |actual: &[u8]| {
+            let (pixels, _, _) = compare(actual, &baseline, &[]).unwrap();
+            valle.accepts(pixels.changed, pixels.max)
+        };
+        // Pixels changed one level each, at the most it allows and one more.
+        let changed = |n: usize| {
+            let mut changed = baseline.clone();
+            for i in 0..n {
+                changed[i * 4] ^= 1;
+            }
+            changed
+        };
+        assert!(accepts(&baseline));
+        assert!(
+            accepts(&changed(limit)),
+            "{name}: {limit} pixels are allowed"
+        );
+        assert!(
+            !accepts(&changed(limit + 1)),
+            "{name}: a change across more than {limit} pixels must fail"
+        );
+        let mut far = baseline.clone();
+        let step = valle.max_difference + 1;
+        far[0] = if far[0] >= step {
+            far[0] - step
+        } else {
+            far[0] + step
+        };
+        assert!(
+            !accepts(&far),
+            "{name}: one pixel past the largest difference must fail"
         );
     }
 }
