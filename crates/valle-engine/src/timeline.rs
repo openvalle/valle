@@ -1677,6 +1677,53 @@ mod tests {
     }
 
     #[test]
+    fn a_motion_clip_draws_inside_its_box() {
+        run(|| {
+            let motion = r#"
+                export const composition = {width:320,height:180,fps:30,duration:4};
+                export default function Scene() {
+                    return <View>
+                        <View key="target" style={{position:'absolute',left:40,top:50,width:80,height:40}} />
+                    </View>;
+                }
+            "#;
+            let doc = json!({
+                "canvas":{"width":640,"height":360,"fps":30},
+                "resources":{"scene":"scene.motion.tsx"},
+                "tracks":{"visual":[{"clips":[
+                    {"id":"a","kind":"motion","component":"scene","start":0,"duration":2,"position":[180,100],"size":[160,90]}
+                ]}]}
+            });
+            let read = |path: &str| (path == "scene.motion.tsx").then(|| motion.to_string());
+            let mut s = scene("edit.json", &doc, &read);
+            let f = frame(&mut s, 0.5);
+            let nodes = &f.template.nodes;
+            let target = (nodes.iter())
+                .position(|n| n.path.as_deref().is_some_and(|p| p.ends_with("/target")))
+                .unwrap();
+            let path = nodes[target].path.as_deref().unwrap();
+            let mut ancestors = Vec::new();
+            let mut i = target as u32;
+            while let Some(p) = nodes.iter().position(|n| n.children.contains(&i)) {
+                ancestors.push(p);
+                i = p as u32;
+            }
+            // Every keyed box on the target's key path holds it, the clip's own box included: a
+            // picture or effect of the clip reads that box.
+            let mut boxes = 0;
+            for (j, n) in nodes.iter().enumerate() {
+                if let Some(p) = n.path.as_deref()
+                    && path.starts_with(&format!("{p}/"))
+                {
+                    assert!(ancestors.contains(&j), "{path} is outside {p}");
+                    boxes += 1;
+                }
+            }
+            assert!(boxes > 0, "{path}");
+        });
+    }
+
+    #[test]
     fn bounds_and_anchors_stay_local_to_each_motion_instance() {
         run(|| {
             let motion = r#"

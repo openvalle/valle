@@ -1968,12 +1968,12 @@
     if (props.inputs !== undefined) G.inputs = props.inputs;
     const style = { ...props.style, display: "flex" };
     try {
-      element("View", { key: props.key, style }, [], out, at, false, () => {
+      element("View", { key: props.key, style }, [], out, at, false, (inner) => {
         // A Motion's key paths start at its own composition, including repeated instances.
         if (c !== undefined) {
           G.keyBase = [...G.keys, ...(props.origin ? [props.origin] : [])].join("/");
         }
-        f();
+        f(inner);
       });
       if (props.picture !== undefined) out[out.length - 1].picture = props.picture;
     } finally {
