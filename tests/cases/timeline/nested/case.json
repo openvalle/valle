@@ -3,7 +3,7 @@
   "assertion": "Nested timelines with independent trim, speed, hold, fit, size and placement.",
   "at": [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25],
   "valle": {
-    "reason": "Restored product regression PNGs from the verified 2026-11-05 backup and its base commit 5d1fb918; resource paths adapted without changing the expected pixels.",
+    "reason": "Restored product regression PNGs from the verified 2026-11-05 backup and its base commit 5d1fb918; resource paths adapted without changing the expected pixels. Re-accepted after ed34318a drew a static caption as one Span instead of one per character: its letters no longer take the shadows of the letters after them (up to 13 levels brighter on 137 pixels). Glyph positions and the caption's box are unchanged; without a shadow, both structures give identical pixels.",
     "maxDifference": 1
   },
   "input": "scene.timeline.json"
