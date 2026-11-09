@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::process::Command;
 
+use indoc::indoc;
 use serde_json::Value;
 use valle_native::media::{self, Decoding};
 
@@ -28,15 +29,19 @@ fn resized_png_sequence_and_video_keep_the_logical_canvas() {
     }
     let dir = std::env::temp_dir().join(format!("valle-output-size-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("scene.tsx"), r##"
-export const composition = { width: 64, height: 32, fps: 2, duration: 1 };
-export default function Scene() {
-  const { width, height } = useComposition();
-  return <View style={{ width, height, background: "#ff0000" }}>
-    <View style={{ position: "absolute", left: width / 2, top: 0, width: width / 2, height, background: "#00ff00" }} />
-  </View>;
-}
-"##).unwrap();
+    std::fs::write(
+        dir.join("scene.tsx"),
+        indoc! {r##"
+            export const composition = { width: 64, height: 32, fps: 2, duration: 1 };
+            export default function Scene() {
+              const { width, height } = useComposition();
+              return <View style={{ width, height, background: "#ff0000" }}>
+                <View style={{ position: "absolute", left: width / 2, top: 0, width: width / 2, height, background: "#00ff00" }} />
+              </View>;
+            }
+        "##},
+    )
+    .unwrap();
     for (size, out, png, dimensions) in [
         ("128x64", "large.png", "large.png", [128, 64]),
         ("32x16", "frames", "frames/frame-00001.png", [32, 16]),
@@ -96,18 +101,21 @@ export default function Scene() {
         assert_eq!(reader.size(), [128, 64]);
     }
     // A shader reading its children gets the requested density even beyond the old 4096 cap.
-    std::fs::write(dir.join("shader.tsx"), r##"
-export const composition = { width: 100, height: 1, fps: 1, duration: 1 };
-const code = `#version 300 es
-precision highp float;
-uniform sampler2D content;
-in vec2 uv;
-out vec4 color;
-void main() { color = textureSize(content, 0).x == 5000 ? vec4(0., 1., 0., 1.) : vec4(1., 0., 0., 1.); }`;
-export default function Scene() {
-  return <ShaderLayer code={code} style={{ width: 100, height: 1 }}><View style={{width:100,height:1,background:"white"}} /></ShaderLayer>;
-}
-"##).unwrap();
+    std::fs::write(
+        dir.join("shader.tsx"),
+        indoc! {r#"
+            export const composition = { width: 100, height: 1, fps: 1, duration: 1 };
+            const code = `
+            @group(2) @binding(1) var content: texture_2d<f32>;
+            fn shade(input: ShaderInput) -> vec4f {
+              return select(vec4f(1., 0., 0., 1.), vec4f(0., 1., 0., 1.), textureDimensions(content).x == 5000u);
+            }`;
+            export default function Scene() {
+              return <ShaderLayer code={code} style={{ width: 100, height: 1 }}><View style={{width:100,height:1,background:"white"}} /></ShaderLayer>;
+            }
+        "#},
+    )
+    .unwrap();
     let result = run(
         &dir,
         &[

@@ -22,7 +22,7 @@ import "./timeline-view.ts";
 import type { TimelineView } from "./timeline-view.ts";
 
 /** Files the source panel edits as text. */
-const TEXT = /\.(tsx?|json|css|txt|md|srt|vtt|lrc|csv|glsl|wgsl)$/;
+const TEXT = /\.(tsx?|json|css|txt|md|srt|vtt|lrc|csv|wgsl)$/;
 
 /** An edit undone and redone: a file's text before and after. */
 type Step = { path: string; before: string; after: string };

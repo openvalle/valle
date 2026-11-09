@@ -44,3 +44,10 @@ lossless WebP to exercise each SVG image decoder.
 Once prepared or cached, fonts need no network access. HTML uses explicit
 whitespace entities in the text case so formatting the source cannot collapse
 the tested spaces or newline.
+
+`shaders/` holds native WGSL inputs shared by CLI GPU assertions and Web/native
+comparisons. The scene covers inline and external shaders, child/backdrop/image
+reads, sparse bindings, animated uniforms, matrix layout and straight alpha.
+The transition scene samples all 13 built-ins, and the Timeline tests temperature
+adjustment. These have no captured PNG baselines: CLI tests assert expected
+pixels and the browser compares with the native frames at runtime.

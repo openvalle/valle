@@ -742,9 +742,9 @@ impl<'a> Renderer<'a> {
                 count: None,
             };
             let mut entries = Vec::new();
-            if !program.uniforms.is_empty() {
+            if let Some(binding) = program.uniform_binding {
                 entries.push(entry(
-                    0,
+                    binding,
                     wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -752,15 +752,17 @@ impl<'a> Renderer<'a> {
                     },
                 ));
             }
-            for k in 0..program.samplers.len() as u32 {
+            for image in &program.images {
                 let texture = wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 };
-                entries.push(entry(1 + 2 * k, texture));
+                entries.push(entry(image.binding, texture));
+            }
+            for &binding in &program.samplers {
                 let sampler = wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering);
-                entries.push(entry(2 + 2 * k, sampler));
+                entries.push(entry(binding, sampler));
             }
             let own = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("shader"),
@@ -786,7 +788,7 @@ impl<'a> Renderer<'a> {
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
-                    entry_point: Some("main"),
+                    entry_point: Some("valle_fragment"),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: WORK,
@@ -1893,7 +1895,8 @@ impl<'a> Renderer<'a> {
                 // nothing was drawn into it; an input of its own size.
                 let size = [f32::from_bits(words[4]), f32::from_bits(words[5])].map(|v| v as u32);
                 let mut views = Vec::new();
-                for name in &program.samplers {
+                for image in &program.images {
+                    let name = &image.name;
                     let k = names.iter().position(|n| *n == &**name);
                     let (image, size, hosted) = match k {
                         Some(k) => {
@@ -1937,20 +1940,21 @@ impl<'a> Renderer<'a> {
                 }
                 let block = uniform("uniforms", block);
                 let mut entries = Vec::new();
-                if !program.uniforms.is_empty() {
+                if let Some(binding) = program.uniform_binding {
                     entries.push(wgpu::BindGroupEntry {
-                        binding: 0,
+                        binding,
                         resource: block.as_entire_binding(),
                     });
                 }
-                for (k, view) in views.iter().enumerate() {
-                    let k = k as u32;
+                for (image, view) in program.images.iter().zip(&views) {
                     entries.push(wgpu::BindGroupEntry {
-                        binding: 1 + 2 * k,
+                        binding: image.binding,
                         resource: wgpu::BindingResource::TextureView(view),
                     });
+                }
+                for &binding in &program.samplers {
                     entries.push(wgpu::BindGroupEntry {
-                        binding: 2 + 2 * k,
+                        binding,
                         resource: wgpu::BindingResource::Sampler(&gpu.sampler),
                     });
                 }

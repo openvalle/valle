@@ -27,3 +27,6 @@ valle-engine = { path = "../valle-engine" }
 valle-native = { path = "../valle-native" }
 valle-project = { path = "../valle-project" }
 valle-timeline = { path = "../valle-timeline" }
+
+[dev-dependencies]
+indoc.workspace = true

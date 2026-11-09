@@ -27,6 +27,9 @@ const CASES: { entry: string; frames: number[]; props?: Record<string, unknown> 
     props: { name: "Ada Lovelace", accent: "#00C2A8" },
   },
   { entry: "examples/edit.timeline.json", frames: [20] },
+  { entry: "tests/resources/shaders/scene.motion.tsx", frames: [0, 2, 3, 1] },
+  { entry: "tests/resources/shaders/transitions.motion.tsx", frames: [0, 1, 2, 3, 4] },
+  { entry: "tests/resources/shaders/grade.timeline.json", frames: [0] },
   {
     entry: "tests/resources/timeline/captions/animations.timeline.json",
     frames: [6, 57, 111, 153, 207, 249, 282],

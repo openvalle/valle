@@ -3,6 +3,7 @@
 
 use std::process::Command;
 
+use indoc::indoc;
 use serde_json::Value;
 
 const VALLE: &str = env!("CARGO_BIN_EXE_valle");
@@ -25,17 +26,18 @@ fn check(name: &str, scene: &str) -> Value {
 
 #[test]
 fn a_structure_that_follows_time_is_warned_of() {
-    let scene = "export const composition = { width: 64, height: 36, fps: 30, duration: 1 };
-export default function Scene() {
-  const { seconds } = useCurrentTime();
-  const bars = Array.from({ length: 1 + Math.floor(seconds * 20) }, (_, i) => i);
-  return (
-    <View className=\"h-full w-full flex\">
-      {bars.map((i) => <View key={i} style={{ width: 2, height: 10, backgroundColor: \"#fff\" }} />)}
-    </View>
-  );
-}
-";
+    let scene = indoc! {r##"
+        export const composition = { width: 64, height: 36, fps: 30, duration: 1 };
+        export default function Scene() {
+          const { seconds } = useCurrentTime();
+          const bars = Array.from({ length: 1 + Math.floor(seconds * 20) }, (_, i) => i);
+          return (
+            <View className="h-full w-full flex">
+              {bars.map((i) => <View key={i} style={{ width: 2, height: 10, backgroundColor: "#fff" }} />)}
+            </View>
+          );
+        }
+    "##};
     let out = check("bars", scene);
     assert_eq!(out["status"], "ok", "{out}");
     let message = out["warnings"][0]["message"].as_str().unwrap_or_default();
@@ -45,12 +47,13 @@ export default function Scene() {
 
 #[test]
 fn a_structure_that_holds_is_not() {
-    let scene = "export const composition = { width: 64, height: 36, fps: 30, duration: 1 };
-export default function Scene() {
-  const { progress } = useCurrentTime();
-  return <View className=\"h-full w-full\" style={{ opacity: progress }} />;
-}
-";
+    let scene = indoc! {r#"
+        export const composition = { width: 64, height: 36, fps: 30, duration: 1 };
+        export default function Scene() {
+          const { progress } = useCurrentTime();
+          return <View className="h-full w-full" style={{ opacity: progress }} />;
+        }
+    "#};
     let out = check("still", scene);
     assert_eq!(out["status"], "ok", "{out}");
     assert_eq!(out["warnings"], serde_json::json!([]), "{out}");
@@ -60,13 +63,13 @@ export default function Scene() {
 fn an_error_in_later_frames_is_reported_with_its_first_frame_and_count() {
     let out = check(
         "late-error",
-        "
-        export const composition = {width:64,height:36,fps:30,duration:2};
-        export default function Scene() {
-          const {seconds} = useCurrentTime();
-          return <View style={{width:seconds < 1 ? 20 : 'broken'}}/>;
-        }
-    ",
+        indoc! {r#"
+            export const composition = {width:64,height:36,fps:30,duration:2};
+            export default function Scene() {
+              const {seconds} = useCurrentTime();
+              return <View style={{width:seconds < 1 ? 20 : 'broken'}}/>;
+            }
+        "#},
     );
     assert_eq!(out["status"], "error", "{out}");
     assert_eq!(out["problems"][0]["first"], 30, "{out}");

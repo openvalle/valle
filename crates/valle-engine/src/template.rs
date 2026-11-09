@@ -598,7 +598,7 @@ pub enum Kind {
         resource: u32,
         video: Option<Prop>,
     },
-    /// A box a shader authors write paints (`shader.rs`): its GLSL code, the values its uniforms
+    /// A box a shader authors write paints (`shader.rs`): its WGSL code, the values its uniforms
     /// take by name, a number, a boolean or a color string each, or a vector's numbers, the
     /// images it reads by name, the scene's resources of these indices, and the px it paints out
     /// past its border box on each side. What the box and the boxes in it paint is the image the

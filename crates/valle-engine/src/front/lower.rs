@@ -517,7 +517,7 @@ pub fn variant(
                 let code: Rc<str> = match (s.code, s.source) {
                     (code, _) if s.transition => match (&s.kind, code) {
                         (Some(k), _) => match transition::kind(k) {
-                            Some((code, _)) => transition::wrap(code).into(),
+                            Some(t) => transition::wrap(t.code).into(),
                             None => {
                                 return Err(format!(
                                     "{}: <Transition> kind {k:?} is not one of {}",

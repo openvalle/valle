@@ -1,89 +1,49 @@
-//! Shaders authors write: GLSL ES 3.0 fragment shaders, as WebGL2 runs them, translated to WGSL
-//! by naga, so that every backend and the browser run the same code.
+//! Authored WGSL: `fn shade(input: ShaderInput) -> vec4f`, returning straight sRGB color.
+//! The engine appends its fragment entry (coverage and premultiplication). The author's source
+//! is never rewritten or translated. Naga validates it and supplies the native WGSL layout.
 //!
-//! A shader declares what it reads at the top level: `uniform sampler2D <name>;` for the images
-//! it is given by name, `uniform <type> <name>;` for values, of `float`, `int`, `bool` or `vec2`
-//! to `vec4`, `in vec2 <uv>;` for where it is in its box, 0–1 with y up, and `out vec4 <color>;`
-//! for the color it gives there, sRGB-encoded with straight alpha, as WebGL takes it. Images read
-//! the same way: y up, straight alpha. `gl_FragCoord` is in the box's pixels, from its bottom left.
-//!
-//! A uniform keeps the value a comment after it gives, `uniform float amount; // = 0.5`, as
-//! gl-transitions writes defaults, until it is given another.
-//!
-//! The code is rewritten in place, line for line, so that naga's errors point at the author's
-//! lines: the declarations become plain globals that a `main` of the engine's fills before it calls
-//! the author's, renamed, and premultiplies the color it gives.
+//! Group 2 belongs to the author: one uniform struct and any supplied `texture_2d<f32>` images
+//! and filtering samplers. Bindings may be sparse and in any order. Texture variable names
+//! identify `content`, `backdrop`, or a named input; uniform struct fields match JSX `uniforms`.
+//! Fields take f32/i32/u32 scalars, vectors, matrices or fixed arrays, flattened in memory order.
+//! Unspecified values are zero. A JS boolean can fill a u32 flag; WGSL bool is not host-shareable.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
+use naga::{AddressSpace, ScalarKind, TypeInner};
+
 use crate::template::{Error, V};
 
-/// A uniform's type: a vector's length for `float` and `vec2`–`vec4`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Type {
-    Float(u32),
-    Int,
-    Bool,
-}
+const INTERFACE: &str = include_str!("../shaders/authored.wgsl");
 
-impl Type {
-    fn of(name: &str) -> Option<Type> {
-        Some(match name {
-            "float" => Type::Float(1),
-            "vec2" => Type::Float(2),
-            "vec3" => Type::Float(3),
-            "vec4" => Type::Float(4),
-            "int" => Type::Int,
-            "bool" => Type::Bool,
-            _ => return None,
-        })
-    }
-
-    /// Its size and alignment in a uniform block (std140), bytes.
-    fn layout(self) -> (u32, u32) {
-        match self {
-            Type::Float(1) | Type::Int | Type::Bool => (4, 4),
-            Type::Float(2) => (8, 8),
-            Type::Float(n) => (4 * n, 16),
-        }
-    }
-
-    /// As the block holds it: a `bool` as an `int`.
-    fn stored(self) -> &'static str {
-        match self {
-            Type::Float(1) => "float",
-            Type::Float(2) => "vec2",
-            Type::Float(3) => "vec3",
-            Type::Float(_) => "vec4",
-            Type::Int | Type::Bool => "int",
-        }
-    }
-}
-
-/// A uniform the code declares: its name, type and offset in the block, bytes.
-#[derive(Clone, Debug, PartialEq)]
+/// A field's scalar slots, including WGSL's vector, matrix and array padding.
+#[derive(Clone, Debug)]
 pub struct Uniform {
     pub name: Rc<str>,
-    pub ty: Type,
-    pub offset: u32,
+    scalar: ScalarKind,
+    offsets: Vec<u32>,
+    color: bool,
 }
 
-/// Code translated: its WGSL fragment module, entry `main`, what it declares, and the block its
-/// uniforms take, bytes, a multiple of 16.
+#[derive(Debug)]
+pub struct Image {
+    pub name: Rc<str>,
+    pub binding: u32,
+}
+
+/// The source sent directly to wgpu and the bindings its author declared.
 #[derive(Debug)]
 pub struct Program {
-    /// Identity, for pipelines.
     pub key: u64,
     pub wgsl: String,
     pub uniforms: Vec<Uniform>,
     pub block: u32,
-    /// The block as it is before values are given: the defaults the code writes, else zeros.
-    pub initial: Vec<u8>,
-    /// The images it reads by name, in the order of their bindings.
-    pub samplers: Vec<Rc<str>>,
+    pub uniform_binding: Option<u32>,
+    pub images: Vec<Image>,
+    pub samplers: Vec<u32>,
 }
 
 impl PartialEq for Program {
@@ -94,70 +54,76 @@ impl PartialEq for Program {
 
 impl Program {
     pub fn reads(&self, image: &str) -> bool {
-        self.samplers.iter().any(|s| &**s == image)
+        self.images.iter().any(|s| &*s.name == image)
     }
 
-    /// The uniform block for `values` by name, which name uniforms it declares: a number for a
-    /// `float` or an `int` (a whole one), a boolean for a `bool`, numbers for a vector, or a color
-    /// for a `vec3` or `vec4`, its sRGB-encoded channels with straight alpha. Those it is not given
-    /// keep the default the code writes, as gl-transitions does, or are 0, as in WebGL.
+    /// Values by uniform field name, packed using the offsets of the WGSL struct. Matrices
+    /// are column-major. Colors fill vec3f/vec4f fields, booleans fill scalar u32 flags.
     pub fn block(&self, values: &[(&str, Vec<&V>)]) -> Result<Vec<u8>, String> {
-        let mut out = self.initial.clone();
+        let mut out = vec![0; self.block as usize];
         for (name, v) in values {
-            let Some(u) = self.uniforms.iter().find(|u| &*u.name == *name) else {
-                return Err(format!(
-                    "uniforms {name}: the code declares no uniform {name}"
-                ));
-            };
-            let words: Vec<[u8; 4]> = match (u.ty, &v[..]) {
-                (Type::Float(n), [V::Str(s)]) if n >= 3 => {
-                    let c = crate::style::color::parse(s)
-                        .map_err(|e| format!("uniforms {name}: {e}"))?;
-                    c[..n as usize]
-                        .iter()
-                        .map(|&x| (x as f32).to_ne_bytes())
-                        .collect()
-                }
-                (Type::Float(n), v) if v.len() == n as usize => (v.iter())
-                    .map(|x| match x {
-                        V::Num(x) => Ok((*x as f32).to_ne_bytes()),
-                        _ => Err(format!("uniforms {name}: {} numbers", n)),
-                    })
-                    .collect::<Result<_, _>>()?,
-                (Type::Int, [V::Num(x)]) if x.fract() == 0.0 && x.abs() < 2.0f64.powi(31) => {
-                    vec![(*x as i32).to_ne_bytes()]
-                }
-                (Type::Bool, [V::Bool(b)]) => vec![i32::from(*b).to_ne_bytes()],
-                (ty, _) => {
-                    let wanted = match ty {
-                        Type::Float(1) => "a number".into(),
-                        Type::Float(n) if n >= 3 => format!("{n} numbers or a color"),
-                        Type::Float(n) => format!("{n} numbers"),
-                        Type::Int => "a whole number".into(),
-                        Type::Bool => "true or false".into(),
-                    };
+            let u = self
+                .uniforms
+                .iter()
+                .find(|u| &*u.name == *name)
+                .ok_or_else(|| format!("uniforms {name}: the code declares no uniform {name}"))?;
+            let color;
+            let values = if let [V::Str(s)] = &v[..] {
+                if !u.color {
                     return Err(format!(
-                        "uniforms {name} is {wanted}, as its uniform is declared"
+                        "uniforms {name}: a color needs a vec3f or vec4f field"
                     ));
                 }
+                color = crate::style::color::parse(s)?.map(V::Num);
+                color[..u.offsets.len()].iter().collect::<Vec<_>>()
+            } else {
+                v.clone()
             };
-            for (k, w) in words.iter().enumerate() {
-                let at = u.offset as usize + 4 * k;
-                out[at..at + 4].copy_from_slice(w);
+            if values.len() != u.offsets.len() {
+                return Err(format!(
+                    "uniforms {name}: expected {} values, got {}",
+                    u.offsets.len(),
+                    values.len()
+                ));
+            }
+            for (&offset, value) in u.offsets.iter().zip(values) {
+                let bytes = match (u.scalar, value) {
+                    (ScalarKind::Float, V::Num(n)) if (*n as f32).is_finite() => {
+                        (*n as f32).to_ne_bytes()
+                    }
+                    (ScalarKind::Sint, V::Num(n))
+                        if n.fract() == 0.0 && (i32::MIN as f64..=i32::MAX as f64).contains(n) =>
+                    {
+                        (*n as i32).to_ne_bytes()
+                    }
+                    (ScalarKind::Uint, V::Num(n))
+                        if n.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(n) =>
+                    {
+                        (*n as u32).to_ne_bytes()
+                    }
+                    (ScalarKind::Uint, V::Bool(b)) if u.offsets.len() == 1 => {
+                        u32::from(*b).to_ne_bytes()
+                    }
+                    _ => {
+                        return Err(format!(
+                            "uniforms {name}: value does not fit WGSL {:?}",
+                            u.scalar
+                        ));
+                    }
+                };
+                out[offset as usize..offset as usize + 4].copy_from_slice(&bytes);
             }
         }
         Ok(out)
     }
 }
 
-/// Programs by their code and the images they may read.
 type Programs = HashMap<(String, Vec<String>), Rc<Program>>;
-
 thread_local! {
     static PROGRAMS: RefCell<Programs> = RefCell::new(HashMap::new());
 }
 
-/// `code` translated, once a thread: a shader that may read the images `images` names.
+/// Validate and reflect once per thread. Animated uniform values do not rebuild the program.
 pub fn program(code: &str, images: &[&str]) -> Result<Rc<Program>, Error> {
     let key = (
         code.to_string(),
@@ -171,563 +137,261 @@ pub fn program(code: &str, images: &[&str]) -> Result<Rc<Program>, Error> {
     Ok(p)
 }
 
-/// What a shader declares at the top level.
-#[derive(Default)]
-struct Declared {
-    uniforms: Vec<(Rc<str>, Type)>,
-    /// The values uniforms take when they are not given, as gl-transitions writes them: a
-    /// comment `// = <value>` after the declaration.
-    defaults: Vec<(Rc<str>, Vec<[u8; 4]>)>,
-    samplers: Vec<Rc<str>>,
-    uv: Option<String>,
-    color: Option<String>,
-}
-
-/// `code` with comments blanked, every byte where it was, newlines kept.
-fn blank_comments(code: &str) -> String {
-    let b = code.as_bytes();
-    let mut out = b.to_vec();
-    let mut i = 0;
-    while i < b.len() {
-        let end = if b[i..].starts_with(b"//") {
-            code[i..].find('\n').map_or(b.len(), |n| i + n)
-        } else if b[i..].starts_with(b"/*") {
-            code[i + 2..].find("*/").map_or(b.len(), |n| i + n + 4)
-        } else {
-            i += 1;
-            continue;
-        };
-        for c in &mut out[i..end] {
-            if *c != b'\n' {
-                *c = b' ';
-            }
+/// Numeric fields flatten to scalar slots. Padding follows the parsed WGSL layout rather
+/// than a second implementation of struct alignment or annotations such as @align/@size.
+fn slots(
+    module: &naga::Module,
+    ty: naga::Handle<naga::Type>,
+    offset: u32,
+) -> Result<(ScalarKind, Vec<u32>), Error> {
+    let (scalar, offsets) = match module.types[ty].inner {
+        TypeInner::Scalar(s) => (s, vec![offset]),
+        TypeInner::Vector { size, scalar } => {
+            (scalar, (0..size as u32).map(|i| offset + 4 * i).collect())
         }
-        i = end;
-    }
-    String::from_utf8(out).unwrap_or_default()
-}
-
-/// The line of byte `at` in `code`, from 1.
-fn line_of(code: &str, at: usize) -> usize {
-    code[..at.min(code.len())].matches('\n').count() + 1
-}
-
-/// `range` of `code` replaced by `text`, keeping its newlines after it so that lines stay.
-fn replace(
-    edits: &mut Vec<(std::ops::Range<usize>, String)>,
-    code: &str,
-    range: std::ops::Range<usize>,
-    text: String,
-) {
-    let lines = code[range.clone()].matches('\n').count();
-    edits.push((range, text + &"\n".repeat(lines)));
-}
-
-/// The code rewritten line for line, and what it declares.
-fn rewrite(code: &str, images: &[&str]) -> Result<(String, Declared), Error> {
-    let clean = blank_comments(code);
-    let b = clean.as_bytes();
-    let mut d = Declared::default();
-    let mut edits = Vec::new();
-    let (mut depth, mut start, mut i) = (0usize, 0usize, 0usize);
-    let at = |i: usize, message: String| format!("line {}: {message}", line_of(code, i));
-    while i < b.len() {
-        match b[i] {
-            // A directive is a line of its own.
-            b'#' if depth == 0 && clean[start..i].trim().is_empty() => {
-                let end = clean[i..].find('\n').map_or(b.len(), |n| i + n);
-                let directive = clean[i..end].trim();
-                if directive.starts_with("#version") {
-                    replace(&mut edits, code, i..end, String::new());
-                } else if directive.starts_with("#extension") {
-                    return Err(at(i, "extensions are not supported".into()));
-                }
-                i = end;
-                start = end;
-                continue;
-            }
-            b'{' => {
-                if depth == 0 {
-                    let head: Vec<&str> = clean[start..i]
-                        .split(|c: char| c.is_whitespace() || c == '(' || c == ')')
-                        .filter(|w| !w.is_empty())
-                        .collect();
-                    if head.first() == Some(&"uniform") {
-                        return Err(at(
-                            start,
-                            "uniform blocks are not supported: declare each uniform on its own"
-                                .into(),
-                        ));
-                    }
-                    if head.len() >= 2 && head[0] == "void" && head[1] == "main" {
-                        let m = start + clean[start..i].find("main").unwrap_or(0);
-                        edits.push((m..m + 4, "valle_user_main".into()));
-                    }
-                }
-                depth += 1;
-            }
-            b'}' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    start = i + 1;
-                }
-            }
-            b';' if depth == 0 => {
-                declaration(code, &clean, start..i, images, &mut d, &mut edits)?;
-                start = i + 1;
-            }
-            _ => {}
+        TypeInner::Matrix {
+            columns,
+            rows,
+            scalar,
+        } => {
+            let stride = if rows == naga::VectorSize::Bi { 8 } else { 16 };
+            (
+                scalar,
+                (0..columns as u32)
+                    .flat_map(|c| (0..rows as u32).map(move |r| offset + c * stride + r * 4))
+                    .collect(),
+            )
         }
-        i += 1;
-    }
-    if d.color.is_none() {
-        return Err(
-            "the code declares no color: declare `out vec4 color;` and set it in main".into(),
-        );
-    }
-    edits.sort_by_key(|(r, _)| r.start);
-    let mut out = String::with_capacity(code.len() + 256);
-    let mut last = 0;
-    for (r, text) in edits {
-        out.push_str(&code[last..r.start]);
-        out.push_str(&text);
-        last = r.end;
-    }
-    out.push_str(&code[last..]);
-    Ok((out, d))
-}
-
-/// A top-level declaration, `range` of `code` before its `;`: a uniform, the input or the output
-/// becomes a plain global or nothing; a precision statement nothing.
-fn declaration(
-    code: &str,
-    clean: &str,
-    range: std::ops::Range<usize>,
-    images: &[&str],
-    d: &mut Declared,
-    edits: &mut Vec<(std::ops::Range<usize>, String)>,
-) -> Result<(), Error> {
-    let text = &clean[range.clone()];
-    let first = text.len() - text.trim_start().len();
-    let line = line_of(code, range.start + first);
-    let fail = |message: String| Err(format!("line {line}: {message}"));
-    // `layout(…)` goes: the engine places what is declared.
-    let text = match text.trim_start().strip_prefix("layout") {
-        Some(rest) => match rest.find(')') {
-            Some(close) => rest[close + 1..].to_string(),
-            None => return fail("a layout qualifier without its `)`".into()),
-        },
-        None => text.to_string(),
-    };
-    let words: Vec<&str> = text
-        .split(|c: char| c.is_whitespace() || c == ',')
-        .filter(|w| {
-            !w.is_empty() && !matches!(*w, "highp" | "mediump" | "lowp" | "flat" | "smooth")
-        })
-        .collect();
-    let Some(&qualifier) = words.first() else {
-        return Ok(());
-    };
-    let whole = range.start..range.end + 1;
-    match qualifier {
-        "precision" => replace(edits, code, whole, String::new()),
-        "uniform" => {
-            let [_, ty, names @ ..] = &words[..] else {
-                return fail("declare a uniform as `uniform <type> <name>;`".into());
-            };
-            if names.is_empty() {
-                return fail("declare a uniform as `uniform <type> <name>;`".into());
-            }
-            if text.contains('[') || text.contains('=') {
-                return fail(
-                    "a uniform is one value, without an initializer: it comes from uniforms".into(),
-                );
-            }
-            let mut globals = String::new();
-            for &name in names {
-                if *ty == "sampler2D" {
-                    if !images.contains(&name) {
-                        let list = images.join(", ");
-                        return fail(format!(
-                            "uniform sampler2D {name}: the images it may read are {list}"
-                        ));
-                    }
-                    d.samplers.push(name.into());
-                    continue;
-                }
-                let Some(t) = Type::of(ty) else {
-                    return fail(format!(
-                        "uniform {ty} {name}: a uniform is a float, int, bool, vec2, vec3, vec4 or \
-                         sampler2D"
-                    ));
-                };
-                d.uniforms.push((name.into(), t));
-                let after = code[range.end + 1..].split('\n').next().unwrap_or("");
-                let given = (after.trim().strip_prefix("//"))
-                    .and_then(|c| c.trim().strip_prefix('='))
-                    .and_then(|v| default(t, v.trim().trim_end_matches(';')));
-                if let Some(v) = given.filter(|_| names.len() == 1) {
-                    d.defaults.push((name.into(), v));
-                }
-                globals.push_str(&format!("{ty} {name};"));
-            }
-            replace(edits, code, whole, globals);
+        TypeInner::Array {
+            base,
+            size: naga::ArraySize::Constant(n),
+            stride,
+        } => {
+            let (kind, first) = slots(module, base, offset)?;
+            let offsets = (0..n.get())
+                .flat_map(|i| first.iter().map(move |o| o + i * stride))
+                .collect();
+            return Ok((kind, offsets));
         }
-        "in" => {
-            let ["in", "vec2", name] = words[..] else {
-                return fail("the input is where it is in its box: `in vec2 uv;`".into());
-            };
-            if d.uv.replace(name.into()).is_some() {
-                return fail("the code declares a second input".into());
-            }
-            replace(edits, code, whole, format!("vec2 {name};"));
-        }
-        "out" => {
-            let ["out", "vec4", name] = words[..] else {
-                return fail("the output is its color: `out vec4 color;`".into());
-            };
-            if d.color.replace(name.into()).is_some() {
-                return fail("the code declares a second output".into());
-            }
-            replace(edits, code, whole, format!("vec4 {name};"));
-        }
-        "buffer" | "shared" | "attribute" | "varying" => {
-            return fail(format!("{qualifier} declarations are not supported"));
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-/// A default value as GLSL writes it, for a uniform of type `ty`: a number, `true` or `false`, or
-/// `vecN(…)` of N numbers or one.
-fn default(ty: Type, text: &str) -> Option<Vec<[u8; 4]>> {
-    let number = |s: &str| s.trim().parse::<f64>().ok();
-    match ty {
-        Type::Float(1) => Some(vec![(number(text)? as f32).to_ne_bytes()]),
-        Type::Int => {
-            let x = number(text)?;
-            (x.fract() == 0.0).then(|| vec![(x as i32).to_ne_bytes()])
-        }
-        Type::Bool => match text {
-            "true" => Some(vec![1i32.to_ne_bytes()]),
-            "false" => Some(vec![0i32.to_ne_bytes()]),
-            _ => None,
-        },
-        Type::Float(n) => {
-            let inner = text.strip_prefix(&format!("vec{n}("))?.strip_suffix(')')?;
-            let parts = inner.split(',').map(number).collect::<Option<Vec<_>>>()?;
-            let parts = match parts.len() {
-                1 => vec![parts[0]; n as usize],
-                k if k == n as usize => parts,
-                _ => return None,
-            };
-            Some(parts.iter().map(|&x| (x as f32).to_ne_bytes()).collect())
-        }
-    }
-}
-
-/// The engine's part before the code: the host's block (set 1), and the code's uniforms and
-/// images (set 2): its block at binding 0, each image a texture and a sampler after it.
-fn prelude(d: &Declared) -> (String, Vec<Uniform>, u32) {
-    let mut p = String::from("#version 450\n");
-    p.push_str("layout(set = 1, binding = 0) uniform ValleHost { vec4 valle_h[4]; };\n");
-    let mut uniforms = Vec::new();
-    let mut size = 0u32;
-    if !d.uniforms.is_empty() {
-        p.push_str("layout(set = 2, binding = 0) uniform ValleUser {");
-        for (name, ty) in &d.uniforms {
-            let (bytes, align) = ty.layout();
-            let offset = size.next_multiple_of(align);
-            size = offset + bytes;
-            p.push_str(&format!(" {} valle_u_{name};", ty.stored()));
-            uniforms.push(Uniform {
-                name: name.clone(),
-                ty: *ty,
-                offset,
-            });
-        }
-        p.push_str(" };\n");
-    }
-    for (k, name) in d.samplers.iter().enumerate() {
-        let (t, s) = (1 + 2 * k, 2 + 2 * k);
-        p.push_str(&format!(
-            "layout(set = 2, binding = {t}) uniform texture2D valle_t_{name};\n\
-             layout(set = 2, binding = {s}) uniform sampler valle_s_{name};\n\
-             #define {name} sampler2D(valle_t_{name}, valle_s_{name})\n"
-        ));
-    }
-    p.push_str("vec4 valle_frag_coord;\n#define gl_FragCoord valle_frag_coord\n");
-    (p, uniforms, size.next_multiple_of(16).max(16))
-}
-
-/// The engine's `main`: the box's antialiased edge, from its px (taken in uniform control flow),
-/// the input and the uniforms set, the code's `main`, and its color premultiplied. The host's
-/// block: the box's width and height in px, its outset, and its size in the pixels its images
-/// have.
-fn epilogue(d: &Declared) -> String {
-    let mut m = String::from(
-        "\nlayout(location = 0) in vec2 valle_local;\n\
-         layout(location = 0) out vec4 valle_out;\n\
-         void main() {\n\
-         vec2 valle_size = valle_h[0].xy;\n\
-         vec2 valle_fw = max(fwidth(valle_local), vec2(1e-6));\n\
-         vec2 valle_half = 0.5 * valle_size + valle_h[0].z;\n\
-         vec2 valle_d = abs(valle_local - 0.5 * valle_size);\n\
-         vec2 valle_c = clamp((valle_half - valle_d) / valle_fw + 0.5, vec2(0.0), vec2(1.0));\n\
-         vec2 valle_uv = vec2(valle_local.x, valle_size.y - valle_local.y) / valle_size;\n\
-         valle_frag_coord = vec4(valle_uv * valle_h[1].xy, 0.5, 1.0);\n",
-    );
-    if let Some(uv) = &d.uv {
-        m.push_str(&format!("{uv} = valle_uv;\n"));
-    }
-    for (name, ty) in &d.uniforms {
-        match ty {
-            Type::Bool => m.push_str(&format!("{name} = valle_u_{name} != 0;\n")),
-            _ => m.push_str(&format!("{name} = valle_u_{name};\n")),
-        }
-    }
-    let color = d.color.as_deref().unwrap_or("valle_out");
-    m.push_str(&format!(
-        "valle_user_main();\n\
-         vec4 valle_s = clamp({color}, vec4(0.0), vec4(1.0));\n\
-         valle_out = vec4(valle_s.rgb * valle_s.a, valle_s.a) * (valle_c.x * valle_c.y);\n\
-         }}\n"
-    ));
-    m
-}
-
-fn compile(code: &str, images: &[&str]) -> Result<Program, Error> {
-    let (body, declared) = rewrite(code, images)?;
-    let (head, uniforms, block) = prelude(&declared);
-    let mut initial = vec![0u8; block as usize];
-    for (name, words) in &declared.defaults {
-        let Some(u) = uniforms.iter().find(|u| u.name == *name) else {
-            continue;
-        };
-        for (k, w) in words.iter().enumerate() {
-            let at = u.offset as usize + 4 * k;
-            initial[at..at + 4].copy_from_slice(w);
-        }
-    }
-    let skip = head.matches('\n').count();
-    let source = format!("{head}{body}{}", epilogue(&declared));
-    let lines = code.matches('\n').count() + 1;
-    // An error on a line of the code, or else on the engine's.
-    let locate = |span: naga::Span, message: String| {
-        if !span.is_defined() {
-            return message;
-        }
-        let line = span.location(&source).line_number as usize;
-        match line.checked_sub(skip).filter(|&l| l >= 1 && l <= lines) {
-            Some(l) => format!("line {l}: {message}"),
-            None => format!("{message} (in what the engine adds around the code)"),
+        _ => {
+            return Err(
+                "uniform fields take f32/i32/u32 scalars, vectors, matrices or fixed arrays".into(),
+            );
         }
     };
-    let mut frontend = naga::front::glsl::Frontend::default();
-    let options = naga::front::glsl::Options::from(naga::ShaderStage::Fragment);
-    let module = frontend.parse(&options, &source).map_err(|e| {
-        let first = e.errors.first();
-        first.map_or_else(
-            || "it does not parse".to_string(),
-            |e| locate(e.meta, e.kind.to_string()),
+    if scalar.width != 4
+        || !matches!(
+            scalar.kind,
+            ScalarKind::Float | ScalarKind::Sint | ScalarKind::Uint
         )
+    {
+        return Err("uniform numbers are f32, i32 or u32; use u32 for boolean flags".into());
+    }
+    Ok((scalar.kind, offsets))
+}
+
+fn compile(code: &str, supplied: &[&str]) -> Result<Program, Error> {
+    // Append, so parse errors in the author's code keep their original line numbers.
+    let source = format!("{code}\n{INTERFACE}");
+    let locate = |span: naga::Span, message: String| match span.to_range() {
+        Some(r) if r.start < code.len() => {
+            format!("line {}: {message}", span.location(&source).line_number)
+        }
+        _ => format!("{message} (shader interface: fn shade(input: ShaderInput) -> vec4f)"),
+    };
+    let module = naga::front::wgsl::parse_str(&source).map_err(|e| {
+        let span = e.labels().next().map_or(naga::Span::UNDEFINED, |(s, _)| s);
+        locate(span, e.message().to_string())
     })?;
-    let info = naga::valid::Validator::new(
+    if module.entry_points.len() != 1 || module.entry_points[0].name != "valle_fragment" {
+        return Err("provide fn shade(input: ShaderInput) -> vec4f, not a vertex, fragment or compute entry".into());
+    }
+    naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::empty(),
     )
     .validate(&module)
     .map_err(|e| {
-        let message = e.as_inner().to_string();
-        match e.spans().next() {
-            Some((span, _)) => locate(*span, message),
-            None => message,
-        }
+        let span = e.spans().next().map_or(naga::Span::UNDEFINED, |(s, _)| *s);
+        locate(span, e.to_string())
     })?;
-    let wgsl =
-        naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
-            .map_err(|e| format!("engine bug: WGSL: {e}"))?;
+    let mut uniforms = Vec::new();
+    let mut uniform_binding = None;
+    let mut block = 16;
+    let mut images = Vec::new();
+    let mut samplers = Vec::new();
+    let mut bindings = HashSet::new();
+    for (handle, var) in module.global_variables.iter() {
+        let Some(binding) = &var.binding else {
+            continue;
+        };
+        let name = var.name.as_deref().unwrap_or("");
+        if name == "valle_host" {
+            continue;
+        }
+        let bad = |s: String| locate(module.global_variables.get_span(handle), s);
+        if binding.group != 2 {
+            return Err(bad(format!(
+                "{name}: authored resources use @group(2); groups 0 and 1 belong to the engine"
+            )));
+        }
+        if !bindings.insert(binding.binding) {
+            return Err(bad(format!("duplicate @binding({})", binding.binding)));
+        }
+        match (&module.types[var.ty].inner, var.space) {
+            (TypeInner::Struct { members, span }, AddressSpace::Uniform) => {
+                if uniform_binding.replace(binding.binding).is_some() {
+                    return Err(bad("uniforms belong in one uniform struct".into()));
+                }
+                block = span.next_multiple_of(16);
+                for member in members {
+                    let (scalar, offsets) =
+                        slots(&module, member.ty, member.offset).map_err(bad)?;
+                    uniforms.push(Uniform {
+                        name: member.name.as_deref().unwrap_or("").into(),
+                        scalar,
+                        offsets,
+                        color: matches!(
+                            module.types[member.ty].inner,
+                            TypeInner::Vector {
+                                size: naga::VectorSize::Tri | naga::VectorSize::Quad,
+                                scalar: naga::Scalar {
+                                    kind: ScalarKind::Float,
+                                    width: 4
+                                }
+                            }
+                        ),
+                    });
+                }
+            }
+            (
+                TypeInner::Image {
+                    dim: naga::ImageDimension::D2,
+                    arrayed: false,
+                    class:
+                        naga::ImageClass::Sampled {
+                            kind: ScalarKind::Float,
+                            multi: false,
+                        },
+                },
+                AddressSpace::Handle,
+            ) => {
+                if !supplied.contains(&name) {
+                    return Err(bad(format!(
+                        "texture {name}: no such input; available: {}",
+                        supplied.join(", ")
+                    )));
+                }
+                images.push(Image {
+                    name: name.into(),
+                    binding: binding.binding,
+                });
+            }
+            (TypeInner::Sampler { comparison: false }, AddressSpace::Handle) => {
+                samplers.push(binding.binding)
+            }
+            _ => {
+                return Err(bad(format!(
+                    "{name}: a resource is a uniform struct, texture_2d<f32> or sampler"
+                )));
+            }
+        }
+    }
     let mut h = std::collections::hash_map::DefaultHasher::new();
     code.hash(&mut h);
-    images.hash(&mut h);
+    supplied.hash(&mut h);
     Ok(Program {
         key: h.finish(),
-        wgsl,
+        wgsl: source,
         uniforms,
         block,
-        initial,
-        samplers: declared.samplers,
+        uniform_binding,
+        images,
+        samplers,
     })
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use indoc::indoc;
 
-    use super::*;
-
-    const IMAGES: &[&str] = &["content"];
-
     #[test]
-    fn a_webgl2_shader_translates() {
-        let p = program(
-            indoc! {r#"
-                #version 300 es
-                precision highp float;
-                uniform sampler2D content;
-                uniform float amount;
-                uniform vec2 center, size;
-                uniform vec3 tint;
-                uniform int steps;
-                uniform bool flip;
-                in vec2 uv;
-                out vec4 color;
-                float wave(float x) { return 0.5 + 0.5 * sin(x); }
-                void main() {
-                  vec4 c = texture(content, flip ? vec2(uv.x, 1.0 - uv.y) : uv);
-                  ivec2 at = ivec2(gl_FragCoord.xy) % textureSize(content, 0);
-                  uint h = uint(at.x * 73856093 ^ at.y * 19349663) >> 3u;
-                  float edge = fwidth(uv.x) + dFdx(uv.y) + dFdy(uv.x);
-                  vec4 t = texelFetch(content, at, 0);
-                  color = vec4(c.rgb * tint * wave(amount) + t.rgb * edge, c.a) * float(steps + int(h & 1u));
-                  color.xy += center + size;
-                }
-            "#},
-            IMAGES,
-        )
-        .unwrap();
-        assert_eq!(&*p.samplers, [Rc::from("content")]);
-        let at: Vec<(&str, u32)> = (p.uniforms.iter()).map(|u| (&*u.name, u.offset)).collect();
+    fn wgsl_is_passed_through_with_its_bindings() {
+        let code = indoc! {r#"
+            struct Params { amount: f32, center: vec2f, tint: vec3f, steps: i32, flip: u32 }
+            @group(2) @binding(7) var<uniform> params: Params;
+            @group(2) @binding(4) var content: texture_2d<f32>;
+            @group(2) @binding(9) var sampling: sampler;
+            fn shade(input: ShaderInput) -> vec4f {
+                let uv = select(input.uv, vec2f(input.uv.x, 1.0 - input.uv.y), params.flip != 0u);
+                let c = textureSample(content, sampling, uv);
+                let edge = fwidth(uv.x) + dpdx(uv.y) + dpdy(uv.x);
+                return vec4f(c.rgb * params.tint + vec3f(edge), c.a * params.amount);
+            }
+        "#};
+        let p = program(code, &["content"]).unwrap();
+        assert!(p.wgsl.starts_with(code));
+        assert_eq!(p.uniform_binding, Some(7));
+        assert_eq!((&*p.images[0].name, p.images[0].binding), ("content", 4));
+        assert_eq!(p.samplers, [9]);
         assert_eq!(
-            at,
-            [
-                ("amount", 0),
-                ("center", 8),
-                ("size", 16),
-                ("tint", 32),
-                ("steps", 44),
-                ("flip", 48)
-            ]
+            p.uniforms.iter().map(|u| u.offsets[0]).collect::<Vec<_>>(),
+            [0, 8, 16, 28, 32]
         );
-        assert_eq!(p.block, 64);
-        assert!(p.wgsl.contains("fn main"), "{}", p.wgsl);
-    }
-
-    #[test]
-    fn values_fill_the_block() {
-        let p = program(
-            indoc! {r#"
-                uniform float a; uniform vec3 c; uniform int n; uniform bool b; out vec4 color;
-                void main() { color = vec4(c, a + float(n)) * float(b); }"#},
-            IMAGES,
-        )
-        .unwrap();
-        let (half, red, three, yes) = (
-            V::Num(0.5),
-            V::Str("#ff000080".into()),
-            V::Num(3.0),
-            V::Bool(true),
-        );
+        assert_eq!(p.block, 48);
+        assert!(Rc::ptr_eq(&p, &program(code, &["content"]).unwrap()));
         let block = p
             .block(&[
-                ("a", vec![&half]),
-                ("c", vec![&red]),
-                ("n", vec![&three]),
-                ("b", vec![&yes]),
+                ("amount", vec![&V::Num(0.5)]),
+                ("tint", vec![&V::Str("#ff008080".into())]),
+                ("steps", vec![&V::Num(-2.0)]),
+                ("flip", vec![&V::Bool(true)]),
             ])
             .unwrap();
-        let f = |at: usize| f32::from_ne_bytes(block[at..at + 4].try_into().unwrap());
-        let i = |at: usize| i32::from_ne_bytes(block[at..at + 4].try_into().unwrap());
-        assert_eq!([f(0), f(16), f(20), f(24)], [0.5, 1.0, 0.0, 0.0]);
-        assert_eq!([i(28), i(32)], [3, 1]);
-        let wrong = |name, v: &V| p.block(&[(name, vec![v])]).unwrap_err();
-        assert!(wrong("n", &half).contains("whole number"));
-        assert!(wrong("b", &half).contains("true or false"));
-        assert!(wrong("z", &half).contains("no uniform z"));
-        assert!(p.block(&[("c", vec![&half, &half])]).is_err());
+        assert_eq!(f32::from_ne_bytes(block[0..4].try_into().unwrap()), 0.5);
+        assert_eq!(f32::from_ne_bytes(block[16..20].try_into().unwrap()), 1.0);
+        assert_eq!(i32::from_ne_bytes(block[28..32].try_into().unwrap()), -2);
+        assert_eq!(u32::from_ne_bytes(block[32..36].try_into().unwrap()), 1);
+        assert!(p.block(&[("steps", vec![&V::Num(0.5)])]).is_err());
+        assert!(p.block(&[("flip", vec![&V::Num(-1.0)])]).is_err());
+        assert!(p.block(&[("absent", vec![&V::Num(1.0)])]).is_err());
     }
 
     #[test]
-    fn errors_point_at_the_code_s_lines() {
-        let error = |code: &str| program(code, IMAGES).unwrap_err();
-        let e = error(indoc! {r#"
-            out vec4 color;
-            void main() {
-              color = vec4(nope);
-            }
-        "#});
-        assert!(e.starts_with("line 3: "), "{e}");
-        let e = error(indoc! {r#"
-            out vec4 color;
-            uniform mat3 m;
-            void main() { color = vec4(1.0); }"#});
-        assert!(e.starts_with("line 2: uniform mat3 m"), "{e}");
-        let e = error(indoc! {r#"
-            out vec4 color;
-            uniform sampler2D other;
-            void main() { color = vec4(1.0); }"#});
-        assert!(e.starts_with("line 2: uniform sampler2D other"), "{e}");
-        let e = error("void main() {}");
-        assert!(e.contains("declares no color"), "{e}");
-        let e = error(indoc! {r#"
-            out vec4 color;
-            uniform float a = 1.0;
-            void main() { color = vec4(a); }"#});
-        assert!(e.starts_with("line 2: "), "{e}");
-        let e = error(indoc! {r#"
-            out vec4 color;
-            void main() {
-              color = vec4(1.0)
-            }
-        "#});
-        assert!(
-            e.starts_with("line 3: ") || e.starts_with("line 4: "),
-            "{e}"
+    fn native_alignment_matrices_arrays_and_defaults() {
+        let p = program(indoc! {r#"
+            struct Params { @align(16) value: f32, @align(32) matrix: mat3x3f, colors: array<vec4f, 2> }
+            @group(2) @binding(0) var<uniform> params: Params;
+            fn shade(input: ShaderInput) -> vec4f { return params.colors[0]; }
+        "#}, &[]).unwrap();
+        assert_eq!(p.uniforms[1].offsets, [32, 36, 40, 48, 52, 56, 64, 68, 72]);
+        assert_eq!(p.uniforms[2].offsets, [80, 84, 88, 92, 96, 100, 104, 108]);
+        assert_eq!(p.block(&[]).unwrap(), vec![0; 128]);
+        let values: Vec<V> = (1..=9).map(|n| V::Num(n as f64)).collect();
+        let bytes = p.block(&[("matrix", values.iter().collect())]).unwrap();
+        assert_eq!(f32::from_ne_bytes(bytes[64..68].try_into().unwrap()), 7.0);
+        assert_eq!(&bytes[44..48], &[0; 4]);
+    }
+
+    #[test]
+    fn errors_point_at_authored_lines_and_reject_unbound_resources() {
+        let error = |code: &str| program(code, &["content"]).unwrap_err();
+        let e = error("fn shade(input: ShaderInput) -> vec4f {\n return nope;\n}");
+        assert!(e.starts_with("line 2:"), "{e}");
+        let e = error(
+            "@group(2) @binding(0) var missing: texture_2d<f32>;\nfn shade(input: ShaderInput) -> vec4f { return vec4f(1.0); }",
         );
-    }
-
-    #[test]
-    fn comments_and_blocks_are_not_declarations() {
-        let p = program(
-            indoc! {r#"
-                // uniform float hidden;
-                /* uniform vec2 also; */
-                struct S { float x; };
-                out vec4 color; // the color
-                void main() { S s = S(1.0); color = vec4(s.x); }"#},
-            IMAGES,
-        )
-        .unwrap();
-        assert!(p.uniforms.is_empty() && p.samplers.is_empty());
-    }
-
-    #[test]
-    fn defaults_come_from_comments() {
-        let p = program(
-            indoc! {r#"
-                uniform float a; // = 0.25
-                uniform vec2 c; // = vec2(0.5)
-                uniform vec3 d; // = vec3(1.0, 2.0, 3.0)
-                uniform int n; // = 3
-                uniform bool b; // = true
-                uniform float e, f; // = 9.0
-                uniform float g; // the default is 0
-                out vec4 color;
-                void main() { color = vec4(c, a + e + f + g, float(n) * float(b)) + vec4(d, 0.0); }"#},
-            IMAGES,
-        )
-        .unwrap();
-        let block = p.block(&[]).unwrap();
-        let f = |at: usize| f32::from_ne_bytes(block[at..at + 4].try_into().unwrap());
-        let i = |at: usize| i32::from_ne_bytes(block[at..at + 4].try_into().unwrap());
-        let at = |name: &str| p.uniforms.iter().find(|u| &*u.name == name).unwrap().offset as usize;
-        assert_eq!(f(at("a")), 0.25);
-        assert_eq!([f(at("c")), f(at("c") + 4)], [0.5, 0.5]);
-        assert_eq!([f(at("d")), f(at("d") + 8)], [1.0, 3.0]);
-        assert_eq!([i(at("n")), i(at("b"))], [3, 1]);
-        assert_eq!([f(at("e")), f(at("f")), f(at("g"))], [0.0, 0.0, 0.0]);
-        let given = p.block(&[("a", vec![&V::Num(2.0)])]).unwrap();
-        assert_eq!(f32::from_ne_bytes(given[0..4].try_into().unwrap()), 2.0);
+        assert!(e.contains("no such input"), "{e}");
+        let e = error(
+            "@group(0) @binding(8) var content: texture_2d<f32>;\nfn shade(input: ShaderInput) -> vec4f { return vec4f(1.0); }",
+        );
+        assert!(e.contains("@group(2)"), "{e}");
+        let e = error("fn other() -> vec4f { return vec4f(1.0); }");
+        assert!(e.contains("shade"), "{e}");
+        let e = error(
+            "struct Params { enabled: bool }\n@group(2) @binding(0) var<uniform> params: Params;\nfn shade(input: ShaderInput) -> vec4f { return vec4f(1.0); }",
+        );
+        assert!(!e.is_empty());
     }
 }

@@ -95,7 +95,7 @@ pub struct Slot {
 pub const BUILT_IN_FAMILIES: [&str; 4] = ["sans-serif", "serif", "monospace", "emoji"];
 
 /// What a resource holds: an image, an SVG file among them, a font, whose family is the
-/// resource's name, a shader's GLSL code, or a video, which the host decodes.
+/// resource's name, a shader's WGSL code, or a video, which the host decodes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Holds {
     Image,

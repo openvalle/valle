@@ -15,8 +15,8 @@ use serde_json::{Value, json};
 use crate::{Error, FILE, Project, digest, digest_bytes, inside, pretty, write};
 
 /// Extensions of the files in `media/` a snapshot keeps: data, captions and shaders.
-const KEPT: [&str; 12] = [
-    "json", "csv", "tsv", "txt", "srt", "vtt", "lrc", "glsl", "frag", "vert", "wgsl", "md",
+const KEPT: [&str; 9] = [
+    "json", "csv", "tsv", "txt", "srt", "vtt", "lrc", "wgsl", "md",
 ];
 
 /// A source file: its path in the project, its SHA-256, and whether a snapshot keeps it.

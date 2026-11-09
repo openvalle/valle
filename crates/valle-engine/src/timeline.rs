@@ -32,17 +32,7 @@ fn template_path(folder: &str) -> String {
 
 /// A color grade's temperature, as the old engine had it: red times 2^(t / 4), blue divided by
 /// it, of what is under it.
-const GRADE: &str = "#version 300 es
-precision highp float;
-uniform sampler2D backdrop;
-uniform float temperature;
-in vec2 uv;
-out vec4 color;
-void main() {
-  vec4 c = texture(backdrop, uv);
-  float g = exp2(temperature * 0.25);
-  color = vec4(c.r * g, c.g, c.b / g, c.a);
-}";
+const GRADE: &str = include_str!("../shaders/temperature.wgsl");
 
 /// The scene a document lowers to: its path, beside the document, the sources of the modules
 /// made for it by path, and what its controls are bound to, the clip table among them.

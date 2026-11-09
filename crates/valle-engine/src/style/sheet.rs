@@ -22,7 +22,7 @@ pub(super) struct Shading {
     /// What errors call it, `<ShaderLayer>` or `<Transition>`.
     pub(super) tag: &'static str,
     /// A built-in transition's parameters' ranges.
-    pub(super) limits: &'static [transition::Range],
+    pub(super) limits: &'static [transition::Parameter],
     pub(super) transition: bool,
     pub(super) uniforms: Vec<(Rc<str>, Vec<Prop>)>,
     pub(super) inputs: Vec<(Rc<str>, u32)>,
@@ -35,7 +35,7 @@ impl Shading {
         let block = match &self.fixed {
             Some(b) => b.clone(),
             None => {
-                let values: Vec<(&str, Vec<&V>)> = (self.uniforms.iter())
+                let mut values: Vec<(&str, Vec<&V>)> = (self.uniforms.iter())
                     .filter(|(_, v)| !v.iter().any(|p| frame.unsettled(p)))
                     .map(|(k, v)| {
                         let v = (v.iter())
@@ -48,14 +48,23 @@ impl Shading {
                     })
                     .collect();
                 for (name, v) in &values {
-                    let Some(&(_, low, high)) = self.limits.iter().find(|l| l.0 == *name) else {
+                    let Some(param) = self.limits.iter().find(|p| p.name == *name) else {
                         continue;
                     };
                     if let [V::Num(x)] = v[..]
-                        && !(low..=high).contains(x)
+                        && !(param.min..=param.max).contains(x)
                     {
                         let x = crate::js::number_to_string(*x);
-                        return Err(format!("params {name} is from {low} to {high}, not {x}"));
+                        return Err(format!(
+                            "params {name} is from {} to {}, not {x}",
+                            param.min, param.max
+                        ));
+                    }
+                }
+                let defaults: Vec<V> = self.limits.iter().map(|p| V::Num(p.default)).collect();
+                for (param, value) in self.limits.iter().zip(&defaults) {
+                    if !values.iter().any(|(name, _)| *name == param.name) {
+                        values.push((param.name, vec![value]));
                     }
                 }
                 Rc::from(self.program.block(&values)?)
@@ -716,11 +725,11 @@ fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result
             let limits = kind
                 .as_deref()
                 .and_then(transition::kind)
-                .map_or(&[][..], |k| k.1);
+                .map_or(&[][..], |k| k.params);
             if let Some(kind) = kind {
                 for (name, _) in uniforms.iter().filter(|(k, _)| &**k != "progress") {
-                    if !limits.iter().any(|l| l.0 == &**name) {
-                        let names: Vec<&str> = limits.iter().map(|l| l.0).collect();
+                    if !limits.iter().any(|p| p.name == &**name) {
+                        let names: Vec<&str> = limits.iter().map(|p| p.name).collect();
                         let takes = match names.is_empty() {
                             true => "it takes none".to_string(),
                             false => format!("it takes {}", names.join(", ")),

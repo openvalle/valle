@@ -6,30 +6,33 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use indoc::indoc;
 use serde_json::Value;
 
 const VALLE: &str = env!("CARGO_BIN_EXE_valle");
 
 /// Smooth gradients and flat colors, which a video keeps closely, moving with time.
-const PICTURE: &str = r##"export const composition = { width: 256, height: 144, fps: 30, duration: 6 };
-export default function Scene() {
-  const { progress } = useCurrentTime();
-  return (
-    <View style={{ width: 256, height: 144, display: "flex", background: "linear-gradient(90deg, #1e3a8a, #f59e0b)" }}>
-      <View style={{ width: 96, height: 96, margin: 24, marginLeft: 24 + progress * 64, background: "#e11d48", borderRadius: 48 }} />
-      <View style={{ width: 64, height: 144, background: "linear-gradient(180deg, #ffffff, #10b981)" }} />
-    </View>
-  );
-}
-"##;
+const PICTURE: &str = indoc! {r##"
+    export const composition = { width: 256, height: 144, fps: 30, duration: 6 };
+    export default function Scene() {
+      const { progress } = useCurrentTime();
+      return (
+        <View style={{ width: 256, height: 144, display: "flex", background: "linear-gradient(90deg, #1e3a8a, #f59e0b)" }}>
+          <View style={{ width: 96, height: 96, margin: 24, marginLeft: 24 + progress * 64, background: "#e11d48", borderRadius: 48 }} />
+          <View style={{ width: 64, height: 144, background: "linear-gradient(180deg, #ffffff, #10b981)" }} />
+        </View>
+      );
+    }
+"##};
 
 /// The video at `clip`, filling the frame.
-const SHOWN: &str = r##"export const composition = { width: 256, height: 144, fps: 30, duration: 6 };
-export const controls = { resources: { clip: resource({ kind: "video", default: "clip.mp4" }) } };
-export default function Scene() {
-  return <Video src="resource://clip" style={{ width: 256, height: 144 }} />;
-}
-"##;
+const SHOWN: &str = indoc! {r#"
+    export const composition = { width: 256, height: 144, fps: 30, duration: 6 };
+    export const controls = { resources: { clip: resource({ kind: "video", default: "clip.mp4" }) } };
+    export default function Scene() {
+      return <Video src="resource://clip" style={{ width: 256, height: 144 }} />;
+    }
+"#};
 
 fn valle(args: &[&str], dir: &Path) -> Value {
     let out = Command::new(VALLE)
@@ -76,9 +79,11 @@ fn round_trip(encoder: &str) -> (Value, u8, f64) {
     // A full export must be reusable at its original duration, including its final frame.
     std::fs::write(
         dir.join("reuse.timeline.json"),
-        r#"{"canvas":{"width":256,"height":144,"fps":30},
+        indoc! {r#"
+            {"canvas":{"width":256,"height":144,"fps":30},
             "resources":{"clip":"clip.mp4"},
-            "tracks":{"visual":[{"items":[{"id":"clip","kind":"video","src":"clip","duration":6}]}]}}"#,
+            "tracks":{"visual":[{"items":[{"id":"clip","kind":"video","src":"clip","duration":6}]}]}}
+        "#},
     )
     .expect("timeline written");
     let checked = valle(&["timeline", "check", "reuse.timeline.json"], &dir);

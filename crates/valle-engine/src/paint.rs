@@ -3982,7 +3982,7 @@ mod tests {
     #[test]
     fn a_transition_paints_its_children_into_its_shader_over_its_background() {
         let code: Rc<str> =
-            crate::transition::wrap(crate::transition::kind("fade").unwrap().0).into();
+            crate::transition::wrap(crate::transition::kind("fade").unwrap().code).into();
         let shader = Kind::Shader {
             code,
             uniforms: vec![("progress".into(), vec![Prop::Const(V::Num(0.5))])],

@@ -1,7 +1,7 @@
 // The engine's part of a shader authors write: the quad of its box, grown by its outset and an
 // antialiased edge, in the px of its transform, whose fragments the shader colors; and the
 // images it reads, taken out of their layers in its box's px or copied from the scene's, their
-// bottom row first and with straight alpha, as WebGL reads a texture.
+// bottom row first and with straight alpha, as the authored WGSL interface defines.
 
 struct Host {
   // The box's width and height in px, its outset, and its transform's index; the size of the

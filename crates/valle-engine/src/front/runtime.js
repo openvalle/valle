@@ -1648,7 +1648,7 @@
   // <Transition kind progress params>, or <Transition code uniforms progress>: a box of its two
   // children, one over the other, isolated, which a shader goes from the first to the second
   // by `progress`, 0 to 1. A built-in `kind` (fade by default) takes `params`; `code` is a
-  // transition in gl-transitions' form, which takes `uniforms`. Kind and code cannot change.
+  // WGSL shade(ShaderInput) function, which takes `uniforms`. Kind and code cannot change.
   const TRANSITION = ["kind", "progress", "params", "code", "uniforms", "style", "className"];
   function transitionOf(props, children, out, at) {
     if (G.svg > 0) fail(at, "<Transition> cannot be inside an <svg>");
@@ -1711,7 +1711,7 @@
     element("Transition", box, shown.map(cell), out, at);
   }
 
-  // A <ShaderLayer>'s GLSL code, which cannot change, or the shader resource it is in, written as
+  // A <ShaderLayer>'s WGSL code, which cannot change, or the shader resource it is in, written as
   // a literal; the values its uniforms take by name, each
   // a number, a boolean, a color or an array of numbers for a vector, any of them traced, the
   // image resources it reads by name, written as literals, and the px it paints out past its box.
@@ -1736,7 +1736,7 @@
     } else if (typeof code !== "string") {
       fail(
         at,
-        "<ShaderLayer> code is its shader's GLSL, a string, or source names a shader resource",
+        "<ShaderLayer> code is its shader's WGSL, a string, or source names a shader resource",
       );
     }
     const given = props.uniforms ?? {};

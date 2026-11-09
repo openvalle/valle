@@ -51,26 +51,25 @@ const RINGS = [240, 400, 560, 720, 880, 1040];
 // Foil: a faint rainbow over the face and a brighter band that the tilt slides across. The layer
 // sits inside a paper face, which draws the card's edge, and the foil fades out before its own.
 const FOIL_INSET = 12;
-const FOIL = `#version 300 es
-precision highp float;
-uniform sampler2D content;
-uniform float sweep;
-uniform float hue;
-in vec2 uv;
-out vec4 color;
+const FOIL = `
+struct Params { sweep: f32, hue: f32 }
+@group(2) @binding(0) var<uniform> params: Params;
+@group(2) @binding(1) var content: texture_2d<f32>;
+@group(2) @binding(2) var sampling: sampler;
 
-vec3 spectrum(float h) {
-  return clamp(abs(fract(h + vec3(0.0, 0.6667, 0.3333)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+fn spectrum(h: f32) -> vec3f {
+  return clamp(abs(fract(h + vec3f(0.0, 0.6667, 0.3333)) * 6.0 - 3.0) - 1.0, vec3f(0.0), vec3f(1.0));
 }
 
-void main() {
-  vec4 card = texture(content, uv);
-  float d = uv.x * 0.7 + uv.y * 0.45;
-  float band = exp(-(d - sweep) * (d - sweep) * 24.0);
-  vec3 foil = spectrum(d * 1.6 + hue) * 0.7 + 0.3;
-  float edge = smoothstep(0.0, 0.08, uv.x) * smoothstep(0.0, 0.08, 1.0 - uv.x)
+fn shade(input: ShaderInput) -> vec4f {
+  let uv = input.uv;
+  let card = textureSampleLevel(content, sampling, uv, 0.0);
+  let d = uv.x * 0.7 + uv.y * 0.45;
+  let band = exp(-(d - params.sweep) * (d - params.sweep) * 24.0);
+  let foil = spectrum(d * 1.6 + params.hue) * 0.7 + 0.3;
+  let edge = smoothstep(0.0, 0.08, uv.x) * smoothstep(0.0, 0.08, 1.0 - uv.x)
     * smoothstep(0.0, 0.06, uv.y) * smoothstep(0.0, 0.06, 1.0 - uv.y);
-  color = vec4(mix(card.rgb, foil * card.a, (0.04 + 0.22 * band) * edge), card.a);
+  return vec4f(mix(card.rgb, foil * card.a, (0.04 + 0.22 * band) * edge), card.a);
 }`;
 
 // The deck's sway, shared by the deck, the floor shadow and the foil.

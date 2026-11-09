@@ -27,9 +27,8 @@ oxc = { version = "=0.148.0", features = ["ast_visit", "codegen", "semantic", "t
 parley = { version = "0.12.0", default-features = false, features = ["std"] }
 # With libm, not the platform's math: every host strokes the same outlines.
 i_overlay = { version = "=4.5.2", default-features = false }
-# Shaders authors write, GLSL, into WGSL: wgpu's own translator. Its GLSL front end builds only
-# with the WGSL one, which wgpu turns on natively but not in the browser.
-naga = { version = "30.0.1", default-features = false, features = ["glsl-in", "wgsl-in", "wgsl-out"] }
+# Validate authored WGSL and read its resource bindings and uniform layout; no translation.
+naga = { version = "30.0.1", default-features = false, features = ["wgsl-in"] }
 kurbo = { version = "0.13.1", default-features = false, features = ["libm"] }
 # Metal textures of VideoToolbox's frames on macOS, as wgpu's Metal backend has them.
 objc2 = "0.6.5"

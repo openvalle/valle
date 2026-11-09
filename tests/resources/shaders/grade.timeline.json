@@ -1,0 +1,33 @@
+{
+  "canvas": {
+    "width": 64,
+    "height": 32,
+    "fps": 4
+  },
+  "tracks": {
+    "visual": [
+      {
+        "items": [
+          {
+            "kind": "solid",
+            "color": "#406080",
+            "duration": 1,
+            "id": "base"
+          }
+        ]
+      }
+    ],
+    "adjustment": [
+      {
+        "clips": [
+          {
+            "kind": "color-grade",
+            "start": 0,
+            "duration": 1,
+            "temperature": 1
+          }
+        ]
+      }
+    ]
+  }
+}
