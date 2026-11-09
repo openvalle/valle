@@ -48,9 +48,11 @@ pub fn load(args: &Args) -> Result<Loaded, Failure> {
         }
         std::fs::read(path).ok()
     };
+    // The engine's paths are /-separated, on Windows too, as the timeline commands give them.
+    let file = args.file.replace('\\', "/");
     let (entry, inputs) = match &lowered {
         Some(l) => (l.entry.as_str(), &l.inputs),
-        None => (args.file.as_str(), &args.inputs),
+        None => (file.as_str(), &args.inputs),
     };
     let mut scene =
         Scene::load(entry, &read, inputs, fonts()).map_err(|e| Failure::new("scene", e))?;
