@@ -1634,10 +1634,14 @@ mod tests {
     fn fixture(name: &str) -> Scene {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/resources/timeline/captions");
-        let entry = dir.join(format!("{name}.timeline.json"));
+        // Scene paths use `/`, as the CLI gives them, on Windows too.
+        let entry = dir
+            .join(format!("{name}.timeline.json"))
+            .to_string_lossy()
+            .replace('\\', "/");
         let read = |path: &str| std::fs::read_to_string(path).ok();
-        let value = serde_json::from_str(&read(entry.to_str().unwrap()).unwrap()).unwrap();
-        scene(entry.to_str().unwrap(), &value, &read)
+        let value = serde_json::from_str(&read(&entry).unwrap()).unwrap();
+        scene(&entry, &value, &read)
     }
 
     fn frame(scene: &mut Scene, seconds: f64) -> Frame {
