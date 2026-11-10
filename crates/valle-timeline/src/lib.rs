@@ -753,10 +753,14 @@ impl Document {
         let common = [
             "id", "name", "markers", "metadata", "enabled", "start", "duration",
         ];
+        let kinds = match track.kind {
+            Kind::Visual => "solid, image, video, motion or timeline",
+            _ => "color-grade or motion",
+        };
         let kind = match track.kind {
             Kind::Visual | Kind::Adjustment => Some(text(
                 o.get("kind")
-                    .ok_or(format!("{w}.kind: the clip has none"))?,
+                    .ok_or(format!("{w}.kind: the clip has none; it is {kinds}"))?,
                 &format!("{w}.kind"),
             )?),
             _ => None,
