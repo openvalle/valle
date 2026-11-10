@@ -1,0 +1,9 @@
+{
+  "spec": "crates/valle-engine/src/particles.rs",
+  "assertion": "Particles are born every 0.25s, expire after 0.75s and loop every second only in the last two rows; the last row also integrates drag and curl noise.",
+  "at": [0, 0.25, 0.625, 0.75, 0.875, 1, 1.125, 2],
+  "valle": {
+    "reason": "Eight Metal frames visually reviewed across births, expiry and the 1s wrap. Blue particle centers follow x=24+64 age, y=12+16 age\u00b2 while alive. Looping rows at 1s and 2s match exactly; the nonlooping row is empty by 2s. The orange row exercises drag and curl integration.",
+    "maxDifference": 0
+  }
+}

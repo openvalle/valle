@@ -129,5 +129,46 @@ fn wgsl_effects_and_transitions_render_their_declared_inputs() {
             "transition {cell} end"
         );
     }
+    for frame in 1..4 {
+        let (_, pixels) = image(&out.join(format!("transitions/frame-{frame:05}.png")));
+        let progress = frame as f64 / 4.0;
+        let check = |cell: usize, x: usize, y: usize, expected: [u8; 4]| {
+            let at = 4 * ((cell / 5 * 76 + 2 + y) * 520 + cell % 5 * 104 + 2 + x);
+            let actual = &pixels[at..at + 4];
+            assert!(
+                actual.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1),
+                "transition {cell}, frame {frame}, ({x},{y}): {actual:?} != {expected:?}"
+            );
+        };
+        // Both children are solid at (16,20): yellow and white. Fade interpolates their
+        // encoded sRGB channels; multiply reaches yellow × white at its midpoint.
+        for (cell, amount) in [(0, progress), (11, (2.0 * progress - 1.0).max(0.0))] {
+            check(
+                cell,
+                16,
+                20,
+                [249.0, 230.0, 46.0, 255.0].map(|a| (a + (255.0 - a) * amount).round() as u8),
+            );
+        }
+        // Wipes select unchanged child pixels on either side of a moving edge. Check both
+        // directions and three positions, away from the antialiased edge itself.
+        for cell in [1, 2] {
+            for x in [12, 50, 88] {
+                let to = if cell == 1 {
+                    (x as f64 + 0.5) / 100.0 > 1.0 - progress
+                } else {
+                    (x as f64 + 0.5) / 100.0 < progress
+                };
+                let at = 4 * (62 * 520 + cell * 104 + 2 + x);
+                let endpoint = if to { &last } else { &first };
+                check(cell, x, 60, endpoint[at..at + 4].try_into().unwrap());
+            }
+        }
+        // At these progress values the circle has revealed its center but not its corner.
+        for (x, y, endpoint) in [(50, 36, &last), (1, 1, &first)] {
+            let at = 4 * ((2 + y) * 520 + 3 * 104 + 2 + x);
+            check(3, x, y, endpoint[at..at + 4].try_into().unwrap());
+        }
+    }
     std::fs::remove_dir_all(out).unwrap();
 }

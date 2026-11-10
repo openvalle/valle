@@ -14,12 +14,31 @@ import { join } from "node:path";
 import { cache, evaluate as evaluatePage, launch, root } from "./browser.ts";
 
 /** The examples and frames compared, and the props bound once the player is open. */
-const CASES: { entry: string; frames: number[]; props?: Record<string, unknown> }[] = [
+const CASES: {
+  entry: string;
+  frames: number[];
+  props?: Record<string, unknown>;
+  pixels?: { maxDifference: number; maxPixels: number };
+}[] = [
   { entry: "examples/hello.motion.tsx", frames: [0, 60] },
   { entry: "examples/01-kinetic-title.motion.tsx", frames: [45] },
   { entry: "examples/02-logo-sting.motion.tsx", frames: [165, 270] },
   { entry: "examples/03-data-dashboard.motion.tsx", frames: [120] },
+  { entry: "examples/04-ui-showcase.motion.tsx", frames: [150] },
+  { entry: "examples/05-story-vertical.motion.tsx", frames: [150] },
   { entry: "examples/06-memphis-loop.motion.tsx", frames: [30] },
+  { entry: "examples/07-route-map.motion.tsx", frames: [150] },
+  // Reviewed native/WASM captures differ at 3 isolated pixels by at most 13 levels in the
+  // rotating translucent ray path. Removing that path makes both frames pixel-identical.
+  {
+    entry: "examples/08-celebrate.motion.tsx",
+    frames: [90, 198],
+    pixels: { maxDifference: 16, maxPixels: 4 },
+  },
+  { entry: "examples/launch.motion.tsx", frames: [150] },
+  { entry: "tests/cases/motion/spring/scene.tsx", frames: [0, 6, 4, 10] },
+  { entry: "tests/cases/motion/noise/scene.tsx", frames: [0, 4, 2] },
+  { entry: "tests/cases/motion/particles/scene.tsx", frames: [0, 7, 8, 9] },
   { entry: "examples/09-cards-3d.motion.tsx", frames: [210] },
   { entry: "examples/10-lower-third.motion.tsx", frames: [40] },
   {
@@ -259,13 +278,16 @@ const PAGE = `<!doctype html>
   /** How the frame on screen differs from \`native\`'s where it is opaque: the canvas is. */
   window.shown = async (screenshot, native) => {
     const [x, y] = [await decoded(screenshot), await decoded(native)];
-    if (x.length !== y.length) return Infinity;
-    let most = 0;
+    if (x.length !== y.length) return { most: Infinity, differ: Infinity };
+    let most = 0, differ = 0;
     for (let i = 0; i < x.length; i += 4) {
       if (y[i + 3] !== 255) continue;
-      for (let k = 0; k < 3; k++) most = Math.max(most, Math.abs(x[i + k] - y[i + k]));
+      let d = 0;
+      for (let k = 0; k < 3; k++) d = Math.max(d, Math.abs(x[i + k] - y[i + k]));
+      most = Math.max(most, d);
+      if (d > 1) differ++;
     }
-    return most;
+    return { most, differ };
   };
 </script>
 `;
@@ -501,7 +523,7 @@ async function main() {
     page.on("pageerror", (error) => console.log(`exception: ${error.message}`));
     await page.goto(`http://127.0.0.1:${server.port}/`);
     const evaluate = (expression: string) => evaluatePage(page, expression);
-    for (const { entry, frames, props } of CASES) {
+    for (const { entry, frames, props, pixels } of CASES) {
       for (const frame of frames) {
         const name = named(entry, frame, props);
         const native = `/native/${encodeURIComponent(name)}`;
@@ -519,7 +541,9 @@ async function main() {
             ? "a frame of another size"
             : `most ${d.most}, ${d.differ} of ${d.pixels} pixels by more than 1${d.differ ? `, within ${d.box.join(",")}` : ""}`;
         console.log(`${name}: ${line} (${d.ms} ms)`);
-        if (d.size === true || d.most > STEP || d.differ > d.pixels * SHARE) {
+        const step = pixels?.maxDifference ?? STEP;
+        const maxPixels = pixels?.maxPixels ?? d.pixels * SHARE;
+        if (d.size === true || d.most > step || d.differ > maxPixels) {
           const url: string = await evaluate("drawn()");
           const png = Buffer.from(url.slice(url.indexOf(",") + 1), "base64");
           await Bun.write(
@@ -533,22 +557,28 @@ async function main() {
         const [width, height] = d.size;
         // The canvas shows a frame the worker drew some animation frames later: how many is
         // the browser's, so the page is looked at again for up to 2 s.
-        let most = Infinity;
+        let shown = { most: Infinity, differ: Infinity };
         let screen = "";
-        for (let tries = 0; tries < 20 && most > STEP; tries++) {
+        for (
+          let tries = 0;
+          tries < 20 && (shown.most > step || shown.differ > maxPixels);
+          tries++
+        ) {
           await evaluate(`new Promise((r) => setTimeout(() => requestAnimationFrame(r), 100))`);
           const png = await page.screenshot({
             clip: { x: 0, y: 0, width, height },
           });
           screen = png.toString("base64");
-          most = await evaluate(
+          shown = await evaluate(
             `shown(${JSON.stringify(`data:image/png;base64,${screen}`)}, ${JSON.stringify(native)})`,
           );
         }
-        if (most > STEP) {
+        if (shown.most > step || shown.differ > maxPixels) {
           const png = natives.get(name)!.slice(0, -4);
           await Bun.write(`${png}.screen.png`, Buffer.from(screen, "base64"));
-          failed.push(`${name}: on screen, a channel differs by ${most}`);
+          failed.push(
+            `${name}: on screen, most ${shown.most}, ${shown.differ} pixels by more than 1`,
+          );
         }
         // A value its control does not take fails, and what was bound stays.
         if (props) {

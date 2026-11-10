@@ -1,0 +1,9 @@
+{
+  "spec": "crates/valle-engine/src/spring.rs",
+  "assertion": "Undamped, critically damped and overdamped springs start after 0.25s; overshoot and settling survive reverse and alternating seeks.",
+  "at": [0, 0.25, 0.5, 0.75, 1, 1.25, 2],
+  "valle": {
+    "reason": "Seven Metal frames visually reviewed. Horizontal positions agree within raster coverage rounding with 1-cos(2\u03c0t), 1-(1+4t)exp(-4t), and 1-4/3 exp(-2t)+1/3 exp(-8t), starting at 0.25s. The undamped row crosses its target and returns; the other rows settle.",
+    "maxDifference": 0
+  }
+}

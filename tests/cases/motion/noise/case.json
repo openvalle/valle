@@ -1,0 +1,9 @@
+{
+  "spec": "crates/valle-engine/src/noise.rs",
+  "assertion": "Seeded 1D noise produces identical blue rows; 2D noise produces a distinct orange row and all sampled frames are independent of seek order.",
+  "at": [0, 0.25, 0.5, 1, 2],
+  "valle": {
+    "reason": "Five Metal frames visually reviewed. The two blue rows have identical pixels after a 44px translation at every sample. The orange 2D row varies independently. Mathematical noise properties are also tested in noise.rs.",
+    "maxDifference": 0
+  }
+}
