@@ -50,7 +50,14 @@ fn create(dir: &Path, width: u32, height: u32, fps: &str) -> Result<Value, Failu
     let p = Project::create(dir, width, height, fps).map_err(failed)?;
     Ok(json!({
         "status": "ok",
-        "summary": format!("created {} in {}: {width}×{height} at {fps} fps", p.name, p.root.display()),
+        "summary": format!(
+            "created {} in {}: {width}×{height} at {fps} fps\nnext: valle project add <files> \
+             (run in {}), then put clips in {}; valle docs project",
+            p.name,
+            p.root.display(),
+            p.root.display(),
+            p.timeline
+        ),
         "root": p.root.display().to_string(),
         "timeline": p.timeline,
     }))
@@ -102,21 +109,52 @@ fn show(p: &Project) -> Result<Value, Failure> {
     Ok(out)
 }
 
+/// How a timeline clip shows the file at `path`, by its alias.
+fn clip_of(path: &str, alias: &str) -> String {
+    let ext = path
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        _ if path.starts_with("components/") => {
+            format!("{{ \"kind\": \"motion\", \"component\": \"{alias}\" }}")
+        }
+        "png" | "jpg" | "jpeg" | "webp" | "svg" => {
+            format!("{{ \"kind\": \"image\", \"src\": \"{alias}\" }}")
+        }
+        "wav" | "mp3" | "m4a" | "aac" | "flac" | "ogg" | "opus" => {
+            format!("{{ \"src\": \"{alias}\" }} on an audio track")
+        }
+        "ttf" | "otf" | "woff" | "woff2" => {
+            format!("\"fontFamily\": \"{alias}\" in a caption style")
+        }
+        "json" => format!("{{ \"kind\": \"timeline\", \"src\": \"{alias}\" }}"),
+        _ => format!("{{ \"kind\": \"video\", \"src\": \"{alias}\" }}"),
+    }
+}
+
 fn add(p: &Project, from: &[PathBuf], link: bool) -> Result<Value, Failure> {
     let mut out = p.add(from, link).map_err(failed)?;
+    // Each file by the name its clips use, and how a clip shows it.
+    for a in out["added"].as_array_mut().into_iter().flatten() {
+        let clip = clip_of(
+            a["path"].as_str().unwrap_or_default(),
+            a["alias"].as_str().unwrap_or_default(),
+        );
+        a["clip"] = clip.into();
+    }
     let mut lines: Vec<String> = (out["added"].as_array().into_iter().flatten())
         .map(|a| {
+            let alias = a["alias"].as_str().unwrap_or_default();
+            let path = a["path"].as_str().unwrap_or_default();
             let again = if a["reused"] == true {
-                " (already there)"
+                ", already there"
             } else {
                 ""
             };
-            format!(
-                "{}{again}: \"{}\": {}",
-                a["path"].as_str().unwrap_or_default(),
-                a["alias"].as_str().unwrap_or_default(),
-                a["resource"][a["alias"].as_str().unwrap_or_default()]
-            )
+            let clip = a["clip"].as_str().unwrap_or_default();
+            format!("{alias}: {path}{again}; a clip shows it as {clip}")
         })
         .collect();
     for f in out["failed"].as_array().into_iter().flatten() {
