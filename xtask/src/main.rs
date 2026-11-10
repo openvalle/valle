@@ -1,7 +1,7 @@
 //! Repository tasks, run as `cargo xtask <command>`.
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 /// JavaScript and TypeScript sources, checked by both Prettier and Oxlint.
@@ -19,9 +19,35 @@ commands:
   fonts           prepare the pinned test fonts from the download cache
   build-web       build the engine for the browser into web/packages/engine/dist, and
                   Studio into web/apps/studio/dist
-  package         build a release executable with Studio embedded into dist/valle (.exe
-                  on Windows), for the current platform
+  package [--lavapipe <driver.br>]
+                  build a release executable with Studio embedded into dist/valle (.exe
+                  on Windows), for the current platform; on Linux and Windows, with the
+                  pinned lavapipe driver embedded too, or the one given
+  lavapipe        download the pinned lavapipe driver for this platform into
+                  target/lavapipe, check it and print its path, for VALLE_LAVAPIPE
 ";
+
+/// The valle-lavapipe release Valle draws on without a GPU, and the SHA-256 of each platform's
+/// Brotli-compressed driver in it.
+const LAVAPIPE: &str = "26.2.6";
+const LAVAPIPE_DRIVERS: [(&str, &str); 4] = [
+    (
+        "linux-x86_64.so",
+        "484cd1493f1db9d314dbc055daf1f3071e659ed67c55c9a06ce49831f52a4f8e",
+    ),
+    (
+        "linux-aarch64.so",
+        "a58595c2cbf9a55eaeb40a5b644e00579b0cd5fb1b82ef665ff8bbce65521851",
+    ),
+    (
+        "windows-x86_64.dll",
+        "545967a49134f1bdd3d7765683006eafe18948f0d9b8cb067ab4e986a6a60f7e",
+    ),
+    (
+        "windows-aarch64.dll",
+        "361f161c2c7bef0c6423abd72916eb6e9cc3e79e5288548bf9ad6a2ff0de0019",
+    ),
+];
 
 /// The wasm-bindgen that makes the browser module's JavaScript: the version `valle-web` pins.
 const WASM_BINDGEN: &str = "0.2.130";
@@ -48,8 +74,13 @@ fn main() -> ExitCode {
         "fonts" => Err(unexpected(flags)),
         "build-web" if flags.is_empty() => build_web(),
         "build-web" => Err(unexpected(flags)),
-        "package" if flags.is_empty() => package(),
-        "package" => Err(unexpected(flags)),
+        "package" => match flags {
+            [] => package(None),
+            [flag, driver] if flag == "--lavapipe" => package(Some(Path::new(driver))),
+            _ => Err(unexpected(flags)),
+        },
+        "lavapipe" if flags.is_empty() => lavapipe().map(|path| println!("{}", path.display())),
+        "lavapipe" => Err(unexpected(flags)),
         "help" | "-h" | "--help" => {
             print!("{USAGE}");
             Ok(())
@@ -300,18 +331,30 @@ fn build_web() -> Result<(), String> {
     Ok(())
 }
 
-/// A standalone executable: the browser build must precede the native one that embeds it.
-fn package() -> Result<(), String> {
+/// A standalone executable: the browser build must precede the native one that embeds it. On
+/// Linux and Windows, `lavapipe`, a driver valle-lavapipe compressed for this platform, is
+/// embedded too, or the pinned one.
+fn package(lavapipe: Option<&Path>) -> Result<(), String> {
+    let mut build = Command::new(cargo_path());
+    build.args(["build", "--locked", "--release", "-p", "valle-cli"]);
+    if cfg!(any(target_os = "linux", target_os = "windows")) {
+        let driver = match lavapipe {
+            Some(driver) => driver.to_path_buf(),
+            None => self::lavapipe()?,
+        };
+        // `include_bytes!` reads it from the crate's folder unless the path is absolute; not
+        // `canonicalize`, whose Windows paths take the `\\?\` prefix.
+        let driver =
+            (std::path::absolute(&driver)).map_err(|e| format!("{}: {e}", driver.display()))?;
+        build.args(["--features", "embed-web,embed-lavapipe"]);
+        build.env("VALLE_LAVAPIPE", driver);
+    } else if lavapipe.is_some() {
+        return Err("lavapipe is embedded on Linux and Windows only".into());
+    } else {
+        build.args(["--features", "embed-web"]);
+    }
     build_web()?;
-    cargo(&[
-        "build",
-        "--locked",
-        "--release",
-        "-p",
-        "valle-cli",
-        "--features",
-        "embed-web",
-    ])?;
+    run(&mut build, "cargo build --release -p valle-cli")?;
     let name = format!("valle{}", std::env::consts::EXE_SUFFIX);
     let dist = root().join("dist");
     std::fs::create_dir_all(&dist).map_err(|e| e.to_string())?;
@@ -324,6 +367,45 @@ fn package() -> Result<(), String> {
         size as f64 / 1048576.0
     );
     Ok(())
+}
+
+/// The pinned lavapipe driver for this platform, in `target/lavapipe`: downloaded unless a copy
+/// with its SHA-256 is there.
+fn lavapipe() -> Result<PathBuf, String> {
+    let os = match std::env::consts::OS {
+        "linux" => "linux",
+        "windows" => "windows",
+        other => return Err(format!("lavapipe is for Linux and Windows, not {other}")),
+    };
+    let platform = format!("{os}-{}", std::env::consts::ARCH);
+    let (kind, sha256) = (LAVAPIPE_DRIVERS.iter())
+        .find(|(kind, _)| kind.rsplit_once('.').is_some_and(|(p, _)| p == platform))
+        .ok_or_else(|| format!("valle-lavapipe has no driver for {platform}"))?;
+    let name = format!("valle-lavapipe-{LAVAPIPE}-{kind}.br");
+    let dir = root().join("target/lavapipe");
+    let path = dir.join(&name);
+    let digest = |bytes: &[u8]| -> String {
+        let d = ring::digest::digest(&ring::digest::SHA256, bytes);
+        d.as_ref().iter().map(|b| format!("{b:02x}")).collect()
+    };
+    if std::fs::read(&path).is_ok_and(|bytes| digest(&bytes) == *sha256) {
+        return Ok(path);
+    }
+    let url =
+        format!("https://github.com/openvalle/valle-lavapipe/releases/download/v{LAVAPIPE}/{name}");
+    eprintln!("downloading {url}");
+    let bytes = (ureq::get(&url).call())
+        .and_then(|mut r| r.body_mut().with_config().limit(256 << 20).read_to_vec())
+        .map_err(|e| format!("{url}: {e}"))?;
+    let got = digest(&bytes);
+    if got != *sha256 {
+        return Err(format!("{url}: SHA-256 {got}, not the pinned {sha256}"));
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let part = dir.join(format!("{name}.{}.part", std::process::id()));
+    std::fs::write(&part, &bytes).map_err(|e| format!("{}: {e}", part.display()))?;
+    std::fs::rename(&part, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(path)
 }
 
 /// Accepts either no flags or exactly `name`, and reports which.
