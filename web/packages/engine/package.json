@@ -1,9 +1,14 @@
 {
-  "name": "valle-engine",
+  "name": "@openvalle/engine",
   "version": "0.1.0",
-  "private": true,
-  "type": "module",
   "description": "Valle's engine in the browser: a Motion scene or a Timeline drawn with WebGPU",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openvalle/valle.git",
+    "directory": "web/packages/engine"
+  },
+  "type": "module",
   "exports": {
     ".": "./dist/index.js",
     "./element": "./dist/element.js",
@@ -11,5 +16,8 @@
   },
   "files": [
     "dist"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }
