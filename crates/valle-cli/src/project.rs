@@ -117,7 +117,7 @@ fn clip_of(path: &str, alias: &str) -> String {
         .unwrap_or_default()
         .to_ascii_lowercase();
     match ext.as_str() {
-        _ if path.starts_with("components/") || path.ends_with(".motion.tsx") => {
+        _ if path.ends_with(".motion.tsx") => {
             format!("{{ \"kind\": \"motion\", \"component\": \"{alias}\" }}")
         }
         "png" | "jpg" | "jpeg" | "webp" | "svg" => {
@@ -138,13 +138,15 @@ fn clip_of(path: &str, alias: &str) -> String {
 
 fn add(p: &Project, from: &[PathBuf], link: bool) -> Result<Value, Failure> {
     let mut out = p.add(from, link).map_err(failed)?;
-    // Each file by the name its clips use, and how a clip shows it.
+    // `path` can name a component's folder; the binding names the actual scene or media file.
     for a in out["added"].as_array_mut().into_iter().flatten() {
-        let clip = clip_of(
-            a["path"].as_str().unwrap_or_default(),
-            a["alias"].as_str().unwrap_or_default(),
-        );
-        a["clip"] = clip.into();
+        let alias = a["alias"].as_str().expect("an added file has an alias");
+        let resource = &a["resource"][alias];
+        let path = resource
+            .as_str()
+            .or_else(|| resource[0].as_str())
+            .expect("an added resource binds one file");
+        a["clip"] = clip_of(path, alias).into();
     }
     let mut lines: Vec<String> = (out["added"].as_array().into_iter().flatten())
         .map(|a| {
@@ -403,4 +405,80 @@ fn free(path: &Path) -> PathBuf {
         .map(|k| path.with_file_name(format!("{stem}-{k}{ext}")))
         .find(|p| !p.exists())
         .expect("a free name")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use indoc::indoc;
+
+    #[test]
+    fn copied_and_linked_components_describe_the_bound_scene() {
+        let dir = std::env::temp_dir().join(format!("valle-add-components-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let folder = dir.join("title");
+        std::fs::create_dir_all(&folder).unwrap();
+        let source = indoc! {"
+            export const composition = { width: 32, height: 32, fps: 30, duration: 1 };
+            export default function S() { return <View style={{ flex: 1 }} />; }
+        "};
+        std::fs::write(folder.join("title.motion.tsx"), source).unwrap();
+        let single = dir.join("single.motion.tsx");
+        std::fs::write(&single, source).unwrap();
+        for link in [false, true] {
+            let root = dir.join(if link { "linked" } else { "copied" });
+            let p = Project::create(&root, 32, 32, "30").unwrap();
+            let out = add(&p, &[folder.clone(), single.clone()], link)
+                .unwrap_or_else(|e| panic!("{}", e.message));
+            assert_eq!(out["added"].as_array().unwrap().len(), 2);
+            for a in out["added"].as_array().unwrap() {
+                let alias = a["alias"].as_str().unwrap();
+                let hint = a["clip"].as_str().unwrap();
+                let clip: Value = serde_json::from_str(hint).unwrap();
+                assert_eq!(clip, json!({ "kind": "motion", "component": alias }), "{a}");
+                assert!(
+                    a["resource"][alias]
+                        .as_str()
+                        .unwrap()
+                        .ends_with(".motion.tsx")
+                );
+                assert!(out["summary"].as_str().unwrap().contains(hint));
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn existing_files_inside_components_keep_their_clip_kind() {
+        let dir = std::env::temp_dir().join(format!("valle-add-assets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let p = Project::create(&dir, 32, 32, "30").unwrap();
+        let timeline = p.root.join(&p.timeline);
+        let mut doc: Value = serde_json::from_slice(&std::fs::read(&timeline).unwrap()).unwrap();
+        // Reusing a resource also permits its existing single-file array binding.
+        doc["resources"] = json!({ "art": ["components/logo.svg"] });
+        std::fs::write(&timeline, doc.to_string()).unwrap();
+        for (file, kind) in [
+            ("logo.svg", "image"),
+            ("nested.timeline.json", "timeline"),
+            ("shot.mp4", "video"),
+        ] {
+            // Adding binds files without decoding them; this test checks the usage hint.
+            let path = dir.join("components").join(file);
+            std::fs::write(&path, []).unwrap();
+            let out = add(&p, &[path], false).unwrap_or_else(|e| panic!("{}", e.message));
+            let a = &out["added"][0];
+            assert_eq!(a["reused"], true);
+            let alias = a["alias"].as_str().unwrap();
+            if file == "logo.svg" {
+                assert_eq!(alias, "art");
+                assert_eq!(a["resource"][alias], json!(["components/logo.svg"]));
+            }
+            let hint = a["clip"].as_str().unwrap();
+            let clip: Value = serde_json::from_str(hint).unwrap();
+            assert_eq!(clip, json!({ "kind": kind, "src": alias }), "{a}");
+            assert!(out["summary"].as_str().unwrap().contains(hint));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

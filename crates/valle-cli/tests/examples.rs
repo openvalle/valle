@@ -34,10 +34,7 @@ fn every_example_checks_cleanly() {
             .unwrap();
         let result: Value = serde_json::from_slice(&out.stdout)
             .unwrap_or_else(|_| panic!("{name}: {}", String::from_utf8_lossy(&out.stderr)));
-        if !out.status.success()
-            || result["status"] != "ok"
-            || result.get("warnings").is_some()
-        {
+        if !out.status.success() || result["status"] != "ok" || result.get("warnings").is_some() {
             failures.push(format!("{name}: {result}"));
         }
         checked += 1;
