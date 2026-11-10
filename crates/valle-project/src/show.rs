@@ -39,6 +39,7 @@ impl Named {
 impl Project {
     /// The timeline at `rel` in the project, including an empty edit with imported resources.
     pub fn document(&self, rel: &str) -> Result<Document, Error> {
+        valle_engine::entry::Kind::Timeline.check(rel)?;
         let text = (fs::read_to_string(self.root.join(rel))).map_err(|e| format!("{rel}: {e}"))?;
         let value = serde_json::from_str(&text).map_err(|e| format!("{rel}: {e}"))?;
         Document::read_edit(&value).map_err(|e| format!("{rel}: {e}"))
@@ -79,7 +80,7 @@ impl Project {
             if !n.missing
                 && !n.written.starts_with("http://")
                 && !n.written.starts_with("https://")
-                && n.written.ends_with(".json")
+                && n.written.ends_with(".timeline.json")
                 && seen.insert(full.clone())
             {
                 let path = self

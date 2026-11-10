@@ -512,12 +512,12 @@ fn combination_allowances_reject_missing_effects() {
             ),
         ] {
             let dir = root.join("tests/cases").join(name);
-            let source = std::fs::read_to_string(dir.join("scene.tsx")).unwrap();
+            let source = std::fs::read_to_string(dir.join("scene.motion.tsx")).unwrap();
             let changed = source.replacen(from, to, 1);
             assert_ne!(source, changed, "mutation must change {name}");
             let mut scene = valle_engine::scene::Scene::load(
-                "probe.tsx",
-                &|path| (path == "probe.tsx").then(|| changed.as_bytes().to_vec()),
+                "probe.motion.tsx",
+                &|path| (path == "probe.motion.tsx").then(|| changed.as_bytes().to_vec()),
                 &valle_engine::front::Inputs::default(),
                 std::rc::Rc::new(|_| Err("these geometric probes do not use fonts".into())),
             )
@@ -594,14 +594,15 @@ fn motion_baselines_reject_wrong_interpolation_echo_and_exposure() {
             ("shutter", "0.2", 6, "angle={180}", "angle={0}"),
             ("shutter", "0.2", 6, "fps: 30", "fps: 60"),
         ] {
-            let source =
-                std::fs::read_to_string(root.join(format!("tests/cases/motion/{name}/scene.tsx")))
-                    .unwrap();
+            let source = std::fs::read_to_string(
+                root.join(format!("tests/cases/motion/{name}/scene.motion.tsx")),
+            )
+            .unwrap();
             let changed = source.replacen(from, to, 1);
             assert_ne!(source, changed, "mutation must change {name}");
             let mut scene = valle_engine::scene::Scene::load(
-                "probe.tsx",
-                &|path| (path == "probe.tsx").then(|| changed.as_bytes().to_vec()),
+                "probe.motion.tsx",
+                &|path| (path == "probe.motion.tsx").then(|| changed.as_bytes().to_vec()),
                 &valle_engine::front::Inputs::default(),
                 std::rc::Rc::new(|_| Err("these geometric probes do not use fonts".into())),
             )

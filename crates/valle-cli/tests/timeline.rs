@@ -62,7 +62,7 @@ fn a_new_projects_default_timeline_can_be_edited_and_queried() {
         .output()
         .unwrap();
     assert!(created.status.success(), "{created:?}");
-    let timeline = Timeline(root.join("timeline.json"));
+    let timeline = Timeline(root.join("main.timeline.json"));
     assert_eq!(timeline.run("query", &[])["status"], "ok");
     assert_eq!(
         timeline.edit(json!({"op":"add","track":"tracks.visual[0]","clip":{

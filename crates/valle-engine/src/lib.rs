@@ -3,6 +3,7 @@
 
 pub mod audio;
 pub mod ease;
+pub mod entry;
 pub mod eval;
 pub mod format;
 pub mod front;

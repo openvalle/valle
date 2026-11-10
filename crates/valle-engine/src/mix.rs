@@ -84,6 +84,7 @@ fn samples(t: Tick) -> i64 {
 
 /// The mix of the document at `path`, and its sources.
 pub fn mix(path: &str, doc: &Document) -> Result<(Mix, Vec<Source>), Error> {
+    crate::entry::Kind::Timeline.check(path)?;
     let folder = path.rsplit_once('/').map_or("", |(dir, _)| dir);
     let section = doc.mix.clone().unwrap_or(Value::Object(Map::new()));
     fields(&section, &["buses", "master"], "mix")?;
@@ -149,7 +150,11 @@ pub fn mix(path: &str, doc: &Document) -> Result<(Mix, Vec<Source>), Error> {
                     (Source::File(file(src, &format!("{}.src", c.at))?), true)
                 }
                 Content::Timeline { src } => {
-                    (Source::Timeline(file(src, &format!("{}.src", c.at))?), true)
+                    let path = file(src, &format!("{}.src", c.at))?;
+                    crate::entry::Kind::Timeline
+                        .check(&path)
+                        .map_err(|e| format!("{}.src: {e}", c.at))?;
+                    (Source::Timeline(path), true)
                 }
                 _ => continue,
             };

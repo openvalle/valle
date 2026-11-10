@@ -21,6 +21,7 @@ pub struct Declared {
 
 /// What the scene at `entry` declares; `read` gives its text.
 pub fn declared(entry: &str, read: &dyn Fn(&str) -> Option<String>) -> Result<Declared, Error> {
+    crate::entry::Kind::Motion.check(entry)?;
     let text = read(entry).ok_or_else(|| format!("{entry}: not found"))?;
     let code = rewrite::rewrite(entry, &text, 0).map_err(|e| format!("{entry}: {e}"))?;
     let folder = entry.rsplit_once('/').map_or("", |(dir, _)| dir);
@@ -48,6 +49,7 @@ pub fn declared(entry: &str, read: &dyn Fn(&str) -> Option<String>) -> Result<De
 /// The files the scene at `entry` reads, without running it: the modules it imports, itself
 /// first, then its resources' defaults joined to its folder, addresses on the web left out.
 pub fn files(entry: &str, read: &dyn Fn(&str) -> Option<String>) -> Result<Vec<String>, Error> {
+    crate::entry::Kind::Motion.check(entry)?;
     let text = read(entry).ok_or_else(|| format!("{entry}: not found"))?;
     let mut loader = Loader {
         read,
@@ -166,5 +168,46 @@ impl Loader<'_> {
             .into_iter()
             .chain(EXTENSIONS.iter().map(|e| format!("{key}{e}")))
             .find_map(|path| (self.read)(&path).map(|text| (path, text)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_scene_entries_require_the_motion_suffix() {
+        let read = |path: &str| -> Option<String> { panic!("must reject before reading {path}") };
+        assert!(
+            declared("Card.tsx", &read)
+                .err()
+                .unwrap()
+                .contains(".motion.tsx")
+        );
+        assert!(
+            files("Card.tsx", &read)
+                .unwrap_err()
+                .contains(".motion.tsx")
+        );
+        assert!(
+            super::super::Front::load("Card.tsx", &read, &super::super::Inputs::default())
+                .err()
+                .unwrap()
+                .contains(".motion.tsx")
+        );
+        let scene = indoc::indoc! {r#"
+            import Card from "./Card";
+            export const composition = { width: 10, height: 10, fps: 30, duration: 1 };
+            export default function Scene() { return <Card />; }
+        "#};
+        let read = |path: &str| match path {
+            "scene.motion.tsx" => Some(scene.to_string()),
+            "Card.tsx" => Some("export default function Card() { return <View />; }".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            files("scene.motion.tsx", &read).unwrap(),
+            ["scene.motion.tsx", "Card.tsx"]
+        );
     }
 }

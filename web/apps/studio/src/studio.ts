@@ -167,7 +167,7 @@ export class ValleStudio extends LitElement {
   }
 
   get timeline(): boolean {
-    return this.#entry.endsWith(".json");
+    return this.#entry.endsWith(".timeline.json");
   }
 
   /** A new player of the entry, its drafts given in place of the files. */
@@ -417,7 +417,7 @@ export class ValleStudio extends LitElement {
       this.#entry
         .split("/")
         .pop()!
-        .replace(/(\.motion\.tsx|\.tsx|\.timeline\.json|\.json)$/, "") + ".mp4";
+        .replace(/(\.motion\.tsx|\.timeline\.json)$/, "") + ".mp4";
     const out = await service.saveFile(name);
     if (!out) {
       this.#status = "Export cancelled.";
@@ -1056,10 +1056,7 @@ export class ValleStudio extends LitElement {
   #openFile(file: Listed): void {
     this.#focused = false;
     this.#inspectorVisible = true;
-    const preview =
-      /\.tsx$|\.timeline\.json$|(?:^|\/)timeline\.json$/.test(file.path) ||
-      file.path === this.session?.entry ||
-      this.session?.timelines?.includes(file.path);
+    const preview = /\.motion\.tsx$|\.timeline\.json$/.test(file.path);
     if (preview) {
       this.#rightTab = "properties";
       if (file.path !== this.#entry) void this.#run(() => this.#load(file.path));

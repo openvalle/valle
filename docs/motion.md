@@ -6,6 +6,10 @@ function of the time and the scene's inputs, so the same scene draws the same pi
 machine. `valle motion check` compiles it and checks every frame; `valle motion render` draws
 it.
 
+Scene entries use the `.motion.tsx` suffix, including components used as Timeline clips or
+caption presenters. Imported helpers keep ordinary names such as `Card.tsx` and `math.ts`;
+they are modules, not entries. CLI and browser playback reject other entry suffixes.
+
 ## A first scene
 
 ```tsx scene title.motion.tsx

@@ -1,7 +1,15 @@
 import { expect, spyOn, test } from "bun:test";
-import { Player, type Stats } from "../src/index.ts";
+import { createPlayer, Player, type Stats } from "../src/index.ts";
 import type { Connection, Spawn } from "../src/connection.ts";
 import type { Request } from "../src/messages.ts";
+
+test("an ordinary module or JSON file is rejected before transferring the canvas", async () => {
+  for (const entry of ["Card.tsx", "data.json", "timeline.json"]) {
+    await expect(createPlayer({ canvas: {} as HTMLCanvasElement, entry })).rejects.toThrow(
+      `${entry}: an entry must end with .motion.tsx or .timeline.json`,
+    );
+  }
+});
 
 // Drive the real player's scheduler with a controlled clock and worker replies.
 async function playback(

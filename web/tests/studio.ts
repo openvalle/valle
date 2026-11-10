@@ -74,6 +74,8 @@ export default function Scene() {
 }`,
   );
   await Bun.write(join(project, "notes.md"), "Notes for this project.");
+  await Bun.write(join(project, "Card.tsx"), "export default function Card() { return <View />; }");
+  await Bun.write(join(project, "data.json"), '{"title":"Hello"}');
   await Bun.write(
     join(project, "empty.timeline.json"),
     JSON.stringify({ canvas: CUT.canvas, tracks: {} }),
@@ -314,6 +316,21 @@ export default function Scene() {
       await evaluate("return studio.player === window.preview;"),
       "opening a document keeps the current preview",
     );
+    for (const file of ["Card.tsx", "data.json"]) {
+      await page.locator(`button.file[title="${file}"]`).click();
+      const source = await Bun.file(join(project, file)).text();
+      await until(
+        `source of ${file}`,
+        async () =>
+          (await page.getByRole("textbox", { name: "Source code" }).inputValue()) === source,
+      );
+      expect(
+        await evaluate(
+          "return studio.player === window.preview && !studio.shadowRoot.querySelector('.error');",
+        ),
+        `opening ${file} keeps the current preview`,
+      );
+    }
 
     await page.getByRole("button", { name: "Play", exact: true }).click();
     await openFile("cut.timeline.json", 320);

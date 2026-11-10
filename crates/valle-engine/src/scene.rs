@@ -827,8 +827,8 @@ mod tests {
 
     fn load(source: &'static str) -> Result<Scene, Error> {
         Scene::load(
-            "s.tsx",
-            &|path| (path == "s.tsx").then(|| source.as_bytes().to_vec()),
+            "s.motion.tsx",
+            &|path| (path == "s.motion.tsx").then(|| source.as_bytes().to_vec()),
             &Inputs::default(),
             fonts(),
         )
@@ -880,7 +880,7 @@ mod tests {
             "})
             .unwrap();
             let e = scene.frame(Tick(0)).unwrap_err();
-            assert!(e.starts_with("s.tsx:3:"), "{e}");
+            assert!(e.starts_with("s.motion.tsx:3:"), "{e}");
             assert!(e.contains("style width"), "{e}");
         });
     }
@@ -913,14 +913,14 @@ mod tests {
             let image = png(2, &[[255, 0, 0, 255], [255, 255, 255, 128]]);
             let files = |source: String, image: Option<Vec<u8>>| {
                 move |path: &str| match path {
-                    "scenes/s.tsx" => Some(source.clone().into_bytes()),
+                    "scenes/s.motion.tsx" => Some(source.clone().into_bytes()),
                     "img/dot.png" => image.clone(),
                     _ => None,
                 }
             };
             let read = files(source.into(), Some(image.clone()));
             let mut scene =
-                Scene::load("scenes/s.tsx", &read, &Inputs::default(), fonts()).unwrap();
+                Scene::load("scenes/s.motion.tsx", &read, &Inputs::default(), fonts()).unwrap();
             // The default from the scene's folder.
             assert_eq!(scene.resources()[0].default, ["img/dot.png"]);
             assert_eq!(scene.images()[0].size, [2, 1]);
@@ -933,13 +933,13 @@ mod tests {
             assert!(matches!(&frame.items[..], [Item::Image { image: 0, .. }]));
 
             let read = files(source.replace("://dot", "://logo"), Some(image));
-            let e = Scene::load("scenes/s.tsx", &read, &Inputs::default(), fonts())
+            let e = Scene::load("scenes/s.motion.tsx", &read, &Inputs::default(), fonts())
                 .and_then(|mut s| s.frame(Tick(0)).map(drop))
                 .unwrap_err();
-            assert!(e.starts_with("scenes/s.tsx:6:"), "{e}");
+            assert!(e.starts_with("scenes/s.motion.tsx:6:"), "{e}");
             assert!(e.contains("declares no resource logo"), "{e}");
             let read = files(source.into(), None);
-            let e = Scene::load("scenes/s.tsx", &read, &Inputs::default(), fonts())
+            let e = Scene::load("scenes/s.motion.tsx", &read, &Inputs::default(), fonts())
                 .err()
                 .unwrap();
             assert!(e.contains("resource dot: img/dot.png: not found"), "{e}");
@@ -947,7 +947,7 @@ mod tests {
             // A file bound in place of the default.
             let wide = png(3, &[[0, 0, 255, 255]; 3]);
             let read = move |path: &str| match path {
-                "scenes/s.tsx" => Some(source.as_bytes().to_vec()),
+                "scenes/s.motion.tsx" => Some(source.as_bytes().to_vec()),
                 "other/wide.png" => Some(wide.clone()),
                 _ => None,
             };
@@ -955,25 +955,26 @@ mod tests {
                 resources: [(name.to_string(), vec!["other/wide.png".to_string()])].into(),
                 ..Inputs::default()
             };
-            let scene = Scene::load("scenes/s.tsx", &read, &bind("dot"), fonts()).unwrap();
+            let scene = Scene::load("scenes/s.motion.tsx", &read, &bind("dot"), fonts()).unwrap();
             assert_eq!(scene.images()[0].size, [3, 1]);
-            let e = Scene::load("scenes/s.tsx", &read, &bind("logo"), fonts())
+            let e = Scene::load("scenes/s.motion.tsx", &read, &bind("logo"), fonts())
                 .err()
                 .unwrap();
             assert_eq!(
                 e,
-                "scenes/s.tsx: resources: the scene declares no resource logo in controls.resources"
+                "scenes/s.motion.tsx: resources: the scene declares no resource logo in controls.resources"
             );
 
             // A file on the web, by its address, as the default or bound.
             let web = source.replace("../img/dot.png", "https://x.org/dot.png");
             let read = move |path: &str| match path {
-                "scenes/s.tsx" => Some(web.clone().into_bytes()),
+                "scenes/s.motion.tsx" => Some(web.clone().into_bytes()),
                 "https://x.org/dot.png" => Some(png(2, &[[0, 0, 0, 255]; 2])),
                 "https://x.org/wide.png" => Some(png(3, &[[0, 0, 0, 255]; 3])),
                 _ => None,
             };
-            let scene = Scene::load("scenes/s.tsx", &read, &Inputs::default(), fonts()).unwrap();
+            let scene =
+                Scene::load("scenes/s.motion.tsx", &read, &Inputs::default(), fonts()).unwrap();
             assert_eq!(scene.resources()[0].default, ["https://x.org/dot.png"]);
             assert_eq!(scene.images()[0].size, [2, 1]);
             let bind = |location: &str| Inputs {
@@ -981,19 +982,24 @@ mod tests {
                 ..Inputs::default()
             };
             let scene = Scene::load(
-                "scenes/s.tsx",
+                "scenes/s.motion.tsx",
                 &read,
                 &bind("https://x.org/wide.png"),
                 fonts(),
             )
             .unwrap();
             assert_eq!(scene.images()[0].size, [3, 1]);
-            let e = Scene::load("scenes/s.tsx", &read, &bind("file:///wide.png"), fonts())
-                .err()
-                .unwrap();
+            let e = Scene::load(
+                "scenes/s.motion.tsx",
+                &read,
+                &bind("file:///wide.png"),
+                fonts(),
+            )
+            .err()
+            .unwrap();
             assert_eq!(
                 e,
-                "scenes/s.tsx: resource dot: file:///wide.png: write a path, or an http:// or \
+                "scenes/s.motion.tsx: resource dot: file:///wide.png: write a path, or an http:// or \
              https:// address"
             );
         });
@@ -1022,11 +1028,11 @@ mod tests {
         "};
             let image = png(2, &[[255, 0, 0, 255], [255, 255, 255, 128]]);
             let read = |path: &str| match path {
-                "scenes/s.tsx" => Some(source.as_bytes().to_vec()),
+                "scenes/s.motion.tsx" => Some(source.as_bytes().to_vec()),
                 "scenes/dot.png" => Some(image.clone()),
                 _ => None,
             };
-            let frame = Scene::load("scenes/s.tsx", &read, &Inputs::default(), fonts())
+            let frame = Scene::load("scenes/s.motion.tsx", &read, &Inputs::default(), fonts())
                 .unwrap()
                 .frame(Tick(0))
                 .unwrap();
@@ -1082,14 +1088,14 @@ mod tests {
             let files = |source: String| {
                 let image = image.clone();
                 move |path: &str| match path {
-                    "scenes/s.tsx" => Some(source.clone().into_bytes()),
+                    "scenes/s.motion.tsx" => Some(source.clone().into_bytes()),
                     "scenes/dot.png" => Some(image.clone()),
                     "scenes/icon.svg" => Some(icon.as_bytes().to_vec()),
                     _ => None,
                 }
             };
             let mut scene = Scene::load(
-                "scenes/s.tsx",
+                "scenes/s.motion.tsx",
                 &files(source.into()),
                 &Inputs::default(),
                 fonts(),
@@ -1116,14 +1122,14 @@ mod tests {
 
             let source = source.replace("url(resource://dot)", "url(resource://icon)");
             let e = Scene::load(
-                "scenes/s.tsx",
+                "scenes/s.motion.tsx",
                 &files(source.clone()),
                 &Inputs::default(),
                 fonts(),
             )
             .and_then(|mut s| s.frame(Tick(0)).map(drop))
             .unwrap_err();
-            assert!(e.starts_with("scenes/s.tsx:13:"), "{e}");
+            assert!(e.starts_with("scenes/s.motion.tsx:13:"), "{e}");
             assert!(
                 e.contains("backgroundImage: an SVG file shows in an <Image> only"),
                 "{e}"
@@ -1135,12 +1141,12 @@ mod tests {
                 }
                 _ => files(source.clone())(path),
             };
-            let e = Scene::load("scenes/s.tsx", &broken, &Inputs::default(), fonts())
+            let e = Scene::load("scenes/s.motion.tsx", &broken, &Inputs::default(), fonts())
                 .err()
                 .unwrap();
             assert_eq!(
                 e,
-                "scenes/s.tsx: resource icon: scenes/icon.svg: 1:41: <text> is not supported yet"
+                "scenes/s.motion.tsx: resource icon: scenes/icon.svg: 1:41: <text> is not supported yet"
             );
         });
     }
@@ -1492,13 +1498,13 @@ mod tests {
         "};
             let image = png(2, &[[255, 0, 0, 255], [0, 0, 255, 255]]);
             let read = move |path: &str| match path {
-                "s.tsx" => Some(source.as_bytes().to_vec()),
+                "s.motion.tsx" => Some(source.as_bytes().to_vec()),
                 "b.png" => Some(image.clone()),
                 _ => None,
             };
             let mut inputs = Inputs::default();
             inputs.pictures.insert("to".into(), "b.png".into());
-            let mut scene = Scene::load("s.tsx", &read, &inputs, fonts()).unwrap();
+            let mut scene = Scene::load("s.motion.tsx", &read, &inputs, fonts()).unwrap();
             // The placeholder is the composition's size; the bound file its own.
             let sizes: Vec<_> = (scene.pictures().iter())
                 .map(|p| match p {
@@ -1514,9 +1520,11 @@ mod tests {
             ));
 
             inputs.pictures.insert("source".into(), "b.png".into());
-            let e = Scene::load("s.tsx", &read, &inputs, fonts()).err().unwrap();
+            let e = Scene::load("s.motion.tsx", &read, &inputs, fonts())
+                .err()
+                .unwrap();
             assert!(
-                e.starts_with("s.tsx: pictures: the scene reads no input://source"),
+                e.starts_with("s.motion.tsx: pictures: the scene reads no input://source"),
                 "{e}"
             );
         });
@@ -1558,8 +1566,8 @@ mod tests {
                     "export const composition = {{width:200,height:100,fps:30,duration:2}}; export default function Scene() {{ const {{seconds}} = useCurrentTime(); return {expression}; }}"
                 );
                 let mut scene = Scene::load(
-                    "s.tsx",
-                    &|p| (p == "s.tsx").then(|| source.as_bytes().to_vec()),
+                    "s.motion.tsx",
+                    &|p| (p == "s.motion.tsx").then(|| source.as_bytes().to_vec()),
                     &Inputs::default(),
                     fonts(),
                 )

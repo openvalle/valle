@@ -139,6 +139,7 @@ impl Front {
         read: &dyn Fn(&str) -> Option<String>,
         inputs: &Inputs,
     ) -> Result<Front, Error> {
+        crate::entry::Kind::Motion.check(entry)?;
         let text = read(entry).ok_or_else(|| format!("{entry}: not found"))?;
         let mut loader = Loader {
             read,
@@ -1710,11 +1711,14 @@ mod tests {
                 e.contains("default export must be its root component"),
                 "{e}"
             );
-            let e = load(&[("s.tsx", "export default function S() { return null; }\n")])
-                .err()
-                .expect("no composition");
+            let e = load(&[(
+                "s.motion.tsx",
+                "export default function S() { return null; }\n",
+            )])
+            .err()
+            .expect("no composition");
             assert!(
-                e.starts_with("s.tsx: a scene exports its composition"),
+                e.starts_with("s.motion.tsx: a scene exports its composition"),
                 "{e}"
             );
         });

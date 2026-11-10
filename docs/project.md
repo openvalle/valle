@@ -8,13 +8,13 @@ works on the project the current folder is in, or the one `-C <folder>` names.
 
 ```text
 promo/
-  project.json        { "name": "promo", "timeline": "timeline.json" }
-  timeline.json       the entry timeline
-  timelines/          more timelines, if any
-  components/         Motion scenes
-  media/              footage, images, sound and fonts
-  renders/            what project render writes
-  .valle/             snapshots and render records
+  project.json          { "name": "promo", "timeline": "main.timeline.json" }
+  main.timeline.json    the entry timeline
+  timelines/            more timelines, if any
+  components/           Motion scenes
+  media/                footage, images, sound and fonts
+  renders/              what project render writes
+  .valle/               snapshots and render records
 ```
 
 ## Create and add files
@@ -37,7 +37,7 @@ use that name: `"src": "intro"` for footage, `"component": "title"` for a scene.
 ```sh
 valle project show            # timelines, resources, files out of the project or missing, snapshots
 valle project check           # the entry timeline, its files and its components' folders
-valle project check timelines/teaser.json --cost   # plan every frame too
+valle project check timelines/teaser.timeline.json --cost   # plan every frame too
 ```
 
 `check` reports every problem at once; fix them and check again.
@@ -61,7 +61,7 @@ written.
 
 ```sh
 valle project render                          # the entry timeline into renders/
-valle project render timelines/teaser.json -o teaser.mov --codec prores
+valle project render timelines/teaser.timeline.json -o teaser.mov --codec prores
 valle project render --frame 120 -o frame.png
 valle project render -o mix.wav               # the sound alone
 ```

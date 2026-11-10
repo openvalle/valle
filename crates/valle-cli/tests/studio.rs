@@ -218,11 +218,11 @@ fn the_service_reads_writes_and_runs_for_its_page_only() {
     );
     let session = session.json();
     assert_eq!(session["kind"], "project");
-    assert_eq!(session["entry"], "timeline.json");
-    assert_eq!(session["timelines"][0], "timeline.json");
+    assert_eq!(session["entry"], "main.timeline.json");
+    assert_eq!(session["timelines"][0], "main.timeline.json");
 
     // Files of the project, and nothing outside it.
-    let timeline = studio.get("/api/files/timeline.json");
+    let timeline = studio.get("/api/files/main.timeline.json");
     assert_eq!(timeline.status, 200);
     let sha = timeline.header("x-valle-sha256").expect("its SHA-256");
     assert_eq!(studio.get("/api/files/../outside.txt").status, 403);
@@ -251,14 +251,14 @@ fn the_service_reads_writes_and_runs_for_its_page_only() {
     edited.extend(b"\n");
     let written = studio.send(
         "PUT",
-        "/api/files/timeline.json",
+        "/api/files/main.timeline.json",
         &[("X-Valle-Base", &sha)],
         &edited,
     );
     assert_eq!(written.status, 200);
     let stale = studio.send(
         "PUT",
-        "/api/files/timeline.json",
+        "/api/files/main.timeline.json",
         &[("X-Valle-Base", &sha)],
         b"{}",
     );
@@ -266,15 +266,15 @@ fn the_service_reads_writes_and_runs_for_its_page_only() {
     assert_eq!(stale.json()["sha256"], written.json()["sha256"]);
     assert_eq!(
         studio
-            .send("PUT", "/api/files/timeline.json", &[], b"{}")
+            .send("PUT", "/api/files/main.timeline.json", &[], b"{}")
             .status,
         428
     );
 
     // A change from outside is said; its own write was not.
-    std::fs::write(project.join("timeline.json"), b"{\"changed\": true}\n").expect("written");
+    std::fs::write(project.join("main.timeline.json"), b"{\"changed\": true}\n").expect("written");
     let change = next(&events, |e| e["event"] == "change");
-    assert_eq!(change["path"], "timeline.json");
+    assert_eq!(change["path"], "main.timeline.json");
     assert_ne!(change["sha256"], written.json()["sha256"]);
 
     // Project commands as the CLI runs them, and renders said as events.
@@ -402,13 +402,13 @@ fn a_project_studio_out_of_a_project_opens_the_home() {
         port: ready["port"].as_u64().expect("a port") as u16,
     };
     assert_eq!(studio.get("/api/session").json()["kind"], "home");
-    assert_eq!(studio.get("/api/files/timeline.json").status, 403);
+    assert_eq!(studio.get("/api/files/main.timeline.json").status, 403);
     let body = serde_json::json!({ "folder": project }).to_string();
     let opened = studio
         .send("POST", "/api/open", &[], body.as_bytes())
         .json();
     assert_eq!(opened["kind"], "project");
-    assert_eq!(studio.get("/api/files/timeline.json").status, 200);
+    assert_eq!(studio.get("/api/files/main.timeline.json").status, 200);
     // It is among the projects opened last.
     let recent = std::fs::read(dir.join("recent-projects.json")).expect("kept");
     let recent: Value = serde_json::from_slice(&recent).expect("JSON");
@@ -426,9 +426,9 @@ fn linked_files_are_readable_only_while_the_project_references_them() {
     std::fs::write(&linked, b"linked bytes").unwrap();
     project.add(std::slice::from_ref(&linked), true).unwrap();
     let mut doc: Value =
-        serde_json::from_slice(&std::fs::read(root.join("timeline.json")).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(root.join("main.timeline.json")).unwrap()).unwrap();
     doc["tracks"] = serde_json::json!({"visual":[{"items":[{"id":"one","kind":"solid","color":"red","duration":1}]}]});
-    std::fs::write(root.join("timeline.json"), doc.to_string()).unwrap();
+    std::fs::write(root.join("main.timeline.json"), doc.to_string()).unwrap();
     let studio = Studio::start(&root, &dir.join("cache"));
     let url = format!(
         "/api/linked?file={}",
@@ -444,7 +444,7 @@ fn linked_files_are_readable_only_while_the_project_references_them() {
     assert_eq!(studio.get("/api/linked?file=relative.txt").status, 400);
     assert_eq!(studio.send("PUT", &url, &[], b"change").status, 404);
     doc["resources"] = serde_json::json!({});
-    std::fs::write(root.join("timeline.json"), doc.to_string()).unwrap();
+    std::fs::write(root.join("main.timeline.json"), doc.to_string()).unwrap();
     assert_eq!(studio.get(&url).status, 403);
     assert_eq!(std::fs::read(linked).unwrap(), b"linked bytes");
     drop(studio);

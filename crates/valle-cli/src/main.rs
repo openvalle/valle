@@ -251,17 +251,33 @@ fn run(cli: Cli) -> Result<Value, Failure> {
     }
 }
 
-/// A scene for `valle motion`, a JSON document for `valle timeline`.
+/// Rejects a helper module or data file, and points a misplaced entry at its command.
 fn scene_file(file: &str, timeline: bool, command: &str) -> Result<(), Failure> {
-    match (timeline, file.ends_with(".json")) {
-        (false, true) => Err(Failure::new("usage", "a JSON document is a timeline")
-            .hint(format!("valle timeline {command} {file}"))),
-        (true, false) => Err(
-            Failure::new("usage", "valle timeline takes a JSON document")
-                .hint(format!("valle motion {command} {file}")),
-        ),
-        _ => Ok(()),
-    }
+    use valle_engine::entry::Kind;
+    let expected = if timeline {
+        Kind::Timeline
+    } else {
+        Kind::Motion
+    };
+    expected.check(file).map_err(|e| {
+        let failure = Failure::new("usage", e);
+        let command = if timeline && matches!(command, "query" | "edit") {
+            "check"
+        } else {
+            command
+        };
+        match Kind::read(file) {
+            Ok(kind) => failure.hint(format!(
+                "valle {} {command} {file}",
+                if kind == Kind::Timeline {
+                    "timeline"
+                } else {
+                    "motion"
+                }
+            )),
+            Err(_) => failure,
+        }
+    })
 }
 
 /// A result as JSON without its empty fields: a `null`, or an empty list, says nothing, and

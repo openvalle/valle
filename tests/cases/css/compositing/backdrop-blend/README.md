@@ -8,7 +8,7 @@ retained; they were not replaced with Valle output.
 The original four boxes use `backdrop-filter: invert(1)` and
 `mix-blend-mode: multiply`: full opacity, half opacity, zero opacity, and an empty
 transparent box. The page is RGB `(64, 128, 192)`. The separate
-[controls](controls/scene.tsx) exercise invert and multiply individually.
+[controls](controls/scene.motion.tsx) exercise invert and multiply individually.
 
 ## Observed results
 

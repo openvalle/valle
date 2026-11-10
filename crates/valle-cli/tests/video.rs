@@ -175,7 +175,7 @@ fn project_output_uses_color_alpha_instead_of_its_spelling() {
     ] {
         let doc = serde_json::json!({"canvas":{"width":64,"height":36,"fps":30,"background":color},
             "tracks":{"visual":[{"items":[{"id":"one","kind":"solid","color":"transparent","duration":0.1}]}]}});
-        std::fs::write(dir.join("timeline.json"), doc.to_string()).unwrap();
+        std::fs::write(dir.join("main.timeline.json"), doc.to_string()).unwrap();
         let result = valle(&["project", "render"], &dir);
         assert_eq!(
             Path::new(result["file"].as_str().unwrap())

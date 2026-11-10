@@ -848,7 +848,7 @@ mod tests {
             want: Want::Eq(V::Num(f64::NAN)),
             when: vec![(0, true), (1, false)],
             kind: "escape".into(),
-            at: "scene.tsx:4".into(),
+            at: "scene.motion.tsx:4".into(),
         };
         let t = Template {
             guards: vec![guard],
@@ -865,7 +865,7 @@ mod tests {
             &*t.failing(&[V::Bool(true), V::Bool(false), V::Num(2.0)])
                 .unwrap()
                 .at,
-            "scene.tsx:4"
+            "scene.motion.tsx:4"
         );
         assert!(same(&V::Num(-0.0), &V::Num(0.0)));
         assert!(!same(&V::Num(1.0), &V::Bool(true)));

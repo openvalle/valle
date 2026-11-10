@@ -192,13 +192,14 @@ fn lone(file: &Path) -> Result<(), Error> {
     }
 }
 
-/// A name's stem and extension, `.motion.tsx` as one; a folder's name is all stem.
+/// A name's stem and extension, each entry's compound suffix as one; a folder's name is all stem.
 fn split(name: &str, folder: bool) -> (String, String) {
     if folder {
         return (name.to_string(), String::new());
     }
-    if let Some(stem) = name.strip_suffix(".motion.tsx") {
-        return (stem.to_string(), ".motion.tsx".into());
+    if let Ok(kind) = valle_engine::entry::Kind::read(name) {
+        let stem = name.strip_suffix(kind.suffix()).unwrap();
+        return (stem.to_string(), kind.suffix().into());
     }
     match name.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), format!(".{ext}")),

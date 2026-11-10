@@ -75,6 +75,9 @@ impl Project {
         if inside(&timeline).is_none() {
             return Err(bad("timeline is a path in the project"));
         }
+        valle_engine::entry::Kind::Timeline
+            .check(&timeline)
+            .map_err(|e| bad(&e))?;
         Ok(Project {
             root,
             name,
@@ -94,7 +97,7 @@ impl Project {
             return Err(format!("a canvas of {width}×{height} px: both above 0"));
         }
         Rate::parse(fps)?;
-        let timeline = root.join("timeline.json");
+        let timeline = root.join("main.timeline.json");
         if timeline.exists() {
             return Err(format!(
                 "{} is there already: create the project in another folder",
@@ -110,7 +113,7 @@ impl Project {
         write(&timeline, &pretty(&canvas), false)?;
         let name =
             (root.file_name()).map_or("project".into(), |n| n.to_string_lossy().into_owned());
-        let config = json!({ "name": name, "timeline": "timeline.json" });
+        let config = json!({ "name": name, "timeline": "main.timeline.json" });
         write(&root.join(FILE), &pretty(&config), false)?;
         Project::open(&root)
     }
@@ -119,13 +122,13 @@ impl Project {
     pub fn timelines(&self) -> Vec<String> {
         let mut more = Vec::new();
         history::walk(&self.root, "timelines", &mut more);
-        more.retain(|p| p.ends_with(".json"));
+        more.retain(|p| p.ends_with(".timeline.json"));
         // A referenced timeline can live outside timelines/, but still belongs to the edit.
         for rel in std::iter::once(self.timeline.clone()).chain(more.clone()) {
             if let Ok(doc) = self.document(&rel) {
                 for n in self.dependencies(&rel, &doc) {
                     if let Some(path) = n.path
-                        && path.ends_with(".json")
+                        && path.ends_with(".timeline.json")
                         && self.document(&path).is_ok()
                     {
                         more.push(path);
@@ -140,20 +143,22 @@ impl Project {
     }
 
     /// The timeline a command names, or the entry: a path from the current folder, or one in
-    /// the project, or a name in `timelines/` with or without `.json`.
+    /// the project, or a name in `timelines/` with or without `.timeline.json`.
     pub fn timeline(&self, name: Option<&str>) -> Result<PathBuf, Error> {
         let Some(name) = name else {
             return Ok(self.root.join(&self.timeline));
         };
         let mut tried = vec![absolute(Path::new(name)), self.root.join(name)];
         tried.push(self.root.join("timelines").join(name));
-        tried.push(self.root.join("timelines").join(format!("{name}.json")));
         tried.push(
             self.root
                 .join("timelines")
                 .join(format!("{name}.timeline.json")),
         );
-        (tried.into_iter().find(|p| p.is_file())).ok_or_else(|| {
+        (tried
+            .into_iter()
+            .find(|p| p.is_file() && p.to_string_lossy().ends_with(".timeline.json")))
+        .ok_or_else(|| {
             format!(
                 "no timeline {name}: the project has {}",
                 self.timelines().join(", ")
@@ -315,7 +320,7 @@ mod tests {
             "resources": resources,
             "tracks": { "visual": [{ "clips": [{ "kind": "solid", "color": "#000000ff", "start": 0, "duration": 1 }] }] }
         });
-        fs::write(p.root.join("timeline.json"), pretty(&timeline)).expect("timeline");
+        fs::write(p.root.join("main.timeline.json"), pretty(&timeline)).expect("timeline");
         p
     }
 
@@ -325,7 +330,7 @@ mod tests {
         let p = Project::create(&dir.join("promo"), 1920, 1080, "30").expect("created");
         assert_eq!(
             (p.name.as_str(), p.timeline.as_str()),
-            ("promo", "timeline.json")
+            ("promo", "main.timeline.json")
         );
         for sub in [
             "timelines",
@@ -348,35 +353,41 @@ mod tests {
         // A path out of the project is not its timeline.
         put(
             &dir.join("odd/project.json"),
-            r#"{"name":"odd","timeline":"../t.json"}"#,
+            r#"{"name":"odd","timeline":"../t.timeline.json"}"#,
         );
         assert!(Project::open(&dir.join("odd")).is_err());
     }
 
     #[test]
     fn snapshots_and_dependencies_include_nested_timelines() {
-        let p = project("nested", json!({ "child": "timelines/parts/child.json" }));
+        let p = project(
+            "nested",
+            json!({ "child": "timelines/parts/child.timeline.json" }),
+        );
         let external = folder("nested-external").join("voice.wav");
         put(&external, "sound");
         put(&p.root.join("media/clip.mp4"), "video");
         let mut child: serde_json::Value =
-            serde_json::from_str(&read(&p.root.join("timeline.json"))).unwrap();
+            serde_json::from_str(&read(&p.root.join("main.timeline.json"))).unwrap();
         child["resources"] =
-            json!({ "video": "../../media/clip.mp4", "next": "../../edits/leaf.json" });
-        let path = p.root.join("timelines/parts/child.json");
+            json!({ "video": "../../media/clip.mp4", "next": "../../edits/leaf.timeline.json" });
+        let path = p.root.join("timelines/parts/child.timeline.json");
         put(&path, &child.to_string());
         let mut leaf = child.clone();
-        leaf["resources"] = json!({ "back": "../timeline.json", "voice": external });
-        put(&p.root.join("edits/leaf.json"), &leaf.to_string());
+        leaf["resources"] = json!({ "back": "../main.timeline.json", "voice": external });
+        put(&p.root.join("edits/leaf.timeline.json"), &leaf.to_string());
         assert_eq!(
             p.timelines(),
             [
-                "timeline.json",
-                "edits/leaf.json",
-                "timelines/parts/child.json"
+                "main.timeline.json",
+                "edits/leaf.timeline.json",
+                "timelines/parts/child.timeline.json"
             ]
         );
-        let deps = p.dependencies("timeline.json", &p.document("timeline.json").unwrap());
+        let deps = p.dependencies(
+            "main.timeline.json",
+            &p.document("main.timeline.json").unwrap(),
+        );
         assert_eq!(deps.len(), 5);
         assert!(deps.iter().any(|n| n.alias == "voice" && n.external));
         assert_eq!(p.show().unwrap()["resources"].as_array().unwrap().len(), 5);
@@ -391,6 +402,72 @@ mod tests {
         assert_eq!(
             p.timeline(Some("short")).unwrap(),
             p.root.join("timelines/short.timeline.json")
+        );
+    }
+
+    #[test]
+    fn timeline_names_do_not_pick_up_ordinary_json() {
+        let p = project("entry-names", json!({ "data": "timelines/data.json" }));
+        let timeline = read(&p.root.join(&p.timeline));
+        put(&p.root.join("timelines/data.json"), &timeline);
+        put(&p.root.join("timelines/cut.timeline.json"), &timeline);
+        assert_eq!(
+            p.timelines(),
+            ["main.timeline.json", "timelines/cut.timeline.json"]
+        );
+        for name in ["cut", "cut.timeline.json", "timelines/cut.timeline.json"] {
+            assert_eq!(
+                p.timeline(Some(name)).unwrap(),
+                p.root.join("timelines/cut.timeline.json")
+            );
+        }
+        assert!(p.timeline(Some("timelines/data.json")).is_err());
+        assert!(
+            p.document("timelines/data.json")
+                .err()
+                .unwrap()
+                .contains(".timeline.json")
+        );
+        put(
+            &p.root.join("project.json"),
+            r#"{"name":"bad","timeline":"timelines/data.json"}"#,
+        );
+        assert!(
+            Project::open(&p.root)
+                .unwrap_err()
+                .contains(".timeline.json")
+        );
+    }
+
+    #[test]
+    fn copied_timelines_keep_their_compound_suffix_and_alias_stem() {
+        let p = project("timeline-copy", json!({}));
+        let out = folder("timeline-copy-src");
+        let text = read(&p.root.join(&p.timeline));
+        put(&out.join("cut.timeline.json"), &text);
+        let mut other: serde_json::Value = serde_json::from_str(&text).unwrap();
+        other["name"] = json!("another cut");
+        put(&out.join("other/cut.timeline.json"), &other.to_string());
+        let added = p
+            .add(
+                &[
+                    out.join("cut.timeline.json"),
+                    out.join("other/cut.timeline.json"),
+                ],
+                false,
+            )
+            .unwrap();
+        assert_eq!(added["added"][0]["alias"], "cut");
+        assert_eq!(added["added"][1]["alias"], "cut-2");
+        assert_eq!(added["added"][0]["path"], "media/cut.timeline.json");
+        assert_eq!(added["added"][1]["path"], "media/cut-2.timeline.json");
+        assert_eq!(
+            p.timelines(),
+            [
+                "main.timeline.json",
+                "media/cut-2.timeline.json",
+                "media/cut.timeline.json"
+            ]
         );
     }
 
@@ -430,7 +507,7 @@ mod tests {
         let linked = p.add(&[out.join("other/Clip.MP4")], true).expect("linked");
         let path = linked["added"][0]["path"].as_str().expect("a path");
         assert!(Path::new(path).is_absolute(), "{path}");
-        let doc = p.document("timeline.json").unwrap();
+        let doc = p.document("main.timeline.json").unwrap();
         assert_eq!(doc.resources["clip"].files, ["media/clip.mp4"]);
     }
 
@@ -444,7 +521,7 @@ mod tests {
         put(&source.join(".hidden"), "ignored");
         let added = p.add(std::slice::from_ref(&source), false).unwrap();
         assert_eq!(added["added"].as_array().unwrap().len(), 2);
-        let saved = read(&p.root.join("timeline.json"));
+        let saved = read(&p.root.join("main.timeline.json"));
         let doc: serde_json::Value = serde_json::from_str(&saved).unwrap();
         assert_eq!(
             doc["resources"],
@@ -455,7 +532,7 @@ mod tests {
         let again = p.add(&[source], false).unwrap();
         assert_eq!(again["added"][0]["alias"], "a");
         assert_eq!(again["added"][1]["alias"], "a-2");
-        assert_eq!(read(&p.root.join("timeline.json")), saved);
+        assert_eq!(read(&p.root.join("main.timeline.json")), saved);
         let existing = p.add(&[p.root.join("media/shots/a.mp4")], false).unwrap();
         assert_eq!(existing["added"][0]["alias"], "a");
     }
@@ -528,7 +605,7 @@ mod tests {
             &p.root.join("components/bad/bad.motion.tsx"),
             &scene("import { K } from \"../k\";"),
         );
-        let (problems, external) = p.check("timeline.json").expect("checked");
+        let (problems, external) = p.check("main.timeline.json").expect("checked");
         let has = |what: &str| problems.iter().any(|m| m.contains(what));
         assert!(
             has("components/lone.motion.tsx reads components/k.ts"),
@@ -554,19 +631,19 @@ mod tests {
         let p = project("restore", json!({}));
         put(&p.root.join("media/data.json"), "[1]");
         put(&p.root.join("media/clip.mp4"), "video");
-        put(&p.root.join("timelines/cut.json"), "{}");
+        put(&p.root.join("timelines/cut.timeline.json"), "{}");
         let (one, new) = p.save(Some("first"), "save").expect("saved");
         assert_eq!((one, new), (1, true));
         // Nothing changed: the same snapshot.
         assert_eq!(p.save(None, "save").expect("saved"), (1, false));
-        let first = read(&p.root.join("timeline.json"));
-        put(&p.root.join("timeline.json"), "broken");
+        let first = read(&p.root.join("main.timeline.json"));
+        put(&p.root.join("main.timeline.json"), "broken");
         put(&p.root.join("media/data.json"), "[2]");
         put(&p.root.join("media/clip.mp4"), "edited video");
         put(&p.root.join("components/new.motion.tsx"), "added");
         let restored = p.restore(1).expect("restored");
         assert_eq!(restored["backup"], 2);
-        assert_eq!(read(&p.root.join("timeline.json")), first);
+        assert_eq!(read(&p.root.join("main.timeline.json")), first);
         assert_eq!(read(&p.root.join("media/data.json")), "[1]");
         // Media is never written, and a file added since stays.
         assert_eq!(read(&p.root.join("media/clip.mp4")), "edited video");
@@ -574,7 +651,7 @@ mod tests {
         assert_eq!(restored["added"], json!(["components/new.motion.tsx"]));
         // The backup has what the restore replaced.
         p.restore(2).expect("undone");
-        assert_eq!(read(&p.root.join("timeline.json")), "broken");
+        assert_eq!(read(&p.root.join("main.timeline.json")), "broken");
         assert_eq!(read(&p.root.join("media/data.json")), "[2]");
         let history = p.history().expect("history");
         assert_eq!(
@@ -591,7 +668,7 @@ mod tests {
                 .map(|f| f.kept)
         };
         assert_eq!(kept(0, "media/clip.mp4"), Some(false));
-        assert_eq!(kept(0, "timelines/cut.json"), Some(true));
+        assert_eq!(kept(0, "timelines/cut.timeline.json"), Some(true));
     }
 
     #[test]

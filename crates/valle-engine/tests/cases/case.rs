@@ -135,10 +135,11 @@ impl Case {
                 || !Path::new(input)
                     .components()
                     .all(|part| matches!(part, std::path::Component::Normal(_)))
-                || !(input.ends_with(".tsx") || input.ends_with(".timeline.json")))
+                || !(input.ends_with(".motion.tsx") || input.ends_with(".timeline.json")))
         {
             return Err(
-                "input must name a TSX or Timeline JSON file inside the case directory".into(),
+                "input must name a .motion.tsx or .timeline.json file inside the case directory"
+                    .into(),
             );
         }
         if let Some(browser) = &case.browser
@@ -199,7 +200,7 @@ impl Case {
     }
 
     pub fn input(&self, dir: &Path) -> PathBuf {
-        dir.join(self.input.as_deref().unwrap_or("scene.tsx"))
+        dir.join(self.input.as_deref().unwrap_or("scene.motion.tsx"))
     }
 
     pub fn visual(&self) -> bool {
@@ -283,7 +284,7 @@ mod tests {
                 "order" => value["at"] = serde_json::json!([1, 0]),
                 "duplicate" => value["at"] = serde_json::json!([0, 0]),
                 "key" => value["layout"][0]["key"] = "".into(),
-                "input" => value["input"] = "../outside.tsx".into(),
+                "input" => value["input"] = "../outside.motion.tsx".into(),
                 _ => unreachable!(),
             }
             assert!(

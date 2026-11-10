@@ -5,6 +5,10 @@ sound and captions together. `valle timeline check` validates it and `valle time
 draws it. Unknown fields are errors, and every error names the field and what it takes, so
 `check` is the quickest way to learn a field you are unsure of.
 
+Every timeline file uses the `.timeline.json` suffix, including nested timelines. Ordinary
+data and configuration keep `.json`. A new project starts with `main.timeline.json` and a
+`project.json` that names it.
+
 ## A first timeline
 
 ```json timeline

@@ -226,8 +226,8 @@ mod tests {
             "export const composition = {{width:200,height:100,fps:30,duration:3}}; {body}"
         );
         Scene::load(
-            "s.tsx",
-            &|p| (p == "s.tsx").then(|| source.as_bytes().to_vec()),
+            "s.motion.tsx",
+            &|p| (p == "s.motion.tsx").then(|| source.as_bytes().to_vec()),
             &Inputs::default(),
             fonts(),
         )

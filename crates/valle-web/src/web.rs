@@ -354,8 +354,9 @@ impl Engine {
                 .collect();
             bound.resources.insert(name, files);
         }
+        let kind = valle_engine::entry::Kind::read(&entry).map_err(js)?;
         let attempt = || -> Result<(Scene, Value), String> {
-            if entry.ends_with(".json") {
+            if kind == valle_engine::entry::Kind::Timeline {
                 let doc = valle_timeline::parse(&text(&entry).ok_or("not loaded yet")?)
                     .map_err(|e| format!("{entry}: {e}"))?;
                 let length = |p: &str| {
@@ -567,7 +568,8 @@ impl Engine {
     /// gives it; `none` where it has no sound, as a Motion scene; or `missing` with the files to
     /// give first.
     pub fn sound(&self, entry: String) -> Result<String, JsValue> {
-        if !entry.ends_with(".json") {
+        if valle_engine::entry::Kind::read(&entry).map_err(js)? == valle_engine::entry::Kind::Motion
+        {
             return Ok(json!({ "status": "none" }).to_string());
         }
         let text = |p: &str| (self.files.read(p)).and_then(|b| String::from_utf8(b).ok());

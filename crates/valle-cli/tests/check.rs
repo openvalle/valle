@@ -8,6 +8,64 @@ use serde_json::Value;
 
 const VALLE: &str = env!("CARGO_BIN_EXE_valle");
 
+#[test]
+fn commands_reject_wrong_entry_suffixes_and_suggest_the_right_group() {
+    let dir = std::env::temp_dir().join(format!("valle-entry-names-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (file, group, suffix, hint) in [
+        ("Card.tsx", "motion", ".motion.tsx", None),
+        ("data.json", "timeline", ".timeline.json", None),
+        (
+            "scene.motion.tsx",
+            "timeline",
+            ".timeline.json",
+            Some("motion"),
+        ),
+        (
+            "cut.timeline.json",
+            "motion",
+            ".motion.tsx",
+            Some("timeline"),
+        ),
+    ] {
+        // Existing files make Studio exercise entry validation too, without starting a server.
+        std::fs::write(dir.join(file), "not parsed").unwrap();
+        let commands: &[&str] = match group {
+            "timeline" => &["check", "render", "query", "edit", "studio"],
+            _ => &["check", "render", "studio"],
+        };
+        for command in commands {
+            let mut run = Command::new(VALLE);
+            run.current_dir(&dir).args([group, command, file, "--json"]);
+            if *command == "render" {
+                run.args(["-o", "unused.mp4"]);
+            } else if *command == "edit" {
+                run.args(["--op", "{}"]);
+            }
+            let out = run.output().unwrap();
+            assert!(!out.status.success(), "{group} {command} {file}");
+            let result: Value = serde_json::from_slice(&out.stdout).unwrap();
+            assert_eq!(result["code"], "usage", "{result}");
+            assert!(
+                result["message"].as_str().unwrap().contains(suffix),
+                "{result}"
+            );
+            match hint {
+                Some(group) => {
+                    let command = if group == "motion" && matches!(*command, "query" | "edit") {
+                        "check"
+                    } else {
+                        command
+                    };
+                    assert_eq!(result["hint"], format!("valle {group} {command} {file}"))
+                }
+                None => assert!(result.get("hint").is_none(), "{result}"),
+            }
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// `valle motion check` of `scene`, as JSON.
 fn check(name: &str, scene: &str) -> Value {
     let dir = std::env::temp_dir().join(format!("valle-check-{name}-{}", std::process::id()));

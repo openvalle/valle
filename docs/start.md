@@ -53,12 +53,12 @@ cd promo
 valle project add ~/footage/interview.mp4 ~/scenes/title.motion.tsx
 ```
 
-`add` copies each file in and names it in `timeline.json`'s `resources`. Then put clips on
-the timeline, by editing `timeline.json` (see `valle docs timeline`) or with
+`add` copies each file in and names it in `main.timeline.json`'s `resources`. Then put clips on
+the timeline, by editing `main.timeline.json` (see `valle docs timeline`) or with
 `valle timeline edit`:
 
 ```sh
-valle timeline edit timeline.json --op '{"op":"add","track":"tracks.visual[0]","clip":{"id":"intro","kind":"motion","component":"title","duration":3}}'
+valle timeline edit main.timeline.json --op '{"op":"add","track":"tracks.visual[0]","clip":{"id":"intro","kind":"motion","component":"title","duration":3}}'
 valle project check
 valle project render --frame 45 -o frame.png
 valle project render

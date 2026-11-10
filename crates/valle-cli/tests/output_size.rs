@@ -30,7 +30,7 @@ fn resized_png_sequence_and_video_keep_the_logical_canvas() {
     let dir = std::env::temp_dir().join(format!("valle-output-size-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("scene.tsx"),
+        dir.join("scene.motion.tsx"),
         indoc! {r##"
             export const composition = { width: 64, height: 32, fps: 2, duration: 1 };
             export default function Scene() {
@@ -52,7 +52,7 @@ fn resized_png_sequence_and_video_keep_the_logical_canvas() {
             &[
                 "motion",
                 "render",
-                "scene.tsx",
+                "scene.motion.tsx",
                 "--output-size",
                 size,
                 "-o",
@@ -84,7 +84,7 @@ fn resized_png_sequence_and_video_keep_the_logical_canvas() {
             &[
                 "motion",
                 "render",
-                "scene.tsx",
+                "scene.motion.tsx",
                 "--output-size",
                 "128x64",
                 "--encoder",
@@ -102,7 +102,7 @@ fn resized_png_sequence_and_video_keep_the_logical_canvas() {
     }
     // A shader reading its children gets the requested density even beyond the old 4096 cap.
     std::fs::write(
-        dir.join("shader.tsx"),
+        dir.join("shader.motion.tsx"),
         indoc! {r#"
             export const composition = { width: 100, height: 1, fps: 1, duration: 1 };
             const code = `
@@ -121,7 +121,7 @@ fn resized_png_sequence_and_video_keep_the_logical_canvas() {
         &[
             "motion",
             "render",
-            "shader.tsx",
+            "shader.motion.tsx",
             "--output-size",
             "5000x50",
             "-o",
@@ -145,7 +145,7 @@ fn resized_png_sequence_and_video_keep_the_logical_canvas() {
             &[
                 "motion",
                 "render",
-                "scene.tsx",
+                "scene.motion.tsx",
                 "--output-size",
                 size,
                 "-o",

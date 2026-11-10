@@ -167,8 +167,8 @@ mod tests {
 
     fn load(source: &'static str) -> Result<Scene, Error> {
         Scene::load(
-            "s.tsx",
-            &|path| (path == "s.tsx").then(|| source.as_bytes().to_vec()),
+            "s.motion.tsx",
+            &|path| (path == "s.motion.tsx").then(|| source.as_bytes().to_vec()),
             &Inputs::default(),
             fonts(),
         )

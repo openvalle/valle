@@ -157,16 +157,8 @@ fn open(group: &str, file: Option<&Path>) -> Result<Session, Failure> {
     if !file.is_file() {
         return Err(missing(file));
     }
-    let timeline = file.to_string_lossy().ends_with(".json");
-    if timeline != (group == "timeline") {
-        return Err(Failure::new(
-            "usage",
-            match timeline {
-                true => "a .json is a timeline: valle timeline studio",
-                false => "valle timeline studio takes a timeline's .json",
-            },
-        ));
-    }
+    crate::scene_file(&file.to_string_lossy(), group == "timeline", "studio")?;
+    let timeline = group == "timeline";
     let file = valle_project::absolute(file);
     // The project it is in, else its folder.
     let root = match Project::discover(file.parent().unwrap_or(Path::new("."))) {

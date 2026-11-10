@@ -12,7 +12,7 @@ export type { Code, Control, Controls, Opened, Source } from "./messages.ts";
 
 export type Options = {
   canvas: HTMLCanvasElement;
-  /** The scene, `.motion.tsx`, or the timeline, `.json`, as a path from `base`. */
+  /** The scene, `.motion.tsx`, or the timeline, `.timeline.json`, as a path from `base`. */
   entry: string;
   /** Where the SDK's worker, audio worklet and wasm are: beside this module by default. */
   runtime?: string | URL;
@@ -61,6 +61,12 @@ export type Events = {
 type Audio = { context: AudioContext; node: AudioWorkletNode; gain: GainNode };
 
 export async function createPlayer(options: Options): Promise<Player> {
+  if (!/\.(motion\.tsx|timeline\.json)$/.test(options.entry)) {
+    throw new PlayerError(
+      "file",
+      `${options.entry}: an entry must end with .motion.tsx or .timeline.json`,
+    );
+  }
   const runtime =
     options.runtime === undefined
       ? new URL("./", import.meta.url)

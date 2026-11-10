@@ -69,11 +69,11 @@ pub fn check(repo: &Path) -> Result<usize, String> {
 fn run(repo: &Path, source: &str) -> Result<BTreeMap<String, Value>, String> {
     let root = repo.join("tests/cases");
     let read = |p: &str| match p {
-        "d3/run.tsx" => Some(SCENE.to_string()),
+        "d3/run.motion.tsx" => Some(SCENE.to_string()),
         "d3/cases.ts" => Some(source.to_string()),
         _ => std::fs::read_to_string(root.join(p)).ok(),
     };
-    let mut front = Front::load("d3/run.tsx", &read, &Inputs::default())?;
+    let mut front = Front::load("d3/run.motion.tsx", &read, &Inputs::default())?;
     let frame = front.frame(Tick::ZERO)?;
     let text = (frame.template.nodes.iter())
         .find_map(|n| match &n.kind {

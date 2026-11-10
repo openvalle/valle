@@ -338,7 +338,12 @@ fn text_checks_detect_changed_spacing_and_line_geometry() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let dir = root.join("tests/cases/css/text/preserved-spaces");
         let case = case::Case::read(&dir.join("case.json")).unwrap();
-        let sample = scene::load(&root, &dir.join("scene.tsx"), case.times().unwrap()[0]).unwrap();
+        let sample = scene::load(
+            &root,
+            &dir.join("scene.motion.tsx"),
+            case.times().unwrap()[0],
+        )
+        .unwrap();
         for broken in ["text", "x", "baseline", "height"] {
             let mut m = scene::measure(&sample.frame);
             match broken {

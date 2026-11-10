@@ -191,7 +191,7 @@ pub struct Project {
 
 #[derive(Subcommand)]
 pub enum ProjectCommand {
-    /// A new project: project.json, timeline.json and its folders
+    /// A new project: project.json, main.timeline.json and its folders
     Create {
         /// Where to make it
         folder: PathBuf,
@@ -589,24 +589,43 @@ mod tests {
 
     #[test]
     fn options_belong_to_their_commands() {
-        refused(&["motion", "render", "a.tsx"], "--out");
-        refused(&["motion", "check", "a.tsx", "-o", "x.png"], "'-o'");
+        refused(&["motion", "render", "a.motion.tsx"], "--out");
+        refused(&["motion", "check", "a.motion.tsx", "-o", "x.png"], "'-o'");
         refused(
-            &["timeline", "check", "t.json", "--props", "{}"],
+            &["timeline", "check", "t.timeline.json", "--props", "{}"],
             "'--props'",
         );
         refused(
-            &["timeline", "query", "t.json", "--codec", "h264"],
+            &["timeline", "query", "t.timeline.json", "--codec", "h264"],
             "'--codec'",
         );
-        refused(&["motion", "check", "a.tsx", "b.tsx"], "'b.tsx'");
         refused(
-            &["motion", "render", "a.tsx", "-o", "x.mp4", "--codec", "av1"],
+            &["motion", "check", "a.motion.tsx", "b.motion.tsx"],
+            "'b.motion.tsx'",
+        );
+        refused(
+            &[
+                "motion",
+                "render",
+                "a.motion.tsx",
+                "-o",
+                "x.mp4",
+                "--codec",
+                "av1",
+            ],
             "av1",
         );
         refused(
             &[
-                "motion", "render", "a.tsx", "-o", "x.png", "--frame", "1", "--frames", "2",
+                "motion",
+                "render",
+                "a.motion.tsx",
+                "-o",
+                "x.png",
+                "--frame",
+                "1",
+                "--frames",
+                "2",
             ],
             "cannot be used with",
         );
@@ -617,29 +636,35 @@ mod tests {
     #[test]
     fn frame_lists_keep_order_and_ranges_include_both_ends() {
         let a = scene(&[
-            "motion", "check", "a.tsx", "--json", "--frames", "3,0,3", "--events",
+            "motion",
+            "check",
+            "a.motion.tsx",
+            "--json",
+            "--frames",
+            "3,0,3",
+            "--events",
         ]);
         assert!(matches!(a.frames, Some(Frames::List(v)) if v == [3, 0, 3]));
-        let a = scene(&["motion", "check", "a.tsx", "--frames", "0..0"]);
+        let a = scene(&["motion", "check", "a.motion.tsx", "--frames", "0..0"]);
         assert!(matches!(a.frames, Some(Frames::Range(0, 0))));
-        let a = scene(&["motion", "check", "a.tsx", "--frame", "7"]);
+        let a = scene(&["motion", "check", "a.motion.tsx", "--frame", "7"]);
         assert!(matches!(a.frames, Some(Frames::List(v)) if v == [7]));
         for s in ["", "1.5", "1,", "0..", "1..2..3", "9223372036854775808"] {
             refused(
-                &["motion", "check", "a.tsx", "--frames", s],
+                &["motion", "check", "a.motion.tsx", "--frames", s],
                 "a frame is a number",
             );
         }
         refused(
-            &["motion", "check", "a.tsx", "--frames", "-1"],
+            &["motion", "check", "a.motion.tsx", "--frames", "-1"],
             "a frame is a number",
         );
         refused(
-            &["motion", "check", "a.tsx", "--frame", "-1"],
+            &["motion", "check", "a.motion.tsx", "--frame", "-1"],
             "a frame is a number",
         );
         refused(
-            &["motion", "check", "a.tsx", "--frames", "5..2"],
+            &["motion", "check", "a.motion.tsx", "--frames", "5..2"],
             "ends before",
         );
     }
@@ -649,7 +674,7 @@ mod tests {
         let a = scene(&[
             "motion",
             "check",
-            "a.tsx",
+            "a.motion.tsx",
             "--props",
             r#"{"title":"Hi"}"#,
             "--data",
@@ -670,7 +695,7 @@ mod tests {
         assert_eq!(a.inputs.caption.unwrap()["runs"][0]["text"], "Hello");
         for flag in ["--props", "--data"] {
             let Command::Motion(Motion::Check { file, bind, frames }) =
-                parse(&["motion", "check", "a.tsx", flag, "[]"])
+                parse(&["motion", "check", "a.motion.tsx", flag, "[]"])
                     .unwrap()
                     .command
             else {
@@ -683,7 +708,7 @@ mod tests {
         }
         for flag in ["--resource", "--input"] {
             for s in ["photo", "=a.png", "photo="] {
-                refused(&["motion", "check", "a.tsx", flag, s], "NAME=PATH");
+                refused(&["motion", "check", "a.motion.tsx", flag, s], "NAME=PATH");
             }
         }
     }
@@ -693,7 +718,7 @@ mod tests {
         let a = scene(&[
             "motion",
             "render",
-            "a.tsx",
+            "a.motion.tsx",
             "-o",
             "x.mp4",
             "--codec",
@@ -731,7 +756,7 @@ mod tests {
             let a = scene(&[
                 "motion",
                 "render",
-                "a.tsx",
+                "a.motion.tsx",
                 "-o",
                 "x.png",
                 "--output-size",
@@ -744,7 +769,7 @@ mod tests {
                 &[
                     "motion",
                     "render",
-                    "a.tsx",
+                    "a.motion.tsx",
                     "-o",
                     "x.png",
                     "--output-size",
@@ -758,7 +783,7 @@ mod tests {
                 &[
                     "motion",
                     "render",
-                    "a.tsx",
+                    "a.motion.tsx",
                     "-o",
                     "x.mp4",
                     "--bitrate",

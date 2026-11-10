@@ -5,6 +5,9 @@ description: Make, edit and render video with the Valle CLI. Use for Valle work:
 
 # Valle
 
+Name Motion entries `*.motion.tsx` and timelines `*.timeline.json`. Imported helper components
+keep `.tsx`, modules `.ts`, and data `.json`. A new project's entry is `main.timeline.json`.
+
 Use the user's `valle`: the installed executable, or `valle` on PATH. Its guides are built in
 and match its version; read them instead of guessing a field or a function:
 

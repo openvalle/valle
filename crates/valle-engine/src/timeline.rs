@@ -50,6 +50,7 @@ pub struct Host<'a> {
 
 /// The scene the document at `path` (`/`-separated) plays as.
 pub fn lower(path: &str, doc: &Document, host: &Host<'_>) -> Result<Lowered, Error> {
+    crate::entry::Kind::Timeline.check(path)?;
     let folder = path.rsplit_once('/').map_or("", |(dir, _)| dir);
     let mut l = Lowering {
         doc,
@@ -102,7 +103,7 @@ export default function Timeline() {{
         background = js(&doc.canvas.background),
     )
     .unwrap();
-    let entry = format!("{path}.tsx");
+    let entry = format!("{path}.motion.tsx");
     let inputs = Inputs {
         resources: l.s.bound,
         clips: Rc::new(l.s.clips),
@@ -254,7 +255,7 @@ impl Lowering<'_> {
     /// What component `alias` declares, and the name the scene imports it by.
     fn component(&mut self, alias: &str, at: &str) -> Result<(Rc<Declared>, String), Error> {
         let file = self.file(alias, at)?;
-        if !file.ends_with(".tsx") {
+        if !file.ends_with(".motion.tsx") {
             return Err(format!(
                 "{at}: resource {alias:?} is {file}, not a Motion component (.motion.tsx)"
             ));
@@ -309,6 +310,9 @@ impl Lowering<'_> {
             Content::Motion(c) => self.motion(clip, c, reads, &mut scope)?,
             Content::Timeline { src } => {
                 let file = self.file(src, &format!("{at}.src"))?;
+                crate::entry::Kind::Timeline
+                    .check(&file)
+                    .map_err(|e| format!("{at}.src: {e}"))?;
                 let text = (self.host.read)(&file);
                 let length = text
                     .as_deref()
@@ -1578,6 +1582,40 @@ mod tests {
     use crate::template::Kind as NodeKind;
     use serde_json::json;
 
+    #[test]
+    fn clip_entries_require_their_compound_suffixes() {
+        for (file, clip, suffix) in [
+            (
+                "part.json",
+                json!({ "id": "clip", "kind": "timeline", "src": "part", "duration": 1 }),
+                ".timeline.json",
+            ),
+            (
+                "Card.tsx",
+                json!({ "id": "clip", "kind": "motion", "component": "part", "duration": 1 }),
+                ".motion.tsx",
+            ),
+        ] {
+            let doc = valle_timeline::Document::read(&json!({
+                "canvas": { "width": 100, "height": 100, "fps": 30 },
+                "resources": { "part": file },
+                "tracks": { "visual": [{ "items": [clip] }] }
+            }))
+            .unwrap();
+            let host = Host {
+                read: &|path| panic!("must reject before reading {path}"),
+                length: &|_| None,
+            };
+            let error = lower("edit.timeline.json", &doc, &host).err().unwrap();
+            assert!(error.contains(suffix), "{error}");
+            assert!(error.contains("tracks.visual[0].items[0]"), "{error}");
+            if suffix == ".timeline.json" {
+                let error = crate::mix::mix("edit.timeline.json", &doc).err().unwrap();
+                assert!(error.contains(suffix), "{error}");
+            }
+        }
+    }
+
     fn run(test: impl FnOnce() + Send + 'static) {
         std::thread::Builder::new()
             .stack_size(32 << 20)
@@ -1699,7 +1737,7 @@ mod tests {
                 ]}]}
             });
             let read = |path: &str| (path == "scene.motion.tsx").then(|| motion.to_string());
-            let mut s = scene("edit.json", &doc, &read);
+            let mut s = scene("edit.timeline.json", &doc, &read);
             let f = frame(&mut s, 0.5);
             let nodes = &f.template.nodes;
             let target = (nodes.iter())
@@ -1751,7 +1789,7 @@ mod tests {
                     {"id":"b","kind":"motion","component":"scene","start":0,"duration":2,"position":[470,240],"size":[200,90]}
                 ]}]}
             });
-            let nested = json!({"canvas":base["canvas"],"resources":{"part":"part.json"},
+            let nested = json!({"canvas":base["canvas"],"resources":{"part":"part.timeline.json"},
                 "tracks":{"visual":[{"clips":[{"id":"nested","kind":"timeline","src":"part","start":0,"duration":2}]}]}});
             let transition = json!({"canvas":base["canvas"],"resources":base["resources"],
             "tracks":{"visual":[{"items":[
@@ -1761,11 +1799,11 @@ mod tests {
             ]}]}});
             let read = |path: &str| match path {
                 "scene.motion.tsx" => Some(motion.to_string()),
-                "part.json" => Some(base.to_string()),
+                "part.timeline.json" => Some(base.to_string()),
                 _ => None,
             };
             for doc in [&base, &nested, &transition] {
-                let mut s = scene("edit.json", doc, &read);
+                let mut s = scene("edit.timeline.json", doc, &read);
                 for time in [0.0, 0.95, 1.05, 1.5, 0.5] {
                     let f = frame(&mut s, time);
                     let mut count = 0;
@@ -2037,7 +2075,7 @@ mod tests {
         }))
         .unwrap();
         let lowered = lower(
-            "edit/timeline.json",
+            "edit/main.timeline.json",
             &doc,
             &Host {
                 read: &|_| None,
@@ -2069,7 +2107,7 @@ mod tests {
                 "edit.timeline.json",
                 &json!({
                     "canvas": { "width": 640, "height": 360, "fps": 30 },
-                    "resources": { "presenter": "words.tsx" },
+                    "resources": { "presenter": "words.motion.tsx" },
                     "tracks": { "caption": [{ "presenter": { "component": "presenter" }, "clips": [
                         { "start": 0, "duration": 1, "runs": [
                             { "text": "A", "start": 0, "end": 1,
@@ -2078,7 +2116,7 @@ mod tests {
                     ] }] }
                 }),
                 &|path| {
-                    (path == "words.tsx").then(|| {
+                    (path == "words.motion.tsx").then(|| {
                         r#"
                 export const composition = { width: 640, height: 360, fps: 30, duration: 1 };
                 export const role = captionPresenter();
