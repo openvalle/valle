@@ -1,0 +1,45 @@
+[package]
+name = "valle-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Fuzzing uses nightly and libFuzzer; normal builds keep the workspace's toolchain.
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+valle-engine = { path = "../crates/valle-engine" }
+valle-timeline = { path = "../crates/valle-timeline" }
+
+[[bin]]
+name = "css"
+path = "fuzz_targets/css.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "svg"
+path = "fuzz_targets/svg.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "timeline"
+path = "fuzz_targets/timeline.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tsx"
+path = "fuzz_targets/tsx.rs"
+test = false
+doc = false
+bench = false

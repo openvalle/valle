@@ -423,3 +423,53 @@ live beside its Rust implementation and run with:
 ```sh
 cargo test --locked -p valle-engine --test cases
 ```
+
+## Fuzzing input parsers
+
+`fuzz/` is a separate [cargo-fuzz](https://rust-fuzz.github.io/book/cargo-fuzz.html)
+package, so nightly and libFuzzer are not dependencies of ordinary builds. Its four
+targets call the production parsers without a GPU, fonts, network or file imports:
+
+- `css`: a camelCase property on the first line, its CSS value on the remaining
+  lines; parses and computes the style of a View.
+- `svg`: an SVG file, including its styles, references and embedded images.
+- `timeline`: a Timeline JSON document and its validation.
+- `tsx`: Motion source rewriting, declarations and import resolution. It does not
+  execute the script or test frame evaluation.
+
+Install the tools once, then run from the repository root:
+
+```sh
+rustup toolchain install nightly --profile minimal
+cargo install cargo-fuzz --locked
+```
+
+On macOS, use Homebrew LLVM for the C/C++ dependencies too: Apple's Clang uses a
+different AddressSanitizer ABI from Rust's runtime.
+
+```sh
+brew install llvm
+export CC="$(brew --prefix llvm)/bin/clang"
+export CXX="$(brew --prefix llvm)/bin/clang++"
+export MACOSX_DEPLOYMENT_TARGET=11.0
+```
+
+Then run a bounded session:
+
+```sh
+mkdir -p fuzz/corpus/css
+cargo +nightly fuzz run css fuzz/corpus/css fuzz/seeds/css -- \
+  -max_total_time=60 -max_len=16384 -timeout=10 -rss_limit_mb=2048
+```
+
+Replace `css` with `svg`, `timeline` or `tsx`. These limits bound this fuzz run,
+not what Valle accepts. `seeds/` contains small authored inputs; libFuzzer writes
+new coverage inputs to the first corpus directory, which is ignored. Crashes,
+timeouts and memory-limit failures go in `fuzz/artifacts/<target>/`.
+
+A parser returning an error is normal; a panic or sanitizer failure is not. Replay
+a failure with `cargo +nightly fuzz run <target> <artifact>`, reduce it with
+`cargo +nightly fuzz tmin <target> <artifact>`, and turn the smallest reproducer
+into a Rust regression test beside the affected code before fixing it. Those
+regressions run in ordinary CI. Random fuzzing is a manual check; it neither
+accepts image baselines nor proves a successful parse has the right semantics.

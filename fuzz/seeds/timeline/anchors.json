@@ -1,0 +1,19 @@
+{
+  "canvas": { "width": 320, "height": 180, "fps": "30000/1001" },
+  "tracks": {
+    "visual": [
+      {
+        "clips": [
+          { "id": "a", "kind": "solid", "color": "red", "start": 0, "duration": 1 },
+          {
+            "id": "b",
+            "kind": "solid",
+            "color": "blue",
+            "start": { "clip": "a", "offset": 1.25 },
+            "duration": 1
+          }
+        ]
+      }
+    ]
+  }
+}

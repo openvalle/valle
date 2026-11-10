@@ -6,7 +6,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use image_webp::WebPDecoder;
-use png::{ColorType, Transformations};
+use png::Transformations;
 use zune_jpeg::JpegDecoder;
 use zune_jpeg::zune_core::bytestream::ZCursor;
 use zune_jpeg::zune_core::colorspace::ColorSpace;
@@ -206,19 +206,38 @@ fn png(bytes: &[u8]) -> Result<Image, String> {
     if reader.info().animation_control.is_some() {
         return Err("an animated PNG is not supported yet".into());
     }
-    let size = reader
-        .output_buffer_size()
+    let size = [reader.info().width, reader.info().height];
+    let stride = (size[0] as usize)
+        .checked_mul(4)
         .ok_or("the image is too large")?;
-    let mut buffer = vec![0; size];
-    let info = reader.next_frame(&mut buffer).map_err(fail)?;
-    let channels = match info.color_type {
-        ColorType::Grayscale => 1,
-        ColorType::GrayscaleAlpha => 2,
-        ColorType::Rgb => 3,
-        _ => 4,
-    };
-    let rows = buffer[..info.buffer_size()].chunks(info.line_size);
-    Ok(premultiplied([info.width, info.height], channels, rows))
+    let length = stride
+        .checked_mul(size[1] as usize)
+        .filter(|&n| n <= isize::MAX as usize)
+        .ok_or("the image is too large")?;
+    let channels = reader.output_color_type().0.samples();
+    let mut pixels = Vec::new();
+    let mut passes = Vec::new();
+    // A valid header need not have valid image data. Grow from decoded rows rather than
+    // reserving width × height from the header, which can describe petabytes in a tiny file.
+    while let Some(row) = reader.next_interlaced_row().map_err(fail)? {
+        let start = pixels.len();
+        pixels.extend(row.data().chunks_exact(channels).flat_map(premultiply));
+        if let png::InterlaceInfo::Adam7(info) = row.interlace() {
+            passes.push((*info, start..pixels.len()));
+        }
+    }
+    if pixels.len() != length {
+        return Err("not a PNG image the engine reads: incomplete pixels".into());
+    }
+    if !passes.is_empty() {
+        // All passes have decoded successfully; the full allocation now has pixels to back it.
+        let mut ordered = vec![0; pixels.len()];
+        for (info, range) in passes {
+            png::expand_interlaced_row(&mut ordered, stride, &pixels[range], &info, 32);
+        }
+        pixels = ordered;
+    }
+    Ok(Image::new(size, pixels.into()))
 }
 
 fn jpeg(bytes: &[u8]) -> Result<Image, String> {
@@ -260,19 +279,24 @@ fn premultiplied<'a>(
     let width = size[0] as usize;
     let mut pixels = Vec::with_capacity(width * size[1] as usize * 4);
     for row in rows {
-        for p in row[..width * channels].chunks(channels) {
-            let [r, g, b, a] = match *p {
-                [v] => [v, v, v, 255],
-                [v, a] => [v, v, v, a],
-                [r, g, b] => [r, g, b, 255],
-                [r, g, b, a, ..] => [r, g, b, a],
-                _ => unreachable!("1 to 4 channels"),
-            };
-            pixels.extend([r, g, b].map(|c| times(c, a)));
-            pixels.push(a);
-        }
+        pixels.extend(
+            row[..width * channels]
+                .chunks(channels)
+                .flat_map(premultiply),
+        );
     }
     Image::new(size, pixels.into())
+}
+
+fn premultiply(p: &[u8]) -> [u8; 4] {
+    let [r, g, b, a] = match *p {
+        [v] => [v, v, v, 255],
+        [v, a] => [v, v, v, a],
+        [r, g, b] => [r, g, b, 255],
+        [r, g, b, a, ..] => [r, g, b, a],
+        _ => unreachable!("1 to 4 channels"),
+    };
+    [times(r, a), times(g, a), times(b, a), a]
 }
 
 /// `c` times `a`, both of 255, rounded.
@@ -283,6 +307,136 @@ fn times(c: u8, a: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use png::{BitDepth, ColorType};
+
+    // A stored DEFLATE block lets tests supply PNG scanlines (including Adam7 passes)
+    // independently of the encoder's non-interlaced row writer. Chunk CRCs are real.
+    fn scanlines(info: png::Info<'_>, rows: &[u8]) -> Vec<u8> {
+        let len = u16::try_from(rows.len()).unwrap();
+        let mut zlib = vec![0x78, 0x01, 0x01];
+        zlib.extend(len.to_le_bytes());
+        zlib.extend((!len).to_le_bytes());
+        zlib.extend(rows);
+        let (mut a, mut b) = (1u32, 0u32);
+        for &v in rows {
+            a = (a + u32::from(v)) % 65521;
+            b = (b + a) % 65521;
+        }
+        zlib.extend(((b << 16) | a).to_be_bytes());
+        let mut file = Vec::new();
+        let encoder = png::Encoder::with_info(&mut file, info).unwrap();
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_chunk(png::chunk::IDAT, &zlib).unwrap();
+        writer.finish().unwrap();
+        file
+    }
+
+    #[test]
+    fn png_does_not_allocate_a_frame_from_an_untrusted_header() {
+        for interlaced in [false, true] {
+            let mut info = png::Info::with_size(262144, i32::MAX as u32);
+            info.color_type = ColorType::Rgba;
+            info.interlaced = interlaced;
+            // A valid header and checksums, but only one pixel of scanline data for a
+            // declared 2 PiB image. Decoding must fail before allocating that frame.
+            let file = scanlines(info, &[0, 0, 0, 0, 255]);
+            let reader = png::Decoder::new(Cursor::new(&file)).read_info().unwrap();
+            assert_eq!(reader.info().width, 262144);
+            assert_eq!(reader.info().height, i32::MAX as u32);
+            assert!(Image::decode(&file).is_err());
+        }
+    }
+
+    #[test]
+    fn png_normalizes_gray_rgb_palette_and_alpha() {
+        for (color_type, bit_depth, width, rows, expected) in [
+            (
+                ColorType::Grayscale,
+                BitDepth::One,
+                2,
+                vec![0, 0x80],
+                vec![255, 255, 255, 255, 0, 0, 0, 255],
+            ),
+            (
+                ColorType::GrayscaleAlpha,
+                BitDepth::Eight,
+                1,
+                vec![0, 90, 128],
+                vec![45, 45, 45, 128],
+            ),
+            (
+                ColorType::Rgb,
+                BitDepth::Sixteen,
+                1,
+                vec![0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc],
+                vec![0x12, 0x56, 0x9a, 255],
+            ),
+            (
+                ColorType::Indexed,
+                BitDepth::Two,
+                3,
+                vec![0, 0x18],
+                vec![0, 0, 0, 0, 0, 128, 0, 128, 0, 0, 255, 255],
+            ),
+        ] {
+            let mut info = png::Info::with_size(width, 1);
+            info.color_type = color_type;
+            info.bit_depth = bit_depth;
+            if color_type == ColorType::Indexed {
+                info.palette = Some(vec![255, 0, 0, 0, 255, 0, 0, 0, 255].into());
+                info.trns = Some(vec![0, 128, 255].into());
+            }
+            let image = Image::decode(&scanlines(info, &rows)).unwrap();
+            assert_eq!(image.size, [width, 1]);
+            assert_eq!(&*image.pixels, expected, "{color_type:?}/{bit_depth:?}");
+        }
+    }
+
+    #[test]
+    fn png_interlaced_and_plain_rows_have_the_same_premultiplied_pixels() {
+        let pixel =
+            |x: usize, y: usize| [x as u8 * 28, y as u8 * 28, 200, [0, 128, 255][(x + y) % 3]];
+        let expected: Vec<u8> = (0..9)
+            .flat_map(|y| {
+                (0..9).flat_map(move |x| {
+                    let [r, g, b, a] = pixel(x, y);
+                    let multiply = |c| ((u32::from(c) * u32::from(a) + 127) / 255) as u8;
+                    [multiply(r), multiply(g), multiply(b), a]
+                })
+            })
+            .collect();
+        for interlaced in [false, true] {
+            // Adam7's (x start, y start, x step, y step); 9 × 9 exercises all seven passes.
+            let passes: &[(usize, usize, usize, usize)] = if interlaced {
+                &[
+                    (0, 0, 8, 8),
+                    (4, 0, 8, 8),
+                    (0, 4, 4, 8),
+                    (2, 0, 4, 4),
+                    (0, 2, 2, 4),
+                    (1, 0, 2, 2),
+                    (0, 1, 1, 2),
+                ]
+            } else {
+                &[(0, 0, 1, 1)]
+            };
+            let mut rows = Vec::new();
+            for &(x0, y0, dx, dy) in passes {
+                for y in (y0..9).step_by(dy) {
+                    rows.push(0); // No row filter.
+                    rows.extend((x0..9).step_by(dx).flat_map(|x| pixel(x, y)));
+                }
+            }
+            let mut info = png::Info::with_size(9, 9);
+            info.color_type = ColorType::Rgba;
+            info.interlaced = interlaced;
+            let image = Image::decode(&scanlines(info.clone(), &rows)).unwrap();
+            assert_eq!(image.size, [9, 9]);
+            assert_eq!(&*image.pixels, expected);
+            // Truncation after some complete rows must not yield a partial image.
+            assert!(Image::decode(&scanlines(info, &rows[..rows.len() / 2])).is_err());
+        }
+    }
 
     #[test]
     fn mipmaps_halve_down_to_a_px() {

@@ -1,0 +1,14 @@
+{
+  "canvas": { "width": 320, "height": 180, "fps": 30 },
+  "tracks": {
+    "visual": [
+      {
+        "items": [
+          { "id": "a", "kind": "solid", "color": "red", "duration": 1 },
+          { "gap": 0.1 },
+          { "id": "b", "kind": "solid", "color": "blue", "duration": 2 }
+        ]
+      }
+    ]
+  }
+}

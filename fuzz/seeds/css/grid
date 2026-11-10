@@ -1,0 +1,2 @@
+gridTemplateColumns
+[start] repeat(2, minmax(10px, 1fr)) [end]
