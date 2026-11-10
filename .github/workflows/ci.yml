@@ -44,9 +44,14 @@ jobs:
         run: cargo xtask fmt --check
       - name: Lint
         run: cargo xtask lint
-      # No GPU here: the gpu job runs that layer.
+      # No GPU here: the gpu layer draws on the pinned lavapipe, as the executable does without
+      # one. The browser layer runs in the gpu job.
+      - name: Fetch lavapipe
+        run: |
+          driver=$(cargo xtask lavapipe)
+          echo "VALLE_LAVAPIPE=$driver" >> "$GITHUB_ENV"
       - name: Test
-        run: cargo xtask test --skip gpu,browser
+        run: cargo xtask test --skip browser
       - name: Keep failed test results
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -118,9 +123,14 @@ jobs:
           bun-version-file: package.json
       - name: Install FFmpeg
         run: bun .github/scripts/install-ffmpeg.ts
-      # No GPU here either.
+      # No GPU here either: the gpu layer draws on lavapipe, unpacked into the global cache.
+      - name: Fetch lavapipe
+        run: |
+          $driver = cargo xtask lavapipe
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          "VALLE_LAVAPIPE=$driver" >> $env:GITHUB_ENV
       - name: Test
-        run: cargo xtask test --skip gpu,browser
+        run: cargo xtask test --skip browser
       - name: Keep failed test results
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -128,3 +138,52 @@ jobs:
           name: test-results-${{ runner.os }}
           path: target/test-results
           if-no-files-found: ignore
+
+  package:
+    # The executables a release ships, built from each push to a long-lived branch, with Studio
+    # and the pinned lavapipe embedded.
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v1')
+    name: package (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+          - platform: windows-x86_64
+            runner: windows-2022
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the Rust toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v1' }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      # QuickJS is C, built for wasm32 by the runner's LLVM; Ubuntu names its tools by version.
+      - name: Choose the wasm32 C tools
+        if: runner.os == 'Linux'
+        run: |
+          echo "CC_wasm32_unknown_unknown=clang-18" >> "$GITHUB_ENV"
+          echo "AR_wasm32_unknown_unknown=llvm-ar-18" >> "$GITHUB_ENV"
+      - name: Package
+        run: cargo xtask package
+      # The package alone, with no GPU: it must draw on the lavapipe it carries.
+      - name: Draw on the embedded lavapipe
+        shell: bash
+        run: |
+          result=$(dist/valle motion render examples/01-kinetic-title.motion.tsx --frame 30 -o frame.png --json)
+          echo "$result"
+          grep -q '(bundled lavapipe)' <<< "$result"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: valle-${{ matrix.platform }}
+          path: |
+            dist/valle
+            dist/valle.exe
+          if-no-files-found: error
