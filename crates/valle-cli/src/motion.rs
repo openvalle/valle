@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::sync::Mutex;
 
 use serde_json::{Value, json};
-use valle_engine::gpu::{Gpu, Renderer};
+use valle_engine::gpu::Renderer;
 use valle_engine::image::Image;
 use valle_engine::scene::{Scene, Video};
 use valle_engine::text::{Blob, BuiltIn, Fonts};
@@ -324,7 +324,7 @@ pub fn render(args: &Args) -> Result<Value, Failure> {
         return Err(Failure::new("usage", "a storyboard is a .png"));
     }
     let size = args.output_size([c.width, c.height])?;
-    let gpu = Gpu::new().map_err(|e| Failure::new("gpu", e))?;
+    let (gpu, adapter) = crate::gpu()?;
     let mut renderer =
         Renderer::at_size(&gpu, [c.width, c.height], size).map_err(|e| Failure::new("gpu", e))?;
     let mut drawn = Vec::new();
@@ -353,6 +353,7 @@ pub fn render(args: &Args) -> Result<Value, Failure> {
         "summary": format!("{} drawn into {out}", counted(frames.len(), "frame")),
         "frames": frames,
         "files": written,
+        "adapter": adapter,
     }))
 }
 

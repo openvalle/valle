@@ -61,16 +61,9 @@ struct Failure {
 }
 
 impl UrlCache {
-    /// The global cache: `$VALLE_CACHE_DIR`, or `~/.valle/cache`.
+    /// The global cache.
     pub fn global() -> Result<Self, String> {
-        let root = match std::env::var_os("VALLE_CACHE_DIR") {
-            Some(dir) => PathBuf::from(dir),
-            None => std::env::home_dir()
-                .ok_or("no home directory to keep the cache in; set VALLE_CACHE_DIR")?
-                .join(".valle")
-                .join("cache"),
-        };
-        Ok(Self::new(root))
+        Ok(Self::new(global_dir()?))
     }
 
     pub fn new(root: impl Into<PathBuf>) -> Self {
@@ -312,6 +305,17 @@ fn name(url: &str) -> String {
 }
 
 /// Holds `path` locked until the file is dropped.
+/// The global cache's folder: `$VALLE_CACHE_DIR`, or `~/.valle/cache`.
+pub fn global_dir() -> Result<PathBuf, String> {
+    Ok(match std::env::var_os("VALLE_CACHE_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => std::env::home_dir()
+            .ok_or("no home directory to keep the cache in; set VALLE_CACHE_DIR")?
+            .join(".valle")
+            .join("cache"),
+    })
+}
+
 fn lock(path: &Path) -> Result<File, String> {
     let file = File::options()
         .create(true)

@@ -14,6 +14,9 @@ path = "src/main.rs"
 [features]
 # `cargo xtask package` builds the web assets first, then embeds them in the executable.
 embed-web = ["dep:brotli", "dep:brotli-decompressor"]
+# On Linux and Windows, `cargo xtask package` embeds lavapipe, the driver $VALLE_LAVAPIPE names,
+# for machines without a GPU.
+embed-lavapipe = []
 
 [build-dependencies]
 brotli = { workspace = true, optional = true }

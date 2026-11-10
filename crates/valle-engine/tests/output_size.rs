@@ -11,7 +11,11 @@ fn gpu() -> Option<Gpu> {
         .unwrap_or_default()
         .split(',')
         .any(|v| v == "gpu")
-        .then(|| Gpu::new().expect("GPU"))
+        .then(|| {
+            valle_native::gpu::adapter(None)
+                .and_then(|c| Gpu::with(c.adapter))
+                .expect("GPU")
+        })
 }
 
 fn rect(x: f32, y: f32, width: f32, height: f32, color: [f32; 4]) -> Item {

@@ -15,6 +15,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{Value, json};
+use valle_engine::gpu::Gpu;
 
 use args::Args;
 
@@ -149,6 +150,26 @@ impl Failure {
         self.hint = Some(hint.into());
         self
     }
+}
+
+/// The device frames are drawn on, and what it is: the system's GPU, or the lavapipe the
+/// executable carries where there is none, as `valle_native::gpu::adapter` picks.
+pub fn gpu() -> Result<(Gpu, String), Failure> {
+    #[cfg(all(
+        feature = "embed-lavapipe",
+        any(target_os = "linux", target_os = "windows")
+    ))]
+    // `cargo xtask package` names the driver valle-lavapipe compressed for this platform.
+    let embedded: Option<&[u8]> = Some(include_bytes!(env!("VALLE_LAVAPIPE")));
+    #[cfg(not(all(
+        feature = "embed-lavapipe",
+        any(target_os = "linux", target_os = "windows")
+    )))]
+    let embedded = None;
+    let failed = |e| Failure::new("gpu", e);
+    let chosen = valle_native::gpu::adapter(embedded).map_err(failed)?;
+    let name = chosen.name();
+    Ok((Gpu::with(chosen.adapter).map_err(failed)?, name))
 }
 
 fn main() -> ExitCode {

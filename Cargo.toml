@@ -11,7 +11,11 @@ repository = "https://github.com/openvalle/valle"
 publish = false
 
 [workspace.dependencies]
-# Studio's web assets: compressed only while packaging, decoded only for clients without br.
+# Lavapipe, called without the Vulkan loader: the ash wgpu-hal uses, and the library loaded
+# through libloading, as ash does; libc, for Linux to load it from memory where it must.
+ash = { version = "0.38.0", default-features = false, features = ["std"] }
+# Studio's web assets: compressed only while packaging, decoded only for clients without br;
+# lavapipe, decoded when it is first used.
 brotli = "9.0.0"
 brotli-decompressor = "6.3.1"
 # vello_cpu's scalar level, which color glyphs are rasterized at.
@@ -21,6 +25,8 @@ image-webp = "0.2.4"
 icu_properties = "2.4.0"
 # Tests only: multi-line sources indented with the code, the indentation removed.
 indoc = "2.0.8"
+libc = "0.2.190"
+libloading = "0.9.0"
 libm = "0.2.16"
 oxc = { version = "=0.158.0", features = ["ast_visit", "codegen", "semantic", "transformer"] }
 # Without system fonts: every host shapes with the same bytes.

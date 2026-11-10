@@ -139,14 +139,8 @@ pub struct Gpu {
 }
 
 impl Gpu {
-    /// The default adapter; `WGPU_BACKEND` and `WGPU_ADAPTER_NAME` choose another.
-    pub fn new() -> Result<Gpu, Error> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let adapter = now(wgpu::util::initialize_adapter_from_env_or_default(
-            &instance, None,
-        ))?
-        .map_err(|e| format!("no GPU adapter: {e}"))?;
+    /// A device of `adapter`, natively, where the request completes at once.
+    pub fn with(adapter: wgpu::Adapter) -> Result<Gpu, Error> {
         now(Gpu::of(adapter))?
     }
 

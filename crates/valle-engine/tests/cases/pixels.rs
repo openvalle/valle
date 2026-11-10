@@ -461,7 +461,9 @@ fn combination_allowances_reject_missing_effects() {
     }
     crate::with_stack(|| {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let gpu = Gpu::new().unwrap();
+        let gpu = valle_native::gpu::adapter(None)
+            .and_then(|c| Gpu::with(c.adapter))
+            .unwrap();
         for (name, from, to) in [
             (
                 "css/filter/blur-overflow",
@@ -582,7 +584,9 @@ fn motion_baselines_reject_wrong_interpolation_echo_and_exposure() {
     }
     crate::with_stack(|| {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let gpu = Gpu::new().unwrap();
+        let gpu = valle_native::gpu::adapter(None)
+            .and_then(|c| Gpu::with(c.adapter))
+            .unwrap();
         for (name, at, number, from, to) in [
             ("interpolate", "0.5", 2, "[64, 160]", "[64, 156]"),
             ("echo", "1", 4, "delay={0.25}", "delay={0.125}"),

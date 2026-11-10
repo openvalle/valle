@@ -123,7 +123,9 @@ mod tests {
         {
             return;
         }
-        let gpu = Gpu::new().unwrap();
+        let gpu = valle_native::gpu::adapter(None)
+            .and_then(|c| Gpu::with(c.adapter))
+            .unwrap();
         for size in [[1, 1], [1, 17], [18, 1], [3, 5], [16, 8], [319, 179]] {
             let [w, h] = size.map(|n| n as usize);
             for format in [Format::I420, Format::Nv12, Format::I420a] {

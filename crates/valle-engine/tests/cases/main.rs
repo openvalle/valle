@@ -243,7 +243,7 @@ fn run_sample(
             return Ok(None);
         }
         if gpu.is_none() {
-            *gpu = Some(Gpu::new()?);
+            *gpu = Some(valle_native::gpu::adapter(None).and_then(|c| Gpu::with(c.adapter))?);
         }
         pixels::run(root, dir, case, sample, gpu.as_ref().unwrap(), out).map(Some)
     })();

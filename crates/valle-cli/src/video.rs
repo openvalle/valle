@@ -9,7 +9,7 @@ use std::time::Instant;
 use serde_json::{Value, json};
 use valle_engine::audio::Mixer;
 use valle_engine::audio::loudness::Meter;
-use valle_engine::gpu::{Gpu, Renderer};
+use valle_engine::gpu::Renderer;
 use valle_engine::scene::Scene;
 use valle_native::media::{self, Codec, Encoding, Options, RATE, Textures};
 
@@ -75,7 +75,7 @@ pub fn render(
     }
     let mut meter = Meter::default();
     let started = Instant::now();
-    let gpu = Gpu::new().map_err(|e| Failure::new("gpu", e))?;
+    let (gpu, adapter) = crate::gpu()?;
     // On a Metal GPU, frames are drawn into the hardware encoder's own where it has them.
     let textures = Textures::new(gpu.device());
     let options = Options {
@@ -157,6 +157,7 @@ pub fn render(
         "height": size[1],
         "codec": format!("{codec:?}").to_lowercase(),
         "encoder": encoder,
+        "adapter": adapter,
         // Whether the GPU drew the frames into the encoder's own memory, read back otherwise.
         "direct": direct,
         "seconds": seconds,

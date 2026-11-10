@@ -18,3 +18,11 @@ wgpu.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace = true
 objc2-metal.workspace = true
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+ash.workspace = true
+brotli-decompressor.workspace = true
+libloading.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true

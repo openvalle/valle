@@ -123,7 +123,9 @@ mod tests {
         {
             return;
         }
-        let gpu = Gpu::new().expect("GPU");
+        let gpu = valle_native::gpu::adapter(None)
+            .and_then(|c| Gpu::with(c.adapter))
+            .expect("GPU");
         for size in [[1, 1], [1, 17], [18, 1], [3, 5], [16, 8], [319, 179]] {
             let pixels: Vec<u8> = (0..size[0] * size[1] * 4)
                 .map(|n| ((n * 73 + n / 7) % 256) as u8)

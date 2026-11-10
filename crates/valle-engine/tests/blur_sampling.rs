@@ -8,7 +8,11 @@ fn gpu() -> Option<Gpu> {
         .unwrap_or_default()
         .split(',')
         .any(|v| v == "gpu")
-        .then(|| Gpu::new().expect("GPU"))
+        .then(|| {
+            valle_native::gpu::adapter(None)
+                .and_then(|c| Gpu::with(c.adapter))
+                .expect("GPU")
+        })
 }
 
 fn folded(p: i32, low: i32, high: i32, mirrored: bool) -> i32 {
