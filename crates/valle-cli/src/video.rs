@@ -24,24 +24,14 @@ pub fn render(
     mut mixer: Option<&mut Mixer>,
 ) -> Result<Value, Failure> {
     let mov = (out.extension()).is_some_and(|e| e.eq_ignore_ascii_case("mov"));
-    let codec = match args.option("codec") {
+    let codec = match args.codec {
         None if mov => Codec::ProRes4444,
-        None | Some("h264") => Codec::H264,
-        Some("hevc") => Codec::Hevc,
-        Some("prores") => Codec::ProRes4444,
-        Some(other) => {
-            return Err(Failure::new("usage", format!("no codec {other}"))
-                .hint("--codec is h264, hevc or prores"));
-        }
+        None => Codec::H264,
+        Some(codec) => codec,
     };
     let failed = |e: String| Failure::new("video", e);
-    let encoding = match args.option("encoder") {
-        Some("hardware" | "vt") => Encoding::Hardware,
-        Some("software" | "ffmpeg") => Encoding::Software,
-        Some(other) => {
-            return Err(Failure::new("usage", format!("no encoder {other}"))
-                .hint("--encoder is vt (the hardware's) or ffmpeg (FFmpeg's own, on the CPU)"));
-        }
+    let encoding = match args.encoder {
+        Some(encoding) => encoding,
         // The hardware's for H.264 and HEVC where it has them; ProRes 4444 keeps its alpha
         // with FFmpeg's.
         None if codec == Codec::ProRes4444 => Encoding::Software,
@@ -50,15 +40,7 @@ pub fn render(
             false => Encoding::Software,
         },
     };
-    let bitrate = match args.option("bitrate") {
-        None => None,
-        Some(b) => Some(bits(b).ok_or_else(|| {
-            Failure::new(
-                "usage",
-                format!("--bitrate is bits a second, such as 8M, not {b}"),
-            )
-        })?),
-    };
+    let bitrate = args.bitrate;
     let c = scene.composition();
     let size = args.output_size([c.width, c.height])?;
     if codec != Codec::ProRes4444 && size.iter().any(|v| v % 2 != 0) {
@@ -209,15 +191,4 @@ fn loudness(meter: &Meter) -> Value {
         "lufs": finite(l.integrated),
         "truePeak": finite(l.true_peak),
     })
-}
-
-/// `8M`, `800k` or a number of bits a second.
-fn bits(text: &str) -> Option<u64> {
-    let (number, scale) = match text.as_bytes().last()? {
-        b'k' | b'K' => (&text[..text.len() - 1], 1e3),
-        b'm' | b'M' => (&text[..text.len() - 1], 1e6),
-        _ => (text, 1.0),
-    };
-    let n: f64 = number.parse().ok()?;
-    (n > 0.0).then_some((n * scale) as u64)
 }

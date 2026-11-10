@@ -7,116 +7,47 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 use valle_project::{Project, digest, history::now};
 
+use valle_native::media::Codec;
+
 use crate::args::Args;
+use crate::cli::{self, ProjectCommand, RenderOptions};
 use crate::motion::counted;
 use crate::{Failure, motion, timeline};
 
-/// The words of a project command: its own options taken out, the rest as they were.
-struct Words {
-    folder: Option<String>,
-    flags: Vec<String>,
-    values: Vec<(String, String)>,
-    rest: Vec<String>,
-}
-
-/// Options of the project commands that take a value, and those that do not.
-const VALUED: [&str; 5] = ["-C", "--width", "--height", "--fps", "-m"];
-const FLAGS: [&str; 2] = ["--link", "--cost"];
-
-impl Words {
-    fn read(words: &[String]) -> Result<Words, Failure> {
-        let mut out = Words {
-            folder: None,
-            flags: Vec::new(),
-            values: Vec::new(),
-            rest: Vec::new(),
-        };
-        let mut words = words.iter();
-        while let Some(w) = words.next() {
-            if VALUED.contains(&w.as_str()) {
-                let v = (words.next().cloned())
-                    .ok_or_else(|| Failure::new("usage", format!("{w} needs a value")))?;
-                match w.as_str() {
-                    "-C" => out.folder = Some(v),
-                    _ => out.values.push((w.clone(), v)),
-                }
-            } else if FLAGS.contains(&w.as_str()) {
-                out.flags.push(w.clone());
-            } else if w != "--json" && w != "--events" {
-                out.rest.push(w.clone());
-            }
-        }
-        Ok(out)
-    }
-
-    fn value(&self, name: &str) -> Option<&str> {
-        (self.values.iter()).find_map(|(k, v)| (k == name).then_some(v.as_str()))
-    }
-
-    fn flag(&self, name: &str) -> bool {
-        self.flags.iter().any(|f| f == name)
-    }
-
-    /// The words left that are not options: at most `n` of them.
-    fn plain(&self, n: usize, command: &str) -> Result<Vec<&str>, Failure> {
-        let plain: Vec<&str> = self.rest.iter().map(String::as_str).collect();
-        if let Some(o) = plain.iter().find(|w| w.starts_with('-')) {
-            return Err(
-                Failure::new("usage", format!("project {command} takes no {o}"))
-                    .hint("valle --help lists the options"),
-            );
-        }
-        if plain.len() > n {
-            return Err(
-                Failure::new("usage", format!("project {command}: too many words"))
-                    .hint("valle --help lists the commands"),
-            );
-        }
-        Ok(plain)
-    }
-
-    fn project(&self) -> Result<Project, Failure> {
-        let start = PathBuf::from(self.folder.as_deref().unwrap_or("."));
-        Project::discover(&start).map_err(|e| Failure::new("project", e))
-    }
+/// The project in `folder`, or the nearest one up from the current folder.
+fn project(folder: Option<&Path>) -> Result<Project, Failure> {
+    Project::discover(folder.unwrap_or(Path::new("."))).map_err(|e| Failure::new("project", e))
 }
 
 fn failed(e: String) -> Failure {
     Failure::new("project", e)
 }
 
-pub fn run(command: &str, words: &[String]) -> Result<Value, Failure> {
-    let w = Words::read(words)?;
+pub fn run(folder: Option<&Path>, command: ProjectCommand) -> Result<Value, Failure> {
     match command {
-        "create" => create(&w),
-        "show" => show(&w),
-        "add" => add(&w),
-        "check" => check(&w),
-        "save" => save(&w),
-        "history" => history(&w),
-        "restore" => restore(&w),
-        "render" => render(&w),
-        _ => Err(
-            Failure::new("usage", format!("no command project {command}"))
-                .hint("valle --help lists the commands"),
-        ),
+        ProjectCommand::Create {
+            folder,
+            width,
+            height,
+            fps,
+        } => create(&folder, width, height, &fps),
+        ProjectCommand::Show => show(&project(folder)?),
+        ProjectCommand::Add { paths, link } => add(&project(folder)?, &paths, link),
+        ProjectCommand::Check { timeline, cost } => check(&project(folder)?, timeline, cost),
+        ProjectCommand::Save { message } => save(&project(folder)?, message.as_deref()),
+        ProjectCommand::History => history(&project(folder)?),
+        ProjectCommand::Restore { snapshot } => restore(&project(folder)?, snapshot),
+        ProjectCommand::Render {
+            timeline,
+            out,
+            options,
+        } => render(&project(folder)?, timeline, out, options),
+        ProjectCommand::Studio { .. } => unreachable!("main runs Studio"),
     }
 }
 
-fn create(w: &Words) -> Result<Value, Failure> {
-    let [dir] = w.plain(1, "create")?[..] else {
-        return Err(Failure::new("usage", "project create <folder>"));
-    };
-    let size = |name: &str, default: u32| -> Result<u32, Failure> {
-        match w.value(name) {
-            None => Ok(default),
-            Some(v) => (v.parse().ok().filter(|n| *n > 0))
-                .ok_or_else(|| Failure::new("usage", format!("{name} is pixels above 0, not {v}"))),
-        }
-    };
-    let (width, height) = (size("--width", 1920)?, size("--height", 1080)?);
-    let fps = w.value("--fps").unwrap_or("30");
-    let p = Project::create(Path::new(dir), width, height, fps).map_err(failed)?;
+fn create(dir: &Path, width: u32, height: u32, fps: &str) -> Result<Value, Failure> {
+    let p = Project::create(dir, width, height, fps).map_err(failed)?;
     Ok(json!({
         "status": "ok",
         "summary": format!("created {} in {}: {width}×{height} at {fps} fps", p.name, p.root.display()),
@@ -125,9 +56,7 @@ fn create(w: &Words) -> Result<Value, Failure> {
     }))
 }
 
-fn show(w: &Words) -> Result<Value, Failure> {
-    w.plain(0, "show")?;
-    let p = w.project()?;
+fn show(p: &Project) -> Result<Value, Failure> {
     let mut out = p.show().map_err(failed)?;
     let mut lines = vec![format!("{} ({})", p.name, p.root.display())];
     for t in out["timelines"].as_array().into_iter().flatten() {
@@ -173,14 +102,8 @@ fn show(w: &Words) -> Result<Value, Failure> {
     Ok(out)
 }
 
-fn add(w: &Words) -> Result<Value, Failure> {
-    let files = w.plain(usize::MAX, "add")?;
-    if files.is_empty() {
-        return Err(Failure::new("usage", "project add <file or folder>…"));
-    }
-    let p = w.project()?;
-    let from: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
-    let mut out = p.add(&from, w.flag("--link")).map_err(failed)?;
+fn add(p: &Project, from: &[PathBuf], link: bool) -> Result<Value, Failure> {
+    let mut out = p.add(from, link).map_err(failed)?;
     let mut lines: Vec<String> = (out["added"].as_array().into_iter().flatten())
         .map(|a| {
             let again = if a["reused"] == true {
@@ -206,17 +129,15 @@ fn add(w: &Words) -> Result<Value, Failure> {
     Ok(out)
 }
 
-fn check(w: &Words) -> Result<Value, Failure> {
-    let named = w.plain(1, "check")?;
-    let p = w.project()?;
-    let path = p.timeline(named.first().copied()).map_err(failed)?;
+fn check(p: &Project, timeline: Option<String>, cost: bool) -> Result<Value, Failure> {
+    let path = p.timeline(timeline.as_deref()).map_err(failed)?;
     let rel = p
         .relative(&path)
         .ok_or_else(|| failed(format!("{} is not in the project", path.display())))?;
     let (mut problems, external) = p.check(&rel).map_err(failed)?;
     let args = timeline_args(&path);
     if problems.is_empty() {
-        let lowered = match w.flag("--cost") {
+        let lowered = match cost {
             true => motion::check(&args).map(|_| ()),
             false => timeline::lower(&args).map(|_| ()),
         };
@@ -239,11 +160,7 @@ fn check(w: &Words) -> Result<Value, Failure> {
             .collect();
         return Err(f.hint("fix each, then check again"));
     }
-    let frames = if w.flag("--cost") {
-        ", every frame planned"
-    } else {
-        ""
-    };
+    let frames = if cost { ", every frame planned" } else { "" };
     let mut summary = format!("{rel}: no problems{frames}");
     if !external.is_empty() {
         summary += &format!("; {} out of the project", counted(external.len(), "file"));
@@ -251,10 +168,8 @@ fn check(w: &Words) -> Result<Value, Failure> {
     Ok(json!({ "status": "ok", "summary": summary, "timeline": rel, "external": external }))
 }
 
-fn save(w: &Words) -> Result<Value, Failure> {
-    w.plain(0, "save")?;
-    let p = w.project()?;
-    let (n, new) = p.save(w.value("-m"), "save").map_err(failed)?;
+fn save(p: &Project, message: Option<&str>) -> Result<Value, Failure> {
+    let (n, new) = p.save(message, "save").map_err(failed)?;
     let summary = match new {
         true => format!("saved snapshot {n}"),
         false => format!("nothing changed since snapshot {n}"),
@@ -262,9 +177,7 @@ fn save(w: &Words) -> Result<Value, Failure> {
     Ok(json!({ "status": "ok", "summary": summary, "snapshot": n, "new": new }))
 }
 
-fn history(w: &Words) -> Result<Value, Failure> {
-    w.plain(0, "history")?;
-    let p = w.project()?;
+fn history(p: &Project) -> Result<Value, Failure> {
     let history = p.history().map_err(failed)?;
     let lines: Vec<String> = (history.iter())
         .map(|s| {
@@ -284,13 +197,7 @@ fn history(w: &Words) -> Result<Value, Failure> {
     Ok(json!({ "status": "ok", "summary": summary, "snapshots": snapshots }))
 }
 
-fn restore(w: &Words) -> Result<Value, Failure> {
-    let [n] = w.plain(1, "restore")?[..] else {
-        return Err(Failure::new("usage", "project restore <snapshot>"));
-    };
-    let n: u64 = (n.parse().ok().filter(|n| *n > 0))
-        .ok_or_else(|| Failure::new("usage", format!("a snapshot is a number from 1, not {n}")))?;
-    let p = w.project()?;
+fn restore(p: &Project, n: u64) -> Result<Value, Failure> {
     let mut out = p.restore(n).map_err(failed)?;
     let mut summary = format!(
         "restored snapshot {n}: {} put back, {} unchanged; what was there is snapshot {}",
@@ -324,37 +231,18 @@ fn timeline_args(path: &Path) -> Args {
 
 /// Renders a timeline, by default into `renders/`. A full render, all frames into a video,
 /// first saves a snapshot, and leaves a record of what it read and made beside it.
-fn render(w: &Words) -> Result<Value, Failure> {
-    let mut rest = w.rest.clone();
-    // The timeline is the one word not an option or an option's value.
-    let mut named = None;
-    let mut i = 0;
-    while i < rest.len() {
-        let word = &rest[i];
-        if word.starts_with('-') {
-            i += if ["--storyboard"].contains(&word.as_str()) {
-                1
-            } else {
-                2
-            };
-        } else if named.is_none() {
-            named = Some(rest.remove(i));
-        } else {
-            return Err(Failure::new(
-                "usage",
-                format!("project render: one timeline, not also {word}"),
-            ));
-        }
-    }
-    let p = w.project()?;
-    let path = p.timeline(named.as_deref()).map_err(failed)?;
+fn render(
+    p: &Project,
+    timeline: Option<String>,
+    out: Option<String>,
+    options: RenderOptions,
+) -> Result<Value, Failure> {
+    let path = p.timeline(timeline.as_deref()).map_err(failed)?;
     let rel = p
         .relative(&path)
         .unwrap_or_else(|| path.display().to_string());
-    let mut words = vec![path.to_string_lossy().into_owned()];
-    words.extend(rest);
-    let mut args = Args::parse(&words)?;
-    args.timeline = true;
+    let file = path.to_string_lossy().into_owned();
+    let mut args = cli::project_render_args(file, out, options);
     let video = (args.out.as_deref()).is_none_or(|o| {
         let o = o.to_ascii_lowercase();
         o.ends_with(".mp4") || o.ends_with(".mov")
@@ -382,7 +270,7 @@ fn render(w: &Words) -> Result<Value, Failure> {
             valle_engine::style::color::parse(&doc.canvas.background.trim().to_ascii_lowercase())
                 .map_err(failed)?[3]
                 < 1.0;
-        let mov = transparent || args.option("codec") == Some("prores");
+        let mov = transparent || args.codec == Some(Codec::ProRes4444);
         let name = match (snapshot, args.storyboard) {
             (Some(n), _) => format!("{stem}-{n}.{}", if mov { "mov" } else { "mp4" }),
             (None, true) => format!("{stem}-storyboard.png"),
@@ -391,7 +279,7 @@ fn render(w: &Words) -> Result<Value, Failure> {
         args.out = Some(free(&directory.join(name)).display().to_string());
     }
     let out = args.out.clone().expect("an output");
-    let inputs = media(&p, &rel, &doc);
+    let inputs = media(p, &rel, &doc);
     let mut result = motion::render(&args)?;
     let Some(n) = snapshot.filter(|_| Path::new(&out).is_file()) else {
         return Ok(result);
@@ -410,7 +298,7 @@ fn render(w: &Words) -> Result<Value, Failure> {
         "output": output,
         "sha256": digest(Path::new(&out)).ok(),
         "inputs": inputs.iter().map(|(f, sha)| json!({ "file": f, "sha256": sha })).collect::<Vec<_>>(),
-        "options": args.options.iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>(),
+        "options": args.options().iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>(),
         "warnings": warnings,
         "valle": env!("CARGO_PKG_VERSION"),
     });

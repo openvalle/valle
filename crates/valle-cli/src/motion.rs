@@ -56,15 +56,7 @@ pub fn load(args: &Args) -> Result<Loaded, Failure> {
     };
     let mut scene =
         Scene::load(entry, &read, inputs, fonts()).map_err(|e| Failure::new("scene", e))?;
-    let decoding = match args.option("decoder") {
-        None => None,
-        Some("vt" | "hardware") => Some(Decoding::Hardware),
-        Some("ffmpeg" | "software") => Some(Decoding::Software),
-        Some(other) => {
-            return Err(Failure::new("usage", format!("no decoder {other}"))
-                .hint("--decoder is vt (the hardware's) or ffmpeg (FFmpeg's own, on the CPU)"));
-        }
-    };
+    let decoding = args.decoder;
     // The resources of one file share its decoders.
     let mut pools: BTreeMap<PathBuf, Rc<RefCell<Pool>>> = BTreeMap::new();
     for (name, file) in scene.video_files(inputs) {

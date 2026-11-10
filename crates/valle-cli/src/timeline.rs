@@ -33,14 +33,12 @@ fn document(
     Ok((path, text, doc))
 }
 
-/// The document edited by `--op`, as Studio edits it, and written back whole or not at all.
-pub fn edit(args: &Args) -> Result<Value, Failure> {
-    let path = args.file.replace('\\', "/");
+/// The document edited by `op`, JSON or `@file`, as Studio edits it, and written back whole or
+/// not at all.
+pub fn edit(file: &str, op: &str) -> Result<Value, Failure> {
+    let path = file.replace('\\', "/");
     let text = std::fs::read_to_string(&path)
         .map_err(|e| Failure::new("timeline", format!("{path}: {e}")))?;
-    let op = args
-        .option("op")
-        .ok_or_else(|| Failure::new("usage", "edit needs --op <json|@file>"))?;
     let op = crate::args::json(op, "--op")?;
     let edited = valle_timeline::edit::apply(&text, &op)
         .map_err(|e| Failure::new("timeline", format!("{path}: {e}")))?;
@@ -56,40 +54,10 @@ pub fn edit(args: &Args) -> Result<Value, Failure> {
     Ok(json!({ "status": "ok", "summary": format!("edited {path}"), "file": path }))
 }
 
-/// The clips the options pick: `--clip`, `--track`, `--index`, `--at`, `--marker`, `--meta`.
-pub fn query(args: &Args) -> Result<Value, Failure> {
+/// The clips `filter` picks.
+pub fn query(args: &Args, filter: &Filter) -> Result<Value, Failure> {
     let (path, text, doc) = document(args, true)?;
-    let mut filter = Filter::default();
-    for (k, v) in &args.options {
-        let v = v.clone();
-        match k.as_str() {
-            "clip" => filter.clip = Some(v),
-            "track" => filter.track = Some(v),
-            "index" => {
-                filter.index = Some(v.parse().map_err(|_| {
-                    Failure::new(
-                        "usage",
-                        format!("--index is a JSON array position from 0, not {v}"),
-                    )
-                })?)
-            }
-            "at" => filter.at = Some(v),
-            "marker" => filter.marker = Some(v),
-            "meta" => match v.split_once('=') {
-                Some((key, value)) if !key.is_empty() => {
-                    filter.meta.push((key.to_string(), value.to_string()))
-                }
-                _ => {
-                    return Err(Failure::new(
-                        "usage",
-                        format!("--meta is key=value, not {v}"),
-                    ));
-                }
-            },
-            o => return Err(Failure::new("usage", format!("query takes no --{o}"))),
-        }
-    }
-    let found = valle_timeline::query::query(&text, &doc, &filter)
+    let found = valle_timeline::query::query(&text, &doc, filter)
         .map_err(|e| Failure::new("timeline", format!("{path}: {e}")))?;
     let lines: Vec<String> = (found["clips"].as_array().into_iter().flatten())
         .map(|c| {
@@ -131,17 +99,6 @@ pub fn mixer(args: &Args) -> Result<Mixer, Failure> {
 }
 
 pub fn lower(args: &Args) -> Result<Lowered, Failure> {
-    let i = &args.inputs;
-    if !(i.props.is_empty() && i.data.is_empty() && i.resources.is_empty())
-        || !i.pictures.is_empty()
-        || i.caption.is_some()
-    {
-        return Err(Failure::new(
-            "usage",
-            "a timeline binds its components' props, data and resources itself",
-        )
-        .hint("--props, --data, --resource, --input and --caption are for valle motion"));
-    }
     let (path, _, doc) = document(args, false)?;
     lower_document(&path, &doc)
 }

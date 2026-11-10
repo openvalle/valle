@@ -19,6 +19,7 @@ use valle_native::urls::UrlCache;
 use valle_project::{Project, digest, inside};
 
 use crate::Failure;
+use crate::cli::Serve;
 use crate::http::{self, Request, Response};
 
 mod assets;
@@ -69,32 +70,16 @@ struct Service {
     picking: Mutex<()>,
 }
 
-pub fn run(group: &str, words: &[String], events: bool) -> Result<Value, Failure> {
-    let usage = |m: String| Failure::new("usage", m).hint("valle --help lists the options");
-    let (mut port, mut web, mut file) = (9527u16, None, None);
-    let mut words = words.iter();
-    while let Some(w) = words.next() {
-        match w.as_str() {
-            "--json" | "--events" => {}
-            "--port" => {
-                let v = words
-                    .next()
-                    .ok_or_else(|| usage("--port needs a value".into()))?;
-                port = v
-                    .parse()
-                    .map_err(|_| usage(format!("--port {v}: not a port")))?;
-            }
-            "--web-assets-dir" => {
-                let v = words
-                    .next()
-                    .ok_or_else(|| usage(format!("{w} needs a value")))?;
-                web = Some(PathBuf::from(v));
-            }
-            o if o.starts_with('-') => return Err(usage(format!("no option {o}"))),
-            f if file.is_none() => file = Some(PathBuf::from(f)),
-            extra => return Err(usage(format!("one file, not also {extra}"))),
-        }
-    }
+pub fn run(
+    group: &str,
+    file: Option<PathBuf>,
+    serve: Serve,
+    events: bool,
+) -> Result<Value, Failure> {
+    let Serve {
+        port,
+        web_assets_dir: web,
+    } = serve;
     let session = open(group, file.as_deref())?;
     if let (Some(root), "project") = (&session.root, session.kind) {
         remember(root);

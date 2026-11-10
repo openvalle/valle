@@ -23,6 +23,7 @@ brotli = { workspace = true, optional = true }
 
 [dependencies]
 brotli-decompressor = { workspace = true, optional = true }
+clap.workspace = true
 png.workspace = true
 rfd.workspace = true
 serde_json.workspace = true
