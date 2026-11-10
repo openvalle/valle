@@ -736,6 +736,23 @@ mod tests {
                 ));
                 assert!(e.contains("unpaired UTF-16 surrogate"), "{e}");
             }
+            // Names and resource fields are metadata too, not unwritten names.
+            for controls in [
+                r#"{ props: { "\uD800": string({ default: "" }) } }"#,
+                r#"{ props: { a: string({ "\uD800": "" }) } }"#,
+                r#"{ data: { a: { "\uDC00": 1 } } }"#,
+                r#"{ "\uDC00": {} }"#,
+                r#"{ resources: { "\uD800": resource({ kind: "image", default: "./a.png" }) } }"#,
+                r#"{ resources: { a: resource({ kind: "image", default: "\uD800" }) } }"#,
+                r#"{ resources: { a: resource({ kind: "font", default: ["\uDC00"] }) } }"#,
+                r#"{ resources: { a: resource({ "\uD800": "image" }) } }"#,
+            ] {
+                let e = error(&format!(
+                    "export const controls = {controls};\n\
+                     export default function Scene() {{ return <View />; }}"
+                ));
+                assert!(e.contains("unpaired UTF-16 surrogate"), "{controls}: {e}");
+            }
         });
     }
 

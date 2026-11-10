@@ -104,7 +104,9 @@ fn entries(
             return Err((p.span().start, literal()));
         };
         let at = p.span.start;
-        let name = key(p).ok_or_else(|| (at, literal()))?;
+        let name = key(p)
+            .map_err(|e| (at, e))?
+            .ok_or_else(|| (at, literal()))?;
         let named = name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
             && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
         if !named || name.len() > 64 {
@@ -367,7 +369,8 @@ pub(super) fn object(o: &ObjectExpression<'_>) -> Result<Map<String, Value>, Str
         let ObjectPropertyKind::ObjectProperty(p) = p else {
             return Err("spread is not supported: tools read it without running the scene".into());
         };
-        let k = key(p).ok_or("each key is written out: tools read it without running the scene")?;
+        let k =
+            key(p)?.ok_or("each key is written out: tools read it without running the scene")?;
         out.insert(k.to_string(), json(bare(&p.value))?);
     }
     Ok(out)

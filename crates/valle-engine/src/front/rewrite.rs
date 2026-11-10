@@ -362,7 +362,9 @@ fn composition(program: &Program<'_>) -> Result<Option<Composition>, (u32, Strin
         let ObjectPropertyKind::ObjectProperty(p) = p else {
             return Err(not_static());
         };
-        let key = key(p).ok_or_else(not_static)?;
+        let key = key(p)
+            .map_err(|e| (p.span.start, e))?
+            .ok_or_else(not_static)?;
         let value = match &p.value {
             Expression::NumericLiteral(n) => Literal::Number(n.value),
             Expression::StringLiteral(s) => {
@@ -413,11 +415,11 @@ pub(super) fn bare<'b, 'a>(mut e: &'b Expression<'a>) -> &'b Expression<'a> {
 }
 
 /// A property's name, when it is written out.
-pub(super) fn key<'b>(p: &'b ObjectProperty<'_>) -> Option<&'b str> {
+pub(super) fn key<'b>(p: &'b ObjectProperty<'_>) -> Result<Option<&'b str>, String> {
     match &p.key {
-        PropertyKey::StaticIdentifier(n) if !p.computed => Some(n.name.as_str()),
-        PropertyKey::StringLiteral(s) => s.value.as_str(),
-        _ => None,
+        PropertyKey::StaticIdentifier(n) if !p.computed => Ok(Some(n.name.as_str())),
+        PropertyKey::StringLiteral(s) => utf8(s.value).map(Some),
+        _ => Ok(None),
     }
 }
 
@@ -448,7 +450,7 @@ fn controls(program: &Program<'_>) -> Result<Declared, (u32, String)> {
         let ObjectPropertyKind::ObjectProperty(p) = p else {
             return Err(literal(p.span().start, "controls"));
         };
-        match key(p) {
+        match key(p).map_err(|e| (p.span.start, e))? {
             Some("resources") => {}
             Some(k @ ("props" | "data")) => {
                 let Expression::ObjectExpression(o) = bare(&p.value) else {
@@ -476,7 +478,8 @@ fn controls(program: &Program<'_>) -> Result<Declared, (u32, String)> {
                 return Err(literal(r.span().start, "controls.resources"));
             };
             let at = r.span.start;
-            let name = key(r).ok_or_else(|| literal(at, "controls.resources"))?;
+            let name = key(r).map_err(|e| (at, e))?;
+            let name = name.ok_or_else(|| literal(at, "controls.resources"))?;
             let named = name
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c));
@@ -530,19 +533,19 @@ fn slot(name: &str, e: &Expression<'_>) -> Result<Slot, String> {
             return Err(written());
         };
         let text = |e: &Expression<'_>| match bare(e) {
-            Expression::StringLiteral(v) => v.value.as_str().map(str::to_owned),
-            _ => None,
+            Expression::StringLiteral(v) => utf8(v.value).map(|v| Some(v.to_owned())),
+            _ => Ok(None),
         };
-        match (key(p), bare(&p.value)) {
+        match (key(p)?, bare(&p.value)) {
             (Some("default"), Expression::ArrayExpression(files)) => {
                 list = true;
                 for file in &files.elements {
-                    let file = file.as_expression().and_then(text);
+                    let file = file.as_expression().map(text).transpose()?.flatten();
                     default.push(file.ok_or("default is a string literal or a list of them")?);
                 }
             }
             (Some(k @ ("kind" | "default")), v) => {
-                let v = text(v).ok_or_else(|| format!("{k} is a string literal"))?;
+                let v = text(v)?.ok_or_else(|| format!("{k} is a string literal"))?;
                 match k {
                     "kind" => kind = Some(v),
                     _ => default.push(v),
@@ -1339,6 +1342,8 @@ mod tests {
         );
         let e = err("export const composition = { size: 1 };\n");
         assert!(e.contains("no field size"), "{e}");
+        let e = err("export const composition = { \"\\uD800\": 1 };\n");
+        assert!(e.starts_with("1:30: a string cannot contain"), "{e}");
     }
 
     #[test]
