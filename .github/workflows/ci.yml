@@ -139,10 +139,42 @@ jobs:
           path: target/test-results
           if-no-files-found: ignore
 
+  web:
+    # Studio and the browser engine, the same on every platform: built once, for each package to
+    # embed. Windows's clang cannot build QuickJS for wasm32 with the headers rquickjs carries.
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v1')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the Rust toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v1' }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      # QuickJS is C, built for wasm32 by the runner's LLVM; Ubuntu names its tools by version.
+      - name: Choose the wasm32 C tools
+        run: |
+          echo "CC_wasm32_unknown_unknown=clang-18" >> "$GITHUB_ENV"
+          echo "AR_wasm32_unknown_unknown=llvm-ar-18" >> "$GITHUB_ENV"
+      - name: Build Studio and the browser engine
+        run: cargo xtask build-web
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web
+          path: |
+            web/apps/studio/dist
+            web/packages/engine/dist
+          if-no-files-found: error
+
   package:
     # The executables a release ships, built from each push to a long-lived branch, with Studio
     # and the pinned lavapipe embedded.
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v1')
+    needs: web
     name: package (${{ matrix.platform }})
     strategy:
       fail-fast: false
@@ -162,17 +194,12 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v1' }}
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          bun-version-file: package.json
-      # QuickJS is C, built for wasm32 by the runner's LLVM; Ubuntu names its tools by version.
-      - name: Choose the wasm32 C tools
-        if: runner.os == 'Linux'
-        run: |
-          echo "CC_wasm32_unknown_unknown=clang-18" >> "$GITHUB_ENV"
-          echo "AR_wasm32_unknown_unknown=llvm-ar-18" >> "$GITHUB_ENV"
+          name: web
+          path: web
       - name: Package
-        run: cargo xtask package
+        run: cargo xtask package --web-built
       # The package alone, with no GPU: it must draw on the lavapipe it carries.
       - name: Draw on the embedded lavapipe
         shell: bash

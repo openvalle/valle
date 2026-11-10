@@ -19,10 +19,11 @@ commands:
   fonts           prepare the pinned test fonts from the download cache
   build-web       build the engine for the browser into web/packages/engine/dist, and
                   Studio into web/apps/studio/dist
-  package [--lavapipe <driver.br>]
+  package [--lavapipe <driver.br>] [--web-built]
                   build a release executable with Studio embedded into dist/valle (.exe
                   on Windows), for the current platform; on Linux and Windows, with the
-                  pinned lavapipe driver embedded too, or the one given
+                  pinned lavapipe driver embedded too, or the one given; --web-built
+                  embeds the browser build already on disk instead of building it
   lavapipe        download the pinned lavapipe driver for this platform into
                   target/lavapipe, check it and print its path, for VALLE_LAVAPIPE
 ";
@@ -74,11 +75,7 @@ fn main() -> ExitCode {
         "fonts" => Err(unexpected(flags)),
         "build-web" if flags.is_empty() => build_web(),
         "build-web" => Err(unexpected(flags)),
-        "package" => match flags {
-            [] => package(None),
-            [flag, driver] if flag == "--lavapipe" => package(Some(Path::new(driver))),
-            _ => Err(unexpected(flags)),
-        },
+        "package" => package(flags),
         "lavapipe" if flags.is_empty() => lavapipe().map(|path| println!("{}", path.display())),
         "lavapipe" => Err(unexpected(flags)),
         "help" | "-h" | "--help" => {
@@ -332,9 +329,21 @@ fn build_web() -> Result<(), String> {
 }
 
 /// A standalone executable: the browser build must precede the native one that embeds it. On
-/// Linux and Windows, `lavapipe`, a driver valle-lavapipe compressed for this platform, is
-/// embedded too, or the pinned one.
-fn package(lavapipe: Option<&Path>) -> Result<(), String> {
+/// Linux and Windows, the driver `--lavapipe` names, valle-lavapipe compressed for this
+/// platform, is embedded too, or the pinned one.
+fn package(flags: &[String]) -> Result<(), String> {
+    let (mut lavapipe, mut web_built) = (None, false);
+    let mut flags = flags.iter();
+    while let Some(flag) = flags.next() {
+        match flag.as_str() {
+            "--lavapipe" => {
+                let driver = flags.next().ok_or("--lavapipe takes a driver's path")?;
+                lavapipe = Some(Path::new(driver));
+            }
+            "--web-built" => web_built = true,
+            _ => return Err(format!("unexpected argument {flag}")),
+        }
+    }
     let mut build = Command::new(cargo_path());
     build.args(["build", "--locked", "--release", "-p", "valle-cli"]);
     if cfg!(any(target_os = "linux", target_os = "windows")) {
@@ -353,7 +362,11 @@ fn package(lavapipe: Option<&Path>) -> Result<(), String> {
     } else {
         build.args(["--features", "embed-web"]);
     }
-    build_web()?;
+    // The browser build is the same on every platform: CI builds it once, where clang builds
+    // QuickJS for wasm32, and packages each platform with it.
+    if !web_built {
+        build_web()?;
+    }
     run(&mut build, "cargo build --release -p valle-cli")?;
     let name = format!("valle{}", std::env::consts::EXE_SUFFIX);
     let dist = root().join("dist");
