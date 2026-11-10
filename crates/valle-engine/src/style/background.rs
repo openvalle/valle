@@ -443,3 +443,50 @@ pub(super) fn background(s: &str) -> Result<(Declared, Rgba), String> {
     }
     Ok((d, color.unwrap_or(color::TRANSPARENT)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shorthand_keeps_nested_commas_and_sizes_attached_to_their_layers() {
+        let (d, color) = background("linear-gradient(rgb(255, 0, 0), blue) right 5px bottom 10px / calc(50% - 2px) 20px no-repeat, white").unwrap();
+        let layers = d
+            .computed(
+                Units {
+                    em: 16.0,
+                    canvas: [200.0, 100.0],
+                },
+                [0.0; 4],
+                Area::PaddingBox,
+                &[],
+            )
+            .unwrap();
+        assert_eq!(color, [1.0; 4]);
+        assert_eq!(layers.len(), 2);
+        let ImageSize::Sized([Some(w), Some(h)]) = &layers[0].size else {
+            panic!("size")
+        };
+        assert_eq!((w.resolve(100.0), h.resolve(100.0)), (48.0, 20.0));
+        assert_eq!(
+            layers[0].position.each_ref().map(|p| p.resolve(100.0)),
+            [95.0, 90.0]
+        );
+        assert_eq!(layers[0].repeat, [Repeat::NoRepeat; 2]);
+        assert_eq!(layers[1].size, ImageSize::Sized([None, None]));
+    }
+
+    #[test]
+    fn invalid_layers_do_not_become_partial_backgrounds() {
+        for s in [
+            "red, none",
+            "red blue",
+            "none / cover",
+            "none center / cover / cover",
+            "none border-box padding-box content-box",
+            "none center / -1px",
+        ] {
+            assert!(background(s).is_err(), "{s}");
+        }
+    }
+}

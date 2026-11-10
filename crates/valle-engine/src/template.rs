@@ -807,3 +807,151 @@ fn same(a: &V, b: &V) -> bool {
         _ => a == b,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dependencies_propagate_through_shared_branches_and_templates() {
+        let p = Program {
+            ops: vec![
+                Op::Seconds,                                                // 0
+                Op::Const(V::Num(2.0)),                                     // 1
+                Op::Bounds("box".into(), Measure::Width),                   // 2
+                Op::Bin(Bin::Mul, 0, 1),                                    // 3
+                Op::Bin(Bin::Add, 2, 3),                                    // 4
+                Op::Select(0, 3, 4),                                        // 5
+                Op::Template(vec![Part::Text("x=".into()), Part::Expr(5)]), // 6
+                Op::Neg(1),                                                 // 7, unused
+            ],
+        };
+        assert_eq!(
+            p.late(),
+            [false, false, true, false, true, true, true, false]
+        );
+        assert_eq!(
+            p.reading([6]),
+            [true, true, true, true, true, true, true, false]
+        );
+        assert_eq!(
+            p.reading([3, 7]),
+            [true, true, false, true, false, false, false, true]
+        );
+        assert_eq!(p.reading([]), [false; 8]);
+    }
+
+    #[test]
+    fn nested_guards_only_apply_in_their_recorded_branches() {
+        let guard = Guard {
+            expr: 2,
+            want: Want::Eq(V::Num(f64::NAN)),
+            when: vec![(0, true), (1, false)],
+            kind: "escape".into(),
+            at: "scene.tsx:4".into(),
+        };
+        let t = Template {
+            guards: vec![guard],
+            ..Template::default()
+        };
+        assert!(t.holds(&[V::Bool(true), V::Bool(false), V::Num(f64::NAN)]));
+        assert!(!t.holds(&[V::Bool(true), V::Bool(false), V::Num(1.0)]));
+        // Inactive branches do not even read their guarded value.
+        assert!(t.holds(&[V::Bool(false)]));
+        assert!(t.holds(&[V::Bool(true), V::Bool(true)]));
+        assert_eq!(t.decided().collect::<Vec<_>>(), [0, 1, 2]);
+        assert_eq!(t.escapes().count(), 1);
+        assert_eq!(
+            &*t.failing(&[V::Bool(true), V::Bool(false), V::Num(2.0)])
+                .unwrap()
+                .at,
+            "scene.tsx:4"
+        );
+        assert!(same(&V::Num(-0.0), &V::Num(0.0)));
+        assert!(!same(&V::Num(1.0), &V::Bool(true)));
+        assert!(!V::Num(f64::NAN).truthy());
+        assert!(V::Str("0".into()).truthy());
+    }
+
+    fn source(looped: bool) -> Clip {
+        Clip {
+            start: Tick(100),
+            end: Tick(110),
+            on: [Tick(99), Tick(111)],
+            frames: None,
+            time: ClipTime::Source {
+                trim: Tick(2),
+                rate: Speed::from_f64(-0.5).unwrap(),
+                map: Vec::new(),
+                length: Some((Tick(10), looped)),
+            },
+        }
+    }
+
+    #[test]
+    fn clip_time_reverses_holds_and_wraps_at_tick_boundaries() {
+        for (looped, expected) in [(false, [3, 2, 1, 0]), (true, [3, 2, 1, 7])] {
+            let clip = source(looped);
+            for (t, value) in [98, 100, 101, 110].into_iter().zip(expected) {
+                assert_eq!(
+                    clip.at(ClipPart::Time, Tick(t)).unwrap(),
+                    V::Num(Tick(value).seconds())
+                );
+            }
+            assert_eq!(clip.at(ClipPart::On, Tick(98)).unwrap(), V::Bool(false));
+            assert_eq!(clip.at(ClipPart::On, Tick(99)).unwrap(), V::Bool(true));
+            assert_eq!(clip.at(ClipPart::On, Tick(111)).unwrap(), V::Bool(false));
+            assert_eq!(clip.at(ClipPart::Progress, Tick(105)).unwrap(), V::Num(0.5));
+        }
+        let mut clip = source(false);
+        clip.time = ClipTime::Source {
+            trim: Tick(99),
+            rate: Speed::ONE,
+            map: vec![(Tick(0), Tick(9)), (Tick(4), Tick(0)), (Tick(8), Tick(8))],
+            length: None,
+        };
+        // The time map replaces trim/rate, floors negative slopes and holds its ends.
+        for (t, expected) in [(99, 9), (101, 6), (104, 0), (106, 4), (120, 8)] {
+            assert_eq!(
+                clip.at(ClipPart::Time, Tick(t)).unwrap(),
+                V::Num(Tick(expected).seconds())
+            );
+        }
+    }
+
+    #[test]
+    fn transition_progress_counts_only_frames_inside_an_unaligned_clip() {
+        let fps = Rate::new(4, 1).unwrap();
+        let step = fps.frame_start(1).unwrap();
+        let mut clip = source(false);
+        clip.start = Tick(1);
+        clip.end = Tick(3 * step.0);
+        clip.frames = Some(fps);
+        // Frame 0 precedes the clip and frame 3 is outside: frames 1 and 2 span [0,1].
+        for (frame, p) in [(0, 0.0), (1, 0.0), (2, 1.0), (3, 1.0)] {
+            assert_eq!(
+                clip.at(ClipPart::Progress, fps.frame_start(frame).unwrap())
+                    .unwrap(),
+                V::Num(p)
+            );
+        }
+        clip.end = Tick(2 * step.0);
+        assert_eq!(clip.at(ClipPart::Progress, step).unwrap(), V::Num(0.5));
+    }
+
+    #[test]
+    fn temporal_samples_clamp_or_wrap_in_output_time() {
+        let s = Sample {
+            offset: Tick(-3),
+            duration: Tick(10),
+            looped: false,
+        };
+        for (t, expected) in [(0, 0), (3, 0), (8, 5), (13, 10), (15, 10)] {
+            assert_eq!(s.at(Tick(t)), Tick(expected));
+        }
+        let s = Sample { looped: true, ..s };
+        for (t, expected) in [(0, 7), (3, 0), (8, 5), (13, 0), (15, 2)] {
+            assert_eq!(s.at(Tick(t)), Tick(expected));
+        }
+    }
+}

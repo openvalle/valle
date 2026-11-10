@@ -495,3 +495,100 @@ impl Kernel {
         self.table[i] * (1.0 - f) + self.table[i + 1] * f
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_eq_kind_has_the_expected_gain_at_its_reference_frequencies() {
+        let gain = 10f64.powf(6.0 / 20.0);
+        for (kind, expected) in [
+            (
+                BandKind::Lowpass,
+                [1.0, std::f64::consts::FRAC_1_SQRT_2, 0.0],
+            ),
+            (
+                BandKind::Highpass,
+                [0.0, std::f64::consts::FRAC_1_SQRT_2, 1.0],
+            ),
+            (BandKind::Peaking, [1.0, gain, 1.0]),
+            (BandKind::LowShelf, [gain, gain.sqrt(), 1.0]),
+            (BandKind::HighShelf, [1.0, gain.sqrt(), gain]),
+        ] {
+            let c = Coefficients::band(&Band {
+                kind,
+                frequency: 1200.0,
+                q: std::f64::consts::FRAC_1_SQRT_2,
+                gain_db: 6.0,
+            });
+            for (frequency, expected) in [0.0, 1200.0, FS / 2.0].into_iter().zip(expected) {
+                assert!(
+                    (c.response(frequency) - expected).abs() < 1e-10,
+                    "{kind:?} at {frequency}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn eq_impulses_do_not_leak_between_channels_and_decay_within_preroll() {
+        for kind in [
+            BandKind::Lowpass,
+            BandKind::Highpass,
+            BandKind::Peaking,
+            BandKind::LowShelf,
+            BandKind::HighShelf,
+        ] {
+            let c = Coefficients::band(&Band {
+                kind,
+                frequency: 80.0,
+                q: 4.0,
+                gain_db: -12.0,
+            });
+            let mut filter = Biquad::default();
+            let first = filter.run(&c, [1.0, 0.0]);
+            assert_eq!(first, [c.b[0], 0.0]);
+            let mut last = [0.0; 2];
+            for _ in 0..c.settle().ceil() as usize {
+                last = filter.run(&c, [0.0; 2]);
+                assert!(last[0].is_finite());
+                assert_eq!(last[1], 0.0);
+            }
+            assert!(last[0].abs() < 1e-5, "{kind:?}: {last:?}");
+            assert_eq!(Biquad::default().run(&c, [1.0, 0.0]), first);
+        }
+    }
+
+    #[test]
+    fn soft_knee_is_continuous_and_sidechain_reduction_respects_its_range() {
+        let p = Compressor {
+            threshold_db: -24.0,
+            ratio: 4.0,
+            knee_db: 8.0,
+            attack: 0.001,
+            release: 0.01,
+            makeup_db: 0.0,
+            range_db: Some(6.0),
+            key: None,
+        };
+        assert_eq!(Comp::curve(&p, -28.0), -28.0);
+        assert_eq!(Comp::curve(&p, -24.0), -24.75);
+        assert_eq!(Comp::curve(&p, -20.0), -23.0);
+        for edge in [-28.0, -20.0] {
+            assert!((Comp::curve(&p, edge - 1e-6) - Comp::curve(&p, edge + 1e-6)).abs() < 3e-6);
+        }
+        let mut c = Comp::new(&p);
+        let mut y = [0.0; 2];
+        for _ in 0..4800 {
+            y = c.run([0.5, -0.25], [1.0, 0.0]);
+        }
+        let gain = 10f64.powf(-6.0 / 20.0);
+        assert!((y[0] - 0.5 * gain).abs() < 1e-9);
+        assert_eq!(y[1], -y[0] / 2.0);
+        for _ in 0..24000 {
+            y = c.run([0.5, -0.25], [0.0; 2]);
+        }
+        assert!((y[0] - 0.5).abs() < 1e-9);
+    }
+}

@@ -250,3 +250,43 @@ pub(super) fn origin(s: &str) -> Result<([Offset<Len>; 2], Len), String> {
     };
     Ok((position(at, false).map_err(|_| bad())?, z))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_math_keeps_percentages_until_the_reference_box_is_known() {
+        let fs = transform(
+            "translate(calc(50% - 1em), max(2px, 10%)) rotate(calc(1turn / 4)) scale(-2, 50%)",
+        )
+        .unwrap();
+        let u = Units {
+            em: 20.0,
+            canvas: [400.0, 200.0],
+        };
+        let Function::Translate(t) = fs[0].computed(u) else {
+            panic!("translate")
+        };
+        assert_eq!(
+            (t[0].resolve(200.0), t[1].resolve(80.0), t[2].resolve(0.0)),
+            (80.0, 8.0, 0.0)
+        );
+        assert_eq!(fs[1], Function::Rotate(90.0));
+        assert_eq!(fs[2], Function::Scale([-2.0, 0.5, 1.0]));
+    }
+
+    #[test]
+    fn depth_and_arity_errors_do_not_drop_transform_functions() {
+        for s in [
+            "translatez(10%)",
+            "perspective(-2px)",
+            "matrix(1, 0, 0, 1, 0)",
+            "rotate3d(1, 0, 90deg)",
+            "scale(2) invalid(1)",
+            "translate(1px, 2px, 3px)",
+        ] {
+            assert!(transform(s).is_err(), "{s}");
+        }
+    }
+}

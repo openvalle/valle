@@ -340,3 +340,47 @@ fn function(w: &str) -> Result<Function<Len, Option<Rgba>>, String> {
         _ => return Err(format!("{name}() is not a filter function: {NAMES}")),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_blur_and_shadow_lengths_resolve_in_the_current_font() {
+        let fs = filter("blur(calc(1em / 2)) drop-shadow(currentcolor -1em 2px calc(1em / 4)) hue-rotate(calc(1turn / 4))").unwrap();
+        let current = [0.25, 0.5, 0.75, 1.0];
+        let u = Units {
+            em: 20.0,
+            canvas: [200.0, 100.0],
+        };
+        assert_eq!(
+            fs.iter()
+                .map(|f| f.computed(u, current))
+                .collect::<Vec<_>>(),
+            [
+                Function::Blur(10.0),
+                Function::DropShadow {
+                    offset: [-20.0, 2.0],
+                    blur: 5.0,
+                    color: current
+                },
+                Function::HueRotate(90.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn invalid_filter_arguments_fail_the_entire_list() {
+        for s in [
+            "blur(1px) unknown(1)",
+            "blur(-1px)",
+            "blur(20%)",
+            "opacity(-0.1)",
+            "contrast(1 2)",
+            "drop-shadow(inset 1px 2px)",
+            "drop-shadow(1px 2px 3px 4px)",
+        ] {
+            assert!(filter(s).is_err(), "{s}");
+        }
+    }
+}

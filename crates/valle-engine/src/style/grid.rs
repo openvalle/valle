@@ -780,3 +780,66 @@ impl Lengths {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn named_areas_are_case_sensitive_rectangles_with_empty_cells() {
+        let parsed = areas(&V::Str("'A A ...' 'a a ...'".into()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed.areas.len(), 2);
+        for (area, name, row) in [(&parsed.areas[0], "A", 1), (&parsed.areas[1], "a", 2)] {
+            assert_eq!(area.name, name);
+            assert_eq!(
+                (
+                    area.row_start,
+                    area.row_end,
+                    area.column_start,
+                    area.column_end
+                ),
+                (row, row + 1, 1, 3)
+            );
+        }
+        for s in [
+            "'a . a'",
+            "'a a' 'a .'",
+            "'a .' '. a'",
+            "'a a' '. a'",
+            "'a b' 'a'",
+        ] {
+            assert!(areas(&V::Str(s.into())).is_err(), "{s}");
+        }
+    }
+
+    #[test]
+    fn repeat_keeps_line_names_and_nested_math_without_expanding_tracks() {
+        let t =
+            tracks("[Start] repeat(2, [Inner] minmax(calc(10px + 5%), 1fr) [End]) [Last]").unwrap();
+        assert_eq!(t.names, [vec!["Start"], vec!["Last"]]);
+        let [
+            Part::Repeat {
+                count,
+                tracks,
+                names,
+            },
+        ] = &t.parts[..]
+        else {
+            panic!("{t:?}")
+        };
+        assert_eq!(*count, RepetitionCount::Count(2));
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(*names, [vec!["Inner"], vec!["End"]]);
+        for s in [
+            "repeat(2,)",
+            "minmax(1px)",
+            "[a]",
+            "repeat(-2, 1px)",
+            "repeat(2.5, 1px)",
+        ] {
+            assert!(super::tracks(s).is_err(), "{s}");
+        }
+    }
+}

@@ -395,3 +395,52 @@ fn extreme(
         _ => Err("numbers and lengths do not compare".into()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::units::{Accept, Units, length_text};
+    use super::*;
+
+    #[test]
+    fn negative_factors_reverse_nested_min_max_and_keep_percentage_bases() {
+        let a = Accept {
+            keyword: None,
+            negative: true,
+            percent: true,
+            sizing: &[],
+        };
+        let u = Units {
+            em: 16.0,
+            canvas: [200.0, 100.0],
+        };
+        let v = length_text("calc(-2 * min(10px, max(2px, 25%)) + 30px)", a).unwrap();
+        for (basis, expected) in [(0.0, 26.0), (20.0, 20.0), (100.0, 10.0)] {
+            assert_eq!(v.px(u, basis), expected);
+        }
+        // CSS clamp gives its minimum priority when minimum > maximum.
+        assert_eq!(
+            length_text("clamp(20px, 5px, 10px)", a)
+                .unwrap()
+                .px(u, 100.0),
+            20.0
+        );
+        assert_eq!(number("calc(2 * min(3, max(1, 4)) - 1)").unwrap(), 5.0);
+        assert_eq!(degrees("calc(0.5turn - 90deg)").unwrap(), 90.0);
+    }
+
+    #[test]
+    fn nonfinite_numbers_and_incompatible_math_are_rejected() {
+        for s in [
+            "calc(NaN)",
+            "calc(infinity)",
+            "calc(1 / 0)",
+            "min()",
+            "max(1,)",
+            "calc(1px + 2)",
+        ] {
+            assert!(number(s).is_err(), "{s}");
+        }
+        assert!(degrees("calc(1turn + 1px)").is_err());
+        assert!(factor("calc(infinity * 1%)").is_err());
+    }
+}

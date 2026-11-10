@@ -550,3 +550,56 @@ impl Declared {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn currentcolor_double_stops_and_hints_survive_computation() {
+        let d = image("linear-gradient(in oklab, currentcolor 10% 20%, calc(25% + 5px), blue)")
+            .unwrap();
+        let current = [0.2, 0.4, 0.6, 0.5];
+        let Image::Gradient(g) = d
+            .computed(
+                Units {
+                    em: 16.0,
+                    canvas: [200.0, 100.0],
+                },
+                current,
+                &[],
+            )
+            .unwrap()
+        else {
+            panic!("gradient")
+        };
+        assert_eq!(g.space, Space::Oklab);
+        assert_eq!(g.stops.len(), 4);
+        for (stop, at) in g.stops[..2].iter().zip([20.0, 40.0]) {
+            let Stop::Color(c, Some(p)) = stop else {
+                panic!("color stop")
+            };
+            assert_eq!(*c, current);
+            assert_eq!(p.resolve(200.0), at);
+        }
+        let Stop::Hint(p) = &g.stops[2] else {
+            panic!("hint")
+        };
+        assert_eq!(p.resolve(200.0), 55.0);
+    }
+
+    #[test]
+    fn hints_need_colors_on_both_sides_and_radii_need_valid_units() {
+        for s in [
+            "linear-gradient(20%, red, blue)",
+            "linear-gradient(red, blue, 20%)",
+            "linear-gradient(red, 20%, 30%, blue)",
+            "linear-gradient(red 0% 20% 30%, blue)",
+            "radial-gradient(circle 20%, red, blue)",
+            "radial-gradient(-2px, red, blue)",
+            "conic-gradient(from 1px, red, blue)",
+        ] {
+            assert!(image(s).is_err(), "{s}");
+        }
+    }
+}
