@@ -36,7 +36,7 @@ fn every_example_checks_cleanly() {
             .unwrap_or_else(|_| panic!("{name}: {}", String::from_utf8_lossy(&out.stderr)));
         if !out.status.success()
             || result["status"] != "ok"
-            || result["warnings"] != Value::Array(vec![])
+            || result.get("warnings").is_some()
         {
             failures.push(format!("{name}: {result}"));
         }

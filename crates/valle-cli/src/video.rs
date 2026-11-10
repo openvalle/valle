@@ -142,8 +142,9 @@ pub fn render(
         "adapter": adapter,
         // Whether the GPU drew the frames into the encoder's own memory, read back otherwise.
         "direct": direct,
-        "seconds": seconds,
-        "sound": mixer.is_some().then(|| loudness(&meter)),
+        "seconds": (seconds * 1000.0).round() / 1000.0,
+        // Silence has no loudness: a video without sound says none.
+        "sound": mixer.is_some().then(|| loudness(&meter)).filter(|l| !l["lufs"].is_null()),
     }))
 }
 

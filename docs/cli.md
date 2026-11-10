@@ -55,9 +55,9 @@ Both `check` and `render` take the bindings `--props`, `--data` (JSON, or `@file
 
 ## Output
 
-Every command takes `--json` (one JSON result) and `--events` (progress lines, then the
-result). A result has `status`, and a failure `code`, `message`, `hint` and, for a check,
-`problems`. The exit code is 0 on success and 1 on failure. A render's result includes the
+Every command takes `--json` (one JSON result) and `--events` (progress lines, at most a
+hundred, then the result). A result leaves out fields that would be `null` or empty. It has
+`status`, and a failure `code`, `message`, `hint` and, for a check, `problems`. The exit code is 0 on success and 1 on failure. A render's result includes the
 file, the frames, its size and, for a video, the codec, the encoder, the GPU it drew on as
 `adapter`, and the sound's loudness.
 

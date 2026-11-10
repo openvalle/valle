@@ -14,7 +14,9 @@ mod video;
 
 use std::io::Write;
 use std::process::ExitCode;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use clap::error::ErrorKind;
@@ -31,14 +33,31 @@ const STACK: usize = 64 << 20;
 /// each, before its result.
 static EVENTS: AtomicBool = AtomicBool::new(false);
 
-/// Says, with `--events`, that `done` of `total` frames are drawn.
+/// When progress was last said, and at what whole percent.
+static SAID: Mutex<Option<(Instant, usize)>> = Mutex::new(None);
+
+/// Says, with `--events`, that `done` of `total` frames are drawn: at the first and the last
+/// frame, and between them as the whole percent changes, at most four times a second, so a
+/// long render says it in a hundred lines or fewer.
 pub fn progress(done: usize, total: usize) {
-    if EVENTS.load(Ordering::Relaxed) {
-        let line = json!({ "event": "progress", "done": done, "frames": total });
-        let mut out = std::io::stdout().lock();
-        let _ = writeln!(out, "{line}");
-        let _ = out.flush();
+    if !EVENTS.load(Ordering::Relaxed) {
+        return;
     }
+    let percent = done * 100 / total.max(1);
+    let mut said = SAID.lock().unwrap_or_else(|e| e.into_inner());
+    let due = match *said {
+        _ if done == 1 || done == total => true,
+        None => true,
+        Some((at, last)) => percent > last && at.elapsed() >= Duration::from_millis(250),
+    };
+    if !due {
+        return;
+    }
+    *said = Some((Instant::now(), percent));
+    let line = json!({ "event": "progress", "done": done, "frames": total });
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{line}");
+    let _ = out.flush();
 }
 
 /// A command's failure: a code tools can match, what went wrong, and what to do about it.
@@ -112,7 +131,7 @@ fn main() -> ExitCode {
     // Some of it done and the rest not: the command failed.
     let partial = matches!(&result, Ok(v) if v["status"] == "partial");
     match (result, json) {
-        (Ok(value), true) => println!("{value}"),
+        (Ok(value), true) => println!("{}", lean(value)),
         (Ok(value), false) => print_text(&value),
         (Err(f), true) => {
             let mut out = json!({ "status": "error", "code": f.code, "message": f.message });
@@ -243,6 +262,15 @@ fn scene_file(file: &str, timeline: bool, command: &str) -> Result<(), Failure> 
         ),
         _ => Ok(()),
     }
+}
+
+/// A result as JSON without its empty fields: a `null`, or an empty list, says nothing, and
+/// costs a reader to skip. Only the top level: what it holds, such as a clip, stays as it is.
+fn lean(mut value: Value) -> Value {
+    if let Some(o) = value.as_object_mut() {
+        o.retain(|_, v| !(v.is_null() || v.as_array().is_some_and(Vec::is_empty)));
+    }
+    value
 }
 
 /// A result as text: its summary, or a guide's content.

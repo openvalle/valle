@@ -77,7 +77,10 @@ the sources first.
   `timeline`, `check`, `gpu`, `video`), `message` and, when there is advice, `hint`; a check's
   failure lists each problem in `problems`, with the first frame it is on and how many.
 - **`--events`**: lines of JSON as the command goes (`{"event":"progress","done":12,"frames":60}`),
-  then the result. Studio says `ready` with its address and keeps running.
+  at most a hundred for any length, then the result. Studio says `ready` with its address and
+  keeps running.
+- A JSON result leaves out what it has nothing for: a field that would be `null` or an empty
+  list is absent.
 - **Exit code**: 0 on success, 1 on any failure. Decide by the exit code, then read the result.
 
 ## When something fails

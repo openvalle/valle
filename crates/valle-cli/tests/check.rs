@@ -56,7 +56,8 @@ fn a_structure_that_holds_is_not() {
     "#};
     let out = check("still", scene);
     assert_eq!(out["status"], "ok", "{out}");
-    assert_eq!(out["warnings"], serde_json::json!([]), "{out}");
+    // No warnings: the result has none to give, so it has no field for them.
+    assert!(out.get("warnings").is_none(), "{out}");
 }
 
 #[test]
