@@ -231,6 +231,12 @@ impl Writer {
 impl Write for Writer {
     fn push(&mut self, rgba: &[u8]) -> Result<(), String> {
         let [w, h] = self.size;
+        if rgba.len() as u64 != u64::from(w) * u64::from(h) * 4 {
+            return Err(format!(
+                "a {w} × {h} frame needs {} RGBA bytes",
+                w as u64 * h as u64 * 4
+            ));
+        }
         let mut source = frame::Video::new(format::Pixel::RGBA, w, h);
         let (stride, row) = (source.stride(0), w as usize * 4);
         let data = source.data_mut(0);
@@ -277,6 +283,9 @@ impl Write for Writer {
     }
 
     fn sound(&mut self, samples: &[f32]) -> Result<(), String> {
+        if !samples.len().is_multiple_of(2) {
+            return Err("stereo sound needs a left and right sample for each time".into());
+        }
         let sound = (self.sound.as_mut()).ok_or("the video was opened without sound")?;
         sound.pending.extend_from_slice(samples);
         sound.encode(&mut self.output, false)

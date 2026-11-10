@@ -175,6 +175,16 @@ pub fn has(codec: Codec, encoding: Encoding) -> Result<bool, String> {
 /// A video file at `path`, its container by its extension.
 pub fn writer(path: &Path, options: &Options) -> Result<Box<dyn Write>, String> {
     let [w, h] = options.size;
+    if w == 0 || h == 0 || w > i32::MAX as u32 || h > i32::MAX as u32 {
+        return Err("video dimensions must be positive 32-bit integers".into());
+    }
+    if options
+        .fps
+        .iter()
+        .any(|&n| n <= 0 || n > i64::from(i32::MAX))
+    {
+        return Err("video fps must be a ratio of positive 32-bit integers".into());
+    }
     if options.codec != Codec::ProRes4444 && (w % 2 == 1 || h % 2 == 1) {
         return Err(format!(
             "H.264 and HEVC keep color at half size, so the frame is an even number of px each \

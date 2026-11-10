@@ -1,0 +1,41 @@
+name: Media compatibility
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: media-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ffmpeg:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+        ffmpeg: [7, 8, 9]
+    runs-on: ${{ matrix.os }}
+    env:
+      VALLE_TEST_FFMPEG_MAJOR: ${{ matrix.ffmpeg }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the Rust toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: media
+          # All majors build the same binary; only one job needs to save it.
+          save-if: ${{ matrix.ffmpeg == 9 && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v1') }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install FFmpeg
+        run: bun .github/scripts/install-ffmpeg.ts
+      - name: Test software media without a GPU
+        run: cargo test --locked -p valle-native --test media
