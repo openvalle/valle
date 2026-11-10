@@ -17,7 +17,8 @@ use crate::args::{self, Args, Frames};
     version,
     about = "Motion graphics and video edits, written as TSX and timeline JSON, drawn on the GPU",
     arg_required_else_help = true,
-    after_help = "Run `valle <command> --help` for a command's options."
+    after_help = "New here? Read `valle docs start`. Run `valle <command> --help` for a \
+                  command's options."
 )]
 pub struct Cli {
     /// Print the result as JSON
@@ -40,6 +41,17 @@ pub enum Command {
     Timeline(Timeline),
     /// A project folder: project.json, its timelines, files and snapshots
     Project(Project),
+    /// The guides: how to write scenes and timelines, and how the commands behave
+    ///
+    /// Without a topic, lists them. A guide is long; --section prints one of its parts.
+    Docs {
+        /// The guide
+        #[arg(value_parser = clap::builder::PossibleValuesParser::new(crate::docs::topics()))]
+        topic: Option<String>,
+        /// One section of the guide, by its name or heading
+        #[arg(long, requires = "topic")]
+        section: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -740,5 +752,58 @@ mod tests {
         };
         assert_eq!(p.folder.as_deref(), Some(std::path::Path::new("/tmp/p")));
         assert!(matches!(p.command, ProjectCommand::Save { message: Some(m) } if m == "first"));
+    }
+
+    /// Words as a shell splits a command line written in a guide: by spaces, keeping what
+    /// single or double quotes hold together.
+    fn shell_words(line: &str) -> Vec<String> {
+        let (mut words, mut word, mut quote) = (Vec::new(), String::new(), None);
+        for c in line.chars() {
+            match c {
+                '\'' | '"' if quote.is_none() => quote = Some(c),
+                c if quote == Some(c) => quote = None,
+                ' ' if quote.is_none() => {
+                    if !word.is_empty() {
+                        words.push(std::mem::take(&mut word));
+                    }
+                }
+                c => word.push(c),
+            }
+        }
+        if !word.is_empty() {
+            words.push(word);
+        }
+        words
+    }
+
+    #[test]
+    fn every_command_the_guides_give_parses() {
+        let mut seen = 0;
+        for guide in &crate::docs::GUIDES {
+            let mut code = false;
+            for line in guide.content.lines() {
+                if line.starts_with("```") {
+                    code = !code && line.trim_start_matches('`').starts_with("sh");
+                    continue;
+                }
+                let line = line.split(" # ").next().unwrap_or(line).trim();
+                let Some(rest) = line.strip_prefix("valle ").filter(|_| code) else {
+                    continue;
+                };
+                if rest.contains("<command>") {
+                    continue;
+                }
+                let words = shell_words(rest);
+                let words: Vec<&str> = words.iter().map(String::as_str).collect();
+                match parse(&words) {
+                    Ok(_) => {}
+                    // Help is a parse that prints instead of running.
+                    Err(e) if e.kind() == clap::error::ErrorKind::DisplayHelp => {}
+                    Err(e) => panic!("{}: valle {rest}: {e}", guide.topic),
+                }
+                seen += 1;
+            }
+        }
+        assert!(seen >= 30, "the guides give {seen} commands");
     }
 }

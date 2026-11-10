@@ -22,6 +22,10 @@ cache cannot be written, Linux loads it from memory. `cargo xtask lavapipe` down
 alone: with `VALLE_LAVAPIPE` set to its path, a development build and the GPU tests draw on it
 too, as CI does.
 
+The guides are built into the executable: `valle docs` lists them, and `valle docs start`
+is the place to begin. They are the Markdown files in [docs/](docs/); agents can load
+[skills/valle/SKILL.md](skills/valle/SKILL.md), which points them there.
+
 For development, `cargo xtask build-web` builds the browser assets on disk. A packaged executable
 can use those instead with `--web-assets-dir /path/to/valle/web` when starting Studio.
 

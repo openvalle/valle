@@ -3,6 +3,7 @@
 
 mod args;
 mod cli;
+mod docs;
 mod http;
 mod motion;
 mod picture;
@@ -221,6 +222,7 @@ fn run(cli: Cli) -> Result<Value, Failure> {
         Command::Timeline(Timeline::Studio { file, serve }) => {
             studio::run("timeline", Some(file), serve, events)
         }
+        Command::Docs { topic, section } => docs::run(topic, section),
         Command::Project(p) => match p.command {
             ProjectCommand::Studio { folder, serve } => {
                 studio::run("project", folder.or(p.folder), serve, events)
@@ -243,9 +245,12 @@ fn scene_file(file: &str, timeline: bool, command: &str) -> Result<(), Failure> 
     }
 }
 
-/// A result as text: its summary.
+/// A result as text: its summary, or a guide's content.
 fn print_text(value: &Value) {
-    if let Some(summary) = value["summary"].as_str() {
-        println!("{summary}");
+    let text = value["summary"].as_str().or(value["content"].as_str());
+    if let Some(text) = text {
+        // A reader such as `head` may stop before the end.
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, "{}", text.trim_end_matches('\n'));
     }
 }
