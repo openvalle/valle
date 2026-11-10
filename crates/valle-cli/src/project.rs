@@ -117,7 +117,7 @@ fn clip_of(path: &str, alias: &str) -> String {
         .unwrap_or_default()
         .to_ascii_lowercase();
     match ext.as_str() {
-        _ if path.starts_with("components/") => {
+        _ if path.starts_with("components/") || path.ends_with(".motion.tsx") => {
             format!("{{ \"kind\": \"motion\", \"component\": \"{alias}\" }}")
         }
         "png" | "jpg" | "jpeg" | "webp" | "svg" => {
@@ -129,7 +129,9 @@ fn clip_of(path: &str, alias: &str) -> String {
         "ttf" | "otf" | "woff" | "woff2" => {
             format!("\"fontFamily\": \"{alias}\" in a caption style")
         }
-        "json" => format!("{{ \"kind\": \"timeline\", \"src\": \"{alias}\" }}"),
+        _ if path.ends_with(".timeline.json") => {
+            format!("{{ \"kind\": \"timeline\", \"src\": \"{alias}\" }}")
+        }
         _ => format!("{{ \"kind\": \"video\", \"src\": \"{alias}\" }}"),
     }
 }
@@ -179,10 +181,19 @@ fn check(p: &Project, timeline: Option<String>, cost: bool) -> Result<Value, Fai
             true => motion::check(&args).map(|_| ()),
             false => timeline::lower(&args).map(|_| ()),
         };
-        if let Err(f) = lowered {
+        // The timeline by its path in the project, as the summary names it.
+        let full = path.to_string_lossy().replace('\\', "/");
+        let near = |m: &str| m.replace(&full, &rel);
+        if let Err(mut f) = lowered {
+            f.message = near(&f.message);
             if f.problems.is_empty() {
                 problems.push(f.message);
             } else {
+                for p in &mut f.problems {
+                    if let Some(m) = p["message"].as_str() {
+                        p["message"] = near(m).into();
+                    }
+                }
                 return Err(f);
             }
         }
@@ -224,7 +235,12 @@ fn history(p: &Project) -> Result<Value, Failure> {
                 .as_deref()
                 .map(|m| format!(": {m}"))
                 .unwrap_or_default();
-            format!("{} ({}, {} files){message}", s.number, s.by, s.files.len())
+            format!(
+                "snapshot {} ({}, {}){message}",
+                s.number,
+                s.by,
+                counted(s.files.len(), "file")
+            )
         })
         .collect();
     let summary = match lines.is_empty() {

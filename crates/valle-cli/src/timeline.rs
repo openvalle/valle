@@ -65,11 +65,11 @@ pub fn query(args: &Args, filter: &Filter) -> Result<Value, Failure> {
                 .as_u64()
                 .map(|l| format!(", line {l}"))
                 .unwrap_or_default();
+            // The path edits and --clip take, so a clip found can be named back.
             format!(
-                "{} ({} #{}, {}-{}{line})",
+                "{} at {}, {}–{}{line}",
                 c["id"].as_str().unwrap_or_default(),
-                c["track"].as_str().unwrap_or_default(),
-                c["index"],
+                c["path"].as_str().unwrap_or_default(),
                 c["program"][0].as_str().unwrap_or_default(),
                 c["program"][1].as_str().unwrap_or_default(),
             )

@@ -57,8 +57,11 @@ pub enum Command {
 #[derive(Subcommand)]
 pub enum Motion {
     /// Compile the scene and check every frame without drawing
+    #[command(
+        after_help = "Example:\n  valle motion check title.motion.tsx --props '{\"title\":\"Hi\"}'"
+    )]
     Check {
-        /// The scene
+        /// The scene: a .motion.tsx file
         #[arg(value_name = "SCENE")]
         file: String,
         #[command(flatten)]
@@ -67,8 +70,12 @@ pub enum Motion {
         frames: FrameChoice,
     },
     /// Draw frames into a .png, a folder of them, or a .mp4 or .mov video
+    #[command(after_help = "Examples:\n  \
+        valle motion render title.motion.tsx --frame 45 -o frame.png\n  \
+        valle motion render title.motion.tsx --frames 0,30,60 --storyboard -o sheet.png\n  \
+        valle motion render title.motion.tsx -o title.mp4")]
     Render {
-        /// The scene
+        /// The scene: a .motion.tsx file
         #[arg(value_name = "SCENE")]
         file: String,
         #[command(flatten)]
@@ -80,7 +87,7 @@ pub enum Motion {
     ///
     /// Studio is served from 127.0.0.1 until stopped.
     Studio {
-        /// The scene
+        /// The scene: a .motion.tsx file
         #[arg(value_name = "SCENE")]
         file: PathBuf,
         #[command(flatten)]
@@ -91,16 +98,22 @@ pub enum Motion {
 #[derive(Subcommand)]
 pub enum Timeline {
     /// Check the document, its clips' sources and every frame
+    #[command(after_help = "Example:\n  valle timeline check edit.timeline.json\n\n\
+        How to write one: valle docs timeline")]
     Check {
-        /// The document
+        /// The timeline: a .timeline.json file
         #[arg(value_name = "TIMELINE")]
         file: String,
         #[command(flatten)]
         frames: FrameChoice,
     },
     /// Draw frames into a .png, a folder or a video with the sound, or the sound into a .wav
+    #[command(after_help = "Examples:\n  \
+        valle timeline render edit.timeline.json --frame 60 -o frame.png\n  \
+        valle timeline render edit.timeline.json -o edit.mp4\n  \
+        valle timeline render edit.timeline.json -o mix.wav")]
     Render {
-        /// The document
+        /// The timeline: a .timeline.json file
         #[arg(value_name = "TIMELINE")]
         file: String,
         #[command(flatten)]
@@ -111,16 +124,16 @@ pub enum Timeline {
     /// Every filter given holds. Each clip comes with its program and source timecodes, its
     /// line in the file, what it is anchored to and the clips anchored to it.
     Query {
-        /// The document
+        /// The timeline: a .timeline.json file
         #[arg(value_name = "TIMELINE")]
         file: String,
         #[command(flatten)]
         filter: Filters,
     },
     /// Edit it as Studio does: set, move, trim, delete or add a clip
-    #[command(after_long_help = EDITING)]
+    #[command(after_help = EDIT_EXAMPLES, after_long_help = EDITING)]
     Edit {
-        /// The document
+        /// The timeline: a .timeline.json file
         #[arg(value_name = "TIMELINE")]
         file: String,
         /// The edit, as JSON or @file: { "op": "move", "clip": "intro", "start": 2 }
@@ -131,7 +144,7 @@ pub enum Timeline {
     ///
     /// Studio is served from 127.0.0.1 until stopped.
     Studio {
-        /// The document
+        /// The timeline: a .timeline.json file
         #[arg(value_name = "TIMELINE")]
         file: PathBuf,
         #[command(flatten)]
@@ -139,7 +152,20 @@ pub enum Timeline {
     },
 }
 
+const EDIT_EXAMPLES: &str = "\
+Examples:
+  valle timeline edit edit.timeline.json --op '{\"op\":\"move\",\"clip\":\"shot\",\"start\":3}'
+  valle timeline edit edit.timeline.json --op '{\"op\":\"trim\",\"clip\":\"shot\",\"duration\":4}'
+  valle timeline edit edit.timeline.json --op @edit.json
+
+Run with --help for the editing conventions.";
+
 const EDITING: &str = "\
+Examples:
+  valle timeline edit edit.timeline.json --op '{\"op\":\"move\",\"clip\":\"shot\",\"start\":3}'
+  valle timeline edit edit.timeline.json --op '{\"op\":\"trim\",\"clip\":\"shot\",\"duration\":4}'
+  valle timeline edit edit.timeline.json --op @edit.json
+
 Editing conventions:
   clip / track             an id or JSON path, as query returns in path / trackAt
   move.index               the destination array index from 0; out of range is an error;
@@ -246,19 +272,19 @@ pub enum ProjectCommand {
 #[derive(Group)]
 #[command(next_help_heading = "Bindings")]
 pub struct Bindings {
-    /// Values of the props controls.props declares
+    /// Values for the scene's controls.props, as JSON or @file: '{"title":"Hi"}'
     #[arg(long, value_name = "JSON|@FILE")]
     props: Option<String>,
-    /// Values of the data controls.data declares
+    /// Values for the scene's controls.data, as JSON or @file
     #[arg(long, value_name = "JSON|@FILE")]
     data: Option<String>,
-    /// A file bound to a resource; a font's faces, once each
+    /// A file for one of controls.resources; give a font's faces once each
     #[arg(long, value_name = "NAME=PATH", value_parser = pair)]
     resource: Vec<(String, String)>,
-    /// A picture a role reads as input://NAME
+    /// A picture the scene reads as input://NAME, in place of a timeline's
     #[arg(long, value_name = "NAME=PATH", value_parser = pair)]
     input: Vec<(String, String)>,
-    /// The caption a captionPresenter() shows
+    /// The caption a captionPresenter() scene shows: '{"text":"Hello"}' or with runs
     #[arg(long, value_name = "JSON|@FILE")]
     caption: Option<String>,
 }
