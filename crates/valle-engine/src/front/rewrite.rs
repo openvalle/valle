@@ -43,6 +43,7 @@ use oxc::codegen::{Codegen, CodegenOptions};
 use oxc::parser::Parser;
 use oxc::semantic::SemanticBuilder;
 use oxc::span::{GetSpan, SourceType};
+use oxc::str::JSStr;
 use oxc::syntax::scope::ScopeFlags;
 use oxc::transformer::{JsxRuntime, TransformOptions, Transformer};
 
@@ -364,7 +365,9 @@ fn composition(program: &Program<'_>) -> Result<Option<Composition>, (u32, Strin
         let key = key(p).ok_or_else(not_static)?;
         let value = match &p.value {
             Expression::NumericLiteral(n) => Literal::Number(n.value),
-            Expression::StringLiteral(s) => Literal::Text(s.value.to_string()),
+            Expression::StringLiteral(s) => {
+                Literal::Text(utf8(s.value).map_err(|e| (s.span.start, e))?.to_owned())
+            }
             Expression::BooleanLiteral(b) => Literal::Bool(b.value),
             _ => return Err(not_static()),
         };
@@ -413,9 +416,16 @@ pub(super) fn bare<'b, 'a>(mut e: &'b Expression<'a>) -> &'b Expression<'a> {
 pub(super) fn key<'b>(p: &'b ObjectProperty<'_>) -> Option<&'b str> {
     match &p.key {
         PropertyKey::StaticIdentifier(n) if !p.computed => Some(n.name.as_str()),
-        PropertyKey::StringLiteral(s) => Some(s.value.as_str()),
+        PropertyKey::StringLiteral(s) => s.value.as_str(),
         _ => None,
     }
+}
+
+/// Metadata crosses into Rust/JSON, whose strings cannot contain lone UTF-16 surrogates.
+pub(super) fn utf8(value: JSStr<'_>) -> Result<&str, String> {
+    value
+        .as_str()
+        .ok_or_else(|| "a string cannot contain an unpaired UTF-16 surrogate".into())
 }
 
 /// The `controls` export's props, data and resources, `resources: { logo: resource({ kind:
@@ -520,7 +530,7 @@ fn slot(name: &str, e: &Expression<'_>) -> Result<Slot, String> {
             return Err(written());
         };
         let text = |e: &Expression<'_>| match bare(e) {
-            Expression::StringLiteral(v) => Some(v.value.to_string()),
+            Expression::StringLiteral(v) => v.value.as_str().map(str::to_owned),
             _ => None,
         };
         match (key(p), bare(&p.value)) {
@@ -878,11 +888,14 @@ struct Classes(Option<(u32, String)>);
 impl Classes {
     fn value(&mut self, e: &Expression<'_>) {
         match bare(e) {
-            Expression::StringLiteral(s) => self.words(s.span.start + 1, &s.value, false, false),
+            Expression::StringLiteral(s) => self.literal(s.span.start + 1, s.value, false, false),
             Expression::TemplateLiteral(t) => {
                 for (i, q) in t.quasis.iter().enumerate() {
-                    let text = q.value.cooked.as_ref().unwrap_or(&q.value.raw);
-                    self.words(q.span.start, text, i > 0, !q.tail);
+                    if let Some(text) = q.value.cooked {
+                        self.literal(q.span.start, text, i > 0, !q.tail);
+                    } else {
+                        self.words(q.span.start, &q.value.raw, i > 0, !q.tail);
+                    }
                 }
                 t.expressions.iter().for_each(|e| self.value(e));
             }
@@ -895,6 +908,14 @@ impl Classes {
                 self.value(&l.right);
             }
             _ => {}
+        }
+    }
+
+    fn literal(&mut self, at: u32, value: JSStr<'_>, after: bool, before: bool) {
+        match utf8(value) {
+            Ok(text) => self.words(at, text, after, before),
+            Err(e) if self.0.is_none() => self.0 = Some((at, e)),
+            Err(_) => {}
         }
     }
 
@@ -922,7 +943,7 @@ impl<'a> Visit<'a> for Classes {
         if a.is_identifier("className") {
             match &a.value {
                 Some(JSXAttributeValue::StringLiteral(s)) => {
-                    self.words(s.span.start + 1, &s.value, false, false);
+                    self.literal(s.span.start + 1, s.value, false, false);
                 }
                 Some(JSXAttributeValue::ExpressionContainer(c)) => {
                     if let Some(e) = c.expression.as_expression() {
@@ -1107,19 +1128,21 @@ impl<'a> Visit<'a> for Collector {
                 self.nested(|s| s.visit_expression(&u.argument));
             }
             Expression::TemplateLiteral(t) if !t.expressions.is_empty() => {
-                let strings: Vec<&str> = t
+                // Keep each chunk's JS escapes: JSON/Rust strings cannot represent lone
+                // surrogates, which JavaScript can join into a valid pair at run time.
+                let strings: Vec<String> = t
                     .quasis
                     .iter()
-                    .map(|q| q.value.cooked.as_ref().unwrap_or(&q.value.raw).as_str())
+                    .map(|q| match q.value.cooked.and_then(JSStr::as_str) {
+                        Some(text) => json(text),
+                        None => format!("`{}`", q.value.raw),
+                    })
                     .collect();
                 let n = t.expressions.len();
                 self.replace(
                     t.span.start,
                     t.expressions[0].span().start,
-                    format!(
-                        "__tpl({}, ",
-                        serde_json::to_string(&strings).expect("strings serialize")
-                    ),
+                    format!("__tpl([{}], ", strings.join(",")),
                 );
                 for i in 1..n {
                     self.replace(

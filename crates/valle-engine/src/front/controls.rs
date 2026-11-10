@@ -389,11 +389,11 @@ fn json(e: &Expression<'_>) -> Result<Value, String> {
                 _ => return Err(not_json()),
             }
         }
-        Expression::StringLiteral(s) => Value::String(s.value.to_string()),
+        Expression::StringLiteral(s) => Value::String(super::rewrite::utf8(s.value)?.to_owned()),
         Expression::TemplateLiteral(t) if t.expressions.is_empty() => Value::String(
             (t.quasis.iter())
-                .map(|q| q.value.cooked.as_ref().map_or("", |c| c.as_str()))
-                .collect(),
+                .map(|q| q.value.cooked.map_or(Ok(""), super::rewrite::utf8))
+                .collect::<Result<String, _>>()?,
         ),
         Expression::BooleanLiteral(b) => Value::Bool(b.value),
         Expression::NullLiteral(_) => Value::Null,

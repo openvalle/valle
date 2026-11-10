@@ -13,7 +13,7 @@ publish = false
 [workspace.dependencies]
 # Studio's web assets: compressed only while packaging, decoded only for clients without br.
 brotli = "9.0.0"
-brotli-decompressor = "5.0.3"
+brotli-decompressor = "6.3.1"
 # vello_cpu's scalar level, which color glyphs are rasterized at.
 fearless_simd = { version = "0.7.0", default-features = false, features = ["std", "force_support_fallback"] }
 image-webp = "0.2.4"
@@ -22,11 +22,11 @@ icu_properties = "2.4.0"
 # Tests only: multi-line sources indented with the code, the indentation removed.
 indoc = "2.0.8"
 libm = "0.2.16"
-oxc = { version = "=0.148.0", features = ["ast_visit", "codegen", "semantic", "transformer"] }
+oxc = { version = "=0.158.0", features = ["ast_visit", "codegen", "semantic", "transformer"] }
 # Without system fonts: every host shapes with the same bytes.
 parley = { version = "0.12.0", default-features = false, features = ["std"] }
 # With libm, not the platform's math: every host strokes the same outlines.
-i_overlay = { version = "=4.5.2", default-features = false }
+i_overlay = { version = "=9.1.0", default-features = false }
 # Validate authored WGSL and read its resource bindings and uniform layout; no translation.
 naga = { version = "30.0.1", default-features = false, features = ["wgsl-in"] }
 kurbo = { version = "0.13.1", default-features = false, features = ["libm"] }
@@ -38,11 +38,11 @@ png = "0.18.1"
 ring = "0.17.14"
 rquickjs = "=0.14.0"
 # Studio's system save dialog; Linux uses the desktop portal without GTK.
-rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+rfd = { version = "0.18.0", default-features = false, features = ["xdg-portal"] }
 # Never resolves external entities: an SVG file reads nothing else.
 roxmltree = "0.21.2"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
 taffy = { version = "0.15.1", default-features = false, features = ["std", "flexbox", "block_layout", "grid", "calc"] }
 # The characters of a split text: grapheme clusters, as UAX #29 has them.
@@ -56,7 +56,7 @@ vello_cpu = { version = "0.3.0", default-features = false, features = ["std", "t
 # The native backends only; shaders are WGSL.
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "wgsl", "metal", "vulkan", "dx12"] }
 # WOFF and WOFF2 fonts, decoded to the TrueType or OpenType file inside.
-wuff = "0.2.9"
+wuff = "0.2.10"
 # Without SIMD: every host decodes the same pixels.
 zune-jpeg = { version = "0.5.15", default-features = false, features = ["std"] }
 

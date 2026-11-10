@@ -697,6 +697,49 @@ mod tests {
     }
 
     #[test]
+    fn template_literals_preserve_escapes_and_utf16() {
+        big_stack(|| {
+            let mut f = scene(indoc! {r#"
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  const face = `\uD83D${"\uDE00"}`;
+                  const unit = `\uD800${""}`.charCodeAt(0);
+                  return <Text>{`你好\n\`\\\${literal}:${seconds}:${face}:${unit}`}</Text>;
+                }
+            "#});
+            for seconds in ["0", "0.5", "0"] {
+                assert_eq!(
+                    texts(&at(&mut f, seconds)),
+                    [format!("你好\n`\\${{literal}}:{seconds}:😀:55296")]
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn control_strings_preserve_unicode_and_reject_lone_surrogates() {
+        big_stack(|| {
+            let mut f = scene(indoc! {r#"
+                export const controls = { props: {
+                  a: string({ default: "你好\uD83D\uDE80" }),
+                  b: string({ default: `你好\u{1F680}` }),
+                } };
+                export default function Scene({ a, b }) {
+                  return <Text>{a} / {b}</Text>;
+                }
+            "#});
+            assert_eq!(texts(&at(&mut f, "0")), ["你好🚀 / 你好🚀"]);
+            for literal in [r#""\uD800""#, r"`\uDC00`"] {
+                let e = error(&format!(
+                    "export const controls = {{ props: {{ a: string({{ default: {literal} }}) }} }};\n\
+                     export default function Scene() {{ return <View />; }}"
+                ));
+                assert!(e.contains("unpaired UTF-16 surrogate"), "{e}");
+            }
+        });
+    }
+
+    #[test]
     fn static_scenes_trace_once() {
         big_stack(|| {
             let mut f = scene(indoc! {"

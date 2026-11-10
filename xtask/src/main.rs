@@ -24,7 +24,7 @@ commands:
 ";
 
 /// The wasm-bindgen that makes the browser module's JavaScript: the version `valle-web` pins.
-const WASM_BINDGEN: &str = "0.2.128";
+const WASM_BINDGEN: &str = "0.2.130";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

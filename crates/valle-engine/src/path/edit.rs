@@ -5,8 +5,8 @@ use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::simplify::SimplifyShape;
 use i_overlay::float::single::SingleFloatOverlay;
-use i_overlay::mesh::outline::offset::OutlineOffset;
-use i_overlay::mesh::style::{LineJoin, OutlineStyle};
+use i_overlay::mesh::float::outline::offset::OutlineOffset;
+use i_overlay::mesh::float::style::{LineJoin, OutlineStyle};
 use kurbo::{BezPath, ParamCurve, ParamCurveArclen, ParamCurveDeriv, PathEl, PathSeg, Vec2};
 
 use super::{Path, Segment, parse};
@@ -738,6 +738,15 @@ mod tests {
         let back = bez("M0 0 V100 H100 V0 Z").unwrap();
         assert!((area(&inflate(&back, 10.0, Join::Miter(4.0))) - 14400.0).abs() < 1e-6);
         assert!(area(&inflate(&square, -60.0, Join::Miter(4.0))) < 1e-9);
+    }
+
+    #[test]
+    fn inflating_a_ring_moves_its_hole_in_the_opposite_direction() {
+        let ring = bez("M0 0 H100 V100 H0 Z M30 30 V70 H70 V30 Z").unwrap();
+        for (distance, expected) in [(10.0, 14000.0), (-10.0, 2800.0), (-15.0, 0.0)] {
+            let actual = area(&inflate(&ring, distance, Join::Miter(4.0)));
+            assert!((actual - expected).abs() < 1e-6, "{distance}: {actual}");
+        }
     }
 
     #[test]

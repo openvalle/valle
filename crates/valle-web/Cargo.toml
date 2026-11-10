@@ -15,11 +15,11 @@ valle-engine = { path = "../valle-engine" }
 
 # The SDK's browser bindings, built by `cargo xtask build-web`.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-js-sys = "0.3"
+js-sys = "0.3.107"
 serde_json.workspace = true
 valle-timeline = { path = "../valle-timeline" }
 # The CLI that makes the module's JavaScript must be this version, as `cargo xtask build` checks.
-wasm-bindgen = "=0.2.128"
-wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["console", "OffscreenCanvas"] }
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-futures = "0.4.80"
+web-sys = { version = "0.3.107", features = ["console", "OffscreenCanvas"] }
 wgpu = { workspace = true, features = ["webgpu"] }
