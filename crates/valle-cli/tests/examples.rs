@@ -1,5 +1,6 @@
-//! Every scene and timeline in `examples/` checks without problems or warnings, every frame
-//! traced, so an example nobody renders still breaks the build when the engine changes under it.
+//! Every scene and timeline in `examples/` and `examples/showcase/` checks without problems or
+//! warnings, every frame traced, so an example nobody renders still breaks the build when the
+//! engine changes under it.
 
 use std::path::Path;
 use std::process::Command;
@@ -9,8 +10,9 @@ use serde_json::Value;
 #[test]
 fn every_example_checks_cleanly() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
-    let mut files: Vec<_> = std::fs::read_dir(&dir)
-        .unwrap()
+    let mut files: Vec<_> = [dir.clone(), dir.join("showcase")]
+        .iter()
+        .flat_map(|dir| std::fs::read_dir(dir).unwrap())
         .map(|entry| entry.unwrap().path())
         .filter(|path| path.is_file())
         .collect();
@@ -40,6 +42,6 @@ fn every_example_checks_cleanly() {
         checked += 1;
     }
     // A wrong folder or renamed suffixes must not pass by checking nothing.
-    assert!(checked > 0, "no examples in {}", dir.display());
+    assert!(checked > 15, "{checked} examples in {}", dir.display());
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
