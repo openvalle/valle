@@ -441,6 +441,7 @@ fn render(
         .unwrap_or_else(|| path.display().to_string());
     let file = path.to_string_lossy().into_owned();
     let mut args = cli::project_render_args(file, out, options);
+    args.validate_output()?;
     let video = (args.out.as_deref()).is_none_or(|o| {
         let o = o.to_ascii_lowercase();
         o.ends_with(".mp4") || o.ends_with(".mov")
@@ -474,7 +475,11 @@ fn render(
             (None, true) => format!("{stem}-storyboard.png"),
             (None, false) => format!("{stem}-frames"),
         };
-        args.out = Some(free(&directory.join(name)).display().to_string());
+        args.out = Some(
+            free(&directory.join(name), args.storyboard)
+                .display()
+                .to_string(),
+        );
     }
     let out = args.out.clone().expect("an output");
     let inputs = media(p, &rel, &doc);
@@ -531,8 +536,11 @@ fn media(p: &Project, rel: &str, doc: &valle_timeline::Document) -> Vec<(String,
 }
 
 /// `path`, or with `-2`, `-3`… before its extension if something is there.
-fn free(path: &Path) -> PathBuf {
-    if !path.exists() {
+fn free(path: &Path, storyboard: bool) -> PathBuf {
+    // A paginated storyboard has no file at its base name. Its first page reserves that name.
+    let available =
+        |p: &Path| !p.exists() && (!storyboard || !crate::picture::page_path(p, 0, 2).exists());
+    if available(path) {
         return path.to_path_buf();
     }
     let name = path
@@ -545,7 +553,7 @@ fn free(path: &Path) -> PathBuf {
     };
     (2..)
         .map(|k| path.with_file_name(format!("{stem}-{k}{ext}")))
-        .find(|p| !p.exists())
+        .find(|p| available(p))
         .expect("a free name")
 }
 

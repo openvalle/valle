@@ -299,7 +299,7 @@ pub struct FrameChoice {
     /// The one frame, from 0; a .png shows frame 0 unless given
     #[arg(long, value_name = "N", value_parser = frame, allow_hyphen_values = true)]
     frame: Option<i64>,
-    /// A list (3,0,3) or a range with both ends (0..59); all unless given
+    /// A list (3,0,3) or a range with both ends (0..59), keeping order and duplicates
     #[arg(long, value_name = "A,B,…|A..B", value_parser = frames, allow_hyphen_values = true)]
     frames: Option<Frames>,
 }
@@ -321,9 +321,20 @@ pub struct Output {
 pub struct RenderOptions {
     #[command(flatten)]
     frames: FrameChoice,
-    /// Draw the frames side by side into the one .png
+    /// Draw a PNG storyboard: sample 12 frames including the first and last by default
     #[arg(long)]
     storyboard: bool,
+    /// Uniformly sample up to N frames, including the first and last
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..),
+        requires = "storyboard", conflicts_with_all = ["step", "frame", "frames"])]
+    samples: Option<u32>,
+    /// Take frame 0, N, 2N, ... for the storyboard
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..),
+        requires = "storyboard", conflicts_with_all = ["samples", "frame", "frames"])]
+    step: Option<u32>,
+    /// Frames per PNG page (12 by default); multiple pages use NAME-001.png, NAME-002.png, ...
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..), requires = "storyboard")]
+    per_page: Option<u32>,
     /// Output pixels, without relayout, up to 7680x4320
     #[arg(long, value_name = "WxH", value_parser = size, allow_hyphen_values = true)]
     output_size: Option<[u32; 2]>,
@@ -424,6 +435,9 @@ impl RenderOptions {
     fn apply(self, args: &mut Args) {
         args.frames = self.frames.get();
         args.storyboard = self.storyboard;
+        args.samples = self.samples;
+        args.step = self.step;
+        args.per_page = self.per_page;
         args.output_size = self.output_size;
         args.codec = self.codec.map(|c| match c {
             CodecName::H264 => Codec::H264,
@@ -859,5 +873,38 @@ mod tests {
             }
         }
         assert!(seen >= 30, "the guides give {seen} commands");
+    }
+
+    #[test]
+    fn storyboard_options_require_storyboard_and_one_positive_sampling_mode() {
+        let base = ["motion", "render", "a.motion.tsx", "-o", "sheet.png"];
+        let a = scene(
+            &[
+                &base[..],
+                &["--storyboard", "--samples", "60", "--per-page", "12"],
+            ]
+            .concat(),
+        );
+        assert_eq!(a.samples, Some(60));
+        assert_eq!(a.per_page, Some(12));
+        assert_eq!(a.step, None);
+        for option in ["--samples", "--step", "--per-page"] {
+            refused(&[&base[..], &[option, "2"]].concat(), "--storyboard");
+            for invalid in ["0", "-1", "1.5"] {
+                assert!(parse(&[&base[..], &["--storyboard", option, invalid]].concat()).is_err());
+            }
+        }
+        for (left, right) in [
+            ("--samples", "--step"),
+            ("--samples", "--frames"),
+            ("--step", "--frames"),
+            ("--samples", "--frame"),
+            ("--step", "--frame"),
+        ] {
+            refused(
+                &[&base[..], &["--storyboard", left, "2", right, "2"]].concat(),
+                "cannot be used with",
+            );
+        }
     }
 }

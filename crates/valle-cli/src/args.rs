@@ -15,9 +15,12 @@ pub struct Args {
     pub timeline: bool,
     pub out: Option<String>,
     pub inputs: Inputs,
-    /// The frames to draw, if not all.
+    /// Explicit frames, otherwise all (or a storyboard's sample).
     pub frames: Option<Frames>,
     pub storyboard: bool,
+    pub samples: Option<u32>,
+    pub step: Option<u32>,
+    pub per_page: Option<u32>,
     /// Output pixels, if not the canvas's.
     pub output_size: Option<[u32; 2]>,
     pub codec: Option<Codec>,
@@ -35,6 +38,19 @@ pub enum Frames {
 }
 
 impl Args {
+    /// Reject storyboard output formats before loading a scene or opening an encoder.
+    pub fn validate_output(&self) -> Result<(), Failure> {
+        if self.storyboard
+            && self
+                .out
+                .as_ref()
+                .is_some_and(|out| !out.to_ascii_lowercase().ends_with(".png"))
+        {
+            return Err(Failure::new("usage", "a storyboard is a .png"));
+        }
+        Ok(())
+    }
+
     /// The render options given, by their option's name: what a render record keeps.
     pub fn options(&self) -> Vec<(&'static str, String)> {
         let mut out = Vec::new();

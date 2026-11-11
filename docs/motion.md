@@ -42,8 +42,40 @@ valle motion render title.motion.tsx --frames 0,15,45,89 --storyboard -o sheet.p
 valle motion render title.motion.tsx -o title.mp4
 ```
 
-You cannot watch a video: look at frames. A storyboard puts several frames side by side in
-one PNG; `--frame N` writes one.
+Look at individual frames with `--frame N`, or at several frames together with `--storyboard`.
+
+## Storyboards
+
+`--storyboard` defaults to 12 evenly spaced frames, including the first and last. Shorter
+scenes use every frame. Choose how to sample and how many frames fit on each PNG separately:
+
+```sh
+valle motion render title.motion.tsx --storyboard -o sheet.png
+valle motion render title.motion.tsx --storyboard --samples 60 --per-page 12 -o sheet.png
+valle motion render title.motion.tsx --storyboard --step 30 --per-page 8 -o sheet.png
+valle motion render title.motion.tsx --storyboard --frames 0..89 --per-page 12 -o sheet.png
+```
+
+- `--samples N`: evenly sample up to N frames; `1` selects the first frame.
+- `--step N`: take frames 0, N, 2N, and so on. `--step 1` takes every frame.
+- `--frames A,B,…` or `--frames A..B`: select exact frames, preserving order and duplicates.
+  A range includes both ends; frame numbers start at zero. `--frame N` selects just one.
+- `--per-page N`: at most N frames per image, default 12.
+
+Sampling modes are mutually exclusive. `--samples`, `--step` and `--per-page` require
+`--storyboard`, and their values must be positive integers. The output must end in `.png`.
+One page uses `sheet.png`; multiple pages use `sheet-001.png`, `sheet-002.png`, and so on.
+Each cell shows a timecode on the left and its absolute frame number on the right, in the
+built-in monospace font. The page heading gives the frame rate and DF/NDF mode. Timecodes
+start at zero: `HH:MM:SS:FF`, with `;FF` for drop-frame at 29.97/59.94 fps. A checkerboard
+shows transparent areas. Frames are reduced to thumbnails as they are drawn, and each page is written before the
+next is allocated, so full-sized frames do not accumulate in memory.
+
+With `--json`, `files` lists the images and `storyboard.pages` describes each page: `file`,
+`width`, `height`, `columns`, `rows` and `cells`. A cell gives `frame`, `time` in seconds,
+the displayed `timecode` and its content rectangle (`x`, `y`, `width`, `height`) in that
+page's pixels, excluding its label and border. These options and results also apply to
+Timeline and Project renders.
 
 ## The file
 

@@ -74,6 +74,7 @@ written.
 valle project render                          # the entry timeline into renders/
 valle project render timelines/teaser.timeline.json -o teaser.mov --codec prores
 valle project render --frame 120 -o frame.png
+valle project render --storyboard --samples 60 --per-page 12
 valle project render -o mix.wav               # the sound alone
 ```
 
@@ -81,6 +82,12 @@ Without `-o`, a render goes into `renders/` under a new name. A full render, eve
 a video, first saves a snapshot and then records beside it which files it read, with their
 digests, and what it made; a media file that changed while it was read is reported as a
 warning. `project show` gives the last render.
+
+`--storyboard` samples up to 12 frames by default. `--samples`, `--step`, `--frames` and
+`--per-page` work as in Motion (see `valle docs motion storyboards`). Without `-o`, a
+storyboard uses `renders/<timeline>-storyboard.png`, or numbered pages such as
+`renders/<timeline>-storyboard-001.png`. Repeated renders choose a new base name even when
+the previous storyboard has only numbered pages. An explicit `-o` must end in `.png`.
 
 ## Studio
 

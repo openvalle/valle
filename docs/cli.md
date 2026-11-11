@@ -46,12 +46,19 @@ Both `check` and `render` take the bindings `--props`, `--data` (JSON, or `@file
 | --- | --- |
 | `--frame N` | One frame, from 0 |
 | `--frames 0,30,60` or `0..59` | Some frames: a list, or a range with both ends |
-| `--storyboard` | The frames side by side in one `.png`, separated and labeled with zero-based frame numbers |
+| `--storyboard` | PNG pages of frames, labeled with zero-based frame numbers and timecodes; defaults to 12 evenly spaced frames |
+| `--samples N` | Storyboard: evenly sample up to N frames including the first and last; 1 selects the first |
+| `--step N` | Storyboard: take frames 0, N, 2N, …; 1 takes every frame |
+| `--per-page N` | Storyboard: frames per PNG, default 12; multiple pages use `NAME-001.png`, `NAME-002.png`, … |
 | `--output-size WxH` | Output pixels, without changing the layout; up to 7680x4320 |
 | `--codec h264\|hevc\|prores` | `h264` for `.mp4` and `prores` (4444, with alpha) for `.mov` unless given |
 | `--bitrate 8M` | Bits a second, in place of the codec's quality setting |
 | `--encoder vt\|ffmpeg` | The hardware encoder where it has the codec, unless given |
 | `--decoder vt\|ffmpeg` | How videos the scene shows are decoded |
+
+`--samples`, `--step` and `--per-page` require `--storyboard` and positive integers.
+Choose only one of `--samples`, `--step`, `--frame` or `--frames`. A storyboard output must
+end in `.png`; a single page keeps that name. See `valle docs motion storyboards` for examples.
 
 ## Output
 
@@ -61,10 +68,11 @@ hundred, then the result). A result leaves out fields that would be `null` or em
 file, the frames, its size and, for a video, the codec, the encoder, the GPU it drew on as
 `adapter`, and the sound's loudness.
 
-A storyboard's JSON also includes `storyboard`: sheet `width`, `height`, `columns`, `rows`,
-and `cells` in the requested frame order (including repeats). Each cell gives `frame` and
-its image rectangle `x`, `y`, `width`, `height`, in sheet pixels; labels and borders lie
-outside that rectangle.
+A storyboard's JSON also includes `storyboard.pages`, in output order. Each page gives its
+`file`, `width`, `height`, `columns`, `rows`, and `cells` in the requested frame order
+(including repeats). Each cell gives `frame`, `time` in seconds, the displayed `timecode`, and its image rectangle
+`x`, `y`, `width`, `height`, in page pixels; labels and borders lie outside that rectangle.
+Transparent pixels appear over a checkerboard. `files` lists all PNGs actually written.
 
 ## Rendering without a GPU
 

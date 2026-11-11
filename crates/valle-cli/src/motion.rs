@@ -16,7 +16,7 @@ use valle_native::media::{self, Decoding};
 use valle_native::urls::UrlCache;
 
 use crate::args::{Args, Frames};
-use crate::picture::{storyboard, write_png};
+use crate::picture::{Labels, Storyboard, page_path, write_png};
 use crate::{Failure, video};
 
 /// A scene loaded with what it read: the web addresses, each with the file it gave.
@@ -175,6 +175,23 @@ pub fn fonts() -> Fonts {
 /// The frames `args` ask for, of a scene of `count` frames.
 pub fn chosen(args: &Args, count: i64) -> Result<Vec<i64>, Failure> {
     let list = match &args.frames {
+        None if args.storyboard => match args.step {
+            Some(step) => (0..count).step_by(step as usize).collect(),
+            None => {
+                let n = i64::from(args.samples.unwrap_or(12)).min(count);
+                if n <= 1 {
+                    (0..n).collect()
+                } else {
+                    // Integer arithmetic keeps the endpoints exact even for long timelines.
+                    (0..n)
+                        .map(|i| {
+                            ((i128::from(i) * i128::from(count - 1) + i128::from((n - 1) / 2))
+                                / i128::from(n - 1)) as i64
+                        })
+                        .collect()
+                }
+            }
+        },
         None => (0..count).collect(),
         Some(Frames::Range(a, b)) => (*a..=*b).collect(),
         Some(Frames::List(list)) => list.clone(),
@@ -318,6 +335,7 @@ fn sha256_of(file: &Path) -> Option<String> {
 pub fn render(args: &Args) -> Result<Value, Failure> {
     let out =
         (args.out.as_deref()).ok_or_else(|| Failure::new("usage", "render needs -o <out>"))?;
+    args.validate_output()?;
     let lower = out.to_ascii_lowercase();
     let document = args.timeline;
     if lower.ends_with(".wav") {
@@ -351,45 +369,57 @@ pub fn render(args: &Args) -> Result<Value, Failure> {
         }
         _ => chosen(args, count)?,
     };
-    if args.storyboard && !png {
-        return Err(Failure::new("usage", "a storyboard is a .png"));
-    }
     let size = args.output_size([c.width, c.height])?;
     let (gpu, adapter) = crate::gpu()?;
     let mut renderer =
         Renderer::at_size(&gpu, [c.width, c.height], size).map_err(|e| Failure::new("gpu", e))?;
-    let mut drawn = Vec::new();
     let mut written = Vec::new();
-    for (k, &i) in frames.iter().enumerate() {
-        let pixels = draw(&mut scene, &mut renderer, c.fps.frame_start(i))?;
-        if args.storyboard {
-            drawn.push(pixels);
-        } else {
+    let mut pages = Vec::new();
+    if args.storyboard {
+        let labels = Labels::new(&gpu, fonts())?;
+        let per_page = args.per_page.unwrap_or(12) as usize;
+        let count = frames.len().div_ceil(per_page);
+        for (page, indices) in frames.chunks(per_page).enumerate() {
+            let mut board = Storyboard::new(size, indices, c.fps)?;
+            for (k, &i) in indices.iter().enumerate() {
+                let pixels = draw(&mut scene, &mut renderer, c.fps.frame_start(i))?;
+                board.paint(k, &pixels);
+                crate::progress(page * per_page + k + 1, frames.len());
+            }
+            let path = page_path(Path::new(out), page, count);
+            board.label(&labels);
+            write_png(&path, board.size, &board.pixels)?;
+            let file = path.display().to_string();
+            board.layout["file"] = file.clone().into();
+            pages.push(board.layout);
+            written.push(file);
+        }
+    } else {
+        for (k, &i) in frames.iter().enumerate() {
+            let pixels = draw(&mut scene, &mut renderer, c.fps.frame_start(i))?;
             let path = match png {
                 true => PathBuf::from(out),
                 false => Path::new(out).join(format!("frame-{i:05}.png")),
             };
             write_png(&path, size, &pixels)?;
             written.push(path.display().to_string());
+            crate::progress(k + 1, frames.len());
         }
-        crate::progress(k + 1, frames.len());
     }
-    let mut sheet = None;
-    if args.storyboard {
-        let board = storyboard(size, &drawn, &frames);
-        write_png(Path::new(out), board.size, &board.pixels)?;
-        sheet = Some(board.layout);
-        written.push(out.to_string());
-    }
+    let destination = if pages.len() > 1 {
+        format!("{} PNG files", pages.len())
+    } else {
+        out.to_string()
+    };
     let mut result = json!({
         "status": "ok",
-        "summary": format!("{} drawn into {out}", counted(frames.len(), "frame")),
+        "summary": format!("{} drawn into {destination}", counted(frames.len(), "frame")),
         "frames": frames,
         "files": written,
         "adapter": adapter,
     });
-    if let Some(sheet) = sheet {
-        result["storyboard"] = sheet;
+    if args.storyboard {
+        result["storyboard"] = json!({"pages":pages});
     }
     Ok(result)
 }
@@ -412,5 +442,47 @@ pub fn counted(n: usize, thing: &str) -> String {
     match n {
         1 => format!("1 {thing}"),
         n => format!("{n} {thing}s"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frames(args: &Args, count: i64) -> Vec<i64> {
+        chosen(args, count).unwrap_or_else(|e| panic!("{}", e.message))
+    }
+
+    #[test]
+    fn storyboards_sample_endpoints_without_changing_other_frame_defaults() {
+        let mut args = Args {
+            storyboard: true,
+            ..Args::default()
+        };
+        for count in [1, 6, 12, 195, 1800] {
+            let picked = frames(&args, count);
+            assert_eq!(picked.len(), count.min(12) as usize);
+            assert_eq!(picked.first(), Some(&0));
+            assert_eq!(picked.last(), Some(&(count - 1)));
+            let gaps: Vec<_> = picked.windows(2).map(|p| p[1] - p[0]).collect();
+            if let (Some(lo), Some(hi)) = (gaps.iter().min(), gaps.iter().max()) {
+                assert!(*lo > 0 && hi - lo <= 1);
+            }
+        }
+        args.samples = Some(1);
+        assert_eq!(frames(&args, 195), [0]);
+        args.samples = Some(60);
+        assert_eq!(frames(&args, 3), [0, 1, 2]);
+        args.samples = None;
+        args.step = Some(30);
+        assert_eq!(frames(&args, 195), [0, 30, 60, 90, 120, 150, 180]);
+        args.step = Some(u32::MAX);
+        assert_eq!(frames(&args, 195), [0]);
+        args.step = None;
+        args.frames = Some(Frames::List(vec![20, 0, 20]));
+        assert_eq!(frames(&args, 195), [20, 0, 20]);
+        args.frames = Some(Frames::Range(0, 14));
+        assert_eq!(frames(&args, 195), (0..15).collect::<Vec<_>>());
+        assert_eq!(frames(&Args::default(), 195), (0..195).collect::<Vec<_>>());
     }
 }
