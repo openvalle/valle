@@ -253,6 +253,12 @@ fn the_service_reads_writes_and_runs_for_its_page_only() {
     assert_eq!(whole.body, b"first");
     assert_eq!(whole.header("x-valle-sha256"), None);
     std::fs::write(&media, b"other").unwrap();
+    // Windows times a write by its clock's tick, about 16 ms: one this soon after the first can
+    // keep its time, so the replacement is given a later one, as a later write would have.
+    let later = std::time::SystemTime::now() + Duration::from_secs(2);
+    let file = std::fs::File::options().write(true).open(&media).unwrap();
+    file.set_modified(later).unwrap();
+    drop(file);
     let changed = next(&events, |e| {
         e["event"] == "change" && e["path"] == "clip.mp4"
     });
