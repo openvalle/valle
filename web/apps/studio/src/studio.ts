@@ -277,9 +277,13 @@ export class ValleStudio extends LitElement {
       const path = this.#entry;
       const before = this.text(path);
       try {
-        const { text, layout } = await service.edit(before, op);
+        const { text, layout, summary } = await service.edit(before, op);
         const selected = selection(this.layout, layout, this.#selected, op);
         await this.#accept({ path, before, after: text }, layout, selected);
+        if (this.text(path) === text) {
+          this.#status = summary;
+          this.requestUpdate();
+        }
       } catch (error) {
         this.#status = (error as Error).message;
         this.requestUpdate();
@@ -669,7 +673,8 @@ export class ValleStudio extends LitElement {
         ></timeline-view>
       </section>
       <footer class="statusbar" role="status">
-        <span class="message">${this.#status || (this.#busy ? "Updating preview…" : "Ready")}</span
+        <span class="message" title=${this.#status}
+          >${this.#status || (this.#busy ? "Updating preview…" : "Ready")}</span
         ><span class="spacer"></span><span>${info ? `${info.frames} frames` : ""}</span
         ><span>Local workspace</span>
       </footer>

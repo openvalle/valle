@@ -46,7 +46,7 @@ Both `check` and `render` take the bindings `--props`, `--data` (JSON, or `@file
 | --- | --- |
 | `--frame N` | One frame, from 0 |
 | `--frames 0,30,60` or `0..59` | Some frames: a list, or a range with both ends |
-| `--storyboard` | The frames side by side in one `.png` |
+| `--storyboard` | The frames side by side in one `.png`, separated and labeled with zero-based frame numbers |
 | `--output-size WxH` | Output pixels, without changing the layout; up to 7680x4320 |
 | `--codec h264\|hevc\|prores` | `h264` for `.mp4` and `prores` (4444, with alpha) for `.mov` unless given |
 | `--bitrate 8M` | Bits a second, in place of the codec's quality setting |
@@ -60,6 +60,11 @@ hundred, then the result). A result leaves out fields that would be `null` or em
 `status`, and a failure `code`, `message`, `hint` and, for a check, `problems`. The exit code is 0 on success and 1 on failure. A render's result includes the
 file, the frames, its size and, for a video, the codec, the encoder, the GPU it drew on as
 `adapter`, and the sound's loudness.
+
+A storyboard's JSON also includes `storyboard`: sheet `width`, `height`, `columns`, `rows`,
+and `cells` in the requested frame order (including repeats). Each cell gives `frame` and
+its image rectangle `x`, `y`, `width`, `height`, in sheet pixels; labels and borders lie
+outside that rectangle.
 
 ## Rendering without a GPU
 

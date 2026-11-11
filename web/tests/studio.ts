@@ -644,6 +644,12 @@ export default function Scene() {
       "deleting a clip removes its transition and recursively anchored captions",
     );
     expect(
+      await evaluate(
+        'const message = studio.shadowRoot.querySelector(".statusbar .message").textContent; return ["removed hero", "removed title", "removed detail", "removed transition"].every(s => message.includes(s));',
+      ),
+      "the edit result reports every linked removal in Studio",
+    );
+    expect(
       (await page.getByRole("textbox", { name: "Clip name" }).count()) === 0,
       "deleting clears the removed selection",
     );

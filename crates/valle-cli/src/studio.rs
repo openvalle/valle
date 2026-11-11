@@ -709,11 +709,18 @@ impl Service {
 fn edit(body: &[u8]) -> Result<Value, String> {
     let body: Value = serde_json::from_slice(body).map_err(|e| e.to_string())?;
     let mut text = body["text"].as_str().ok_or("{ text, op? }")?.to_string();
+    let mut changes = Vec::new();
+    let mut summary = String::new();
     if let Some(op) = body.get("op").filter(|o| !o.is_null()) {
-        text = valle_timeline::edit::apply(&text, op)?;
+        let edited = valle_timeline::edit::report(&text, op)?;
+        summary = edited.summary();
+        text = edited.text;
+        changes = edited.changes;
     }
     let layout = valle_timeline::edit::layout(&text)?;
-    Ok(json!({ "status": "ok", "text": text, "layout": layout }))
+    Ok(
+        json!({ "status": "ok", "text": text, "layout": layout, "changes": changes, "summary": summary }),
+    )
 }
 
 /// Says `event` to every stream open.

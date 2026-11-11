@@ -68,6 +68,8 @@ pub struct Inputs {
     /// The files of each resource bound, by its name: paths `read` takes, in place of the
     /// resource's default; one for an image, the faces of its family for a font.
     pub resources: BTreeMap<String, Vec<String>>,
+    /// Authored locations for generated resource names; absent for ordinary Motion resources.
+    pub resource_origins: BTreeMap<String, String>,
     /// The file of each picture the scene's role reads as `input://name`, by its name, in place
     /// of the placeholder it shows alone; the Timeline gives them frame by frame.
     pub pictures: BTreeMap<String, String>,
@@ -326,6 +328,18 @@ pub fn values(
     Ok(out)
 }
 
+/// The authored control names, for diagnostics shared by Motion and Timeline.
+pub fn names(entries: &[Prop]) -> String {
+    if entries.is_empty() {
+        return "(none)".into();
+    }
+    entries
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// The values `bound` to the entries of `controls.{section}`, into `out`.
 fn bind(
     entries: &[Prop],
@@ -336,7 +350,8 @@ fn bind(
 ) -> Result<(), String> {
     if let Some(k) = (bound.keys()).find(|k| !entries.iter().any(|p| p.name == **k)) {
         return Err(format!(
-            "{section}: the scene declares no {what} {k} in controls.{section}"
+            "{section}: the scene declares no {what} {k} in controls.{section}; available: {}",
+            names(entries)
         ));
     }
     for p in entries {

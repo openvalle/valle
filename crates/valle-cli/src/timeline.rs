@@ -42,18 +42,19 @@ pub fn edit(file: &str, op: &str) -> Result<Value, Failure> {
     let text = std::fs::read_to_string(&path)
         .map_err(|e| Failure::new("timeline", format!("{path}: {e}")))?;
     let op = crate::args::json(op, "--op")?;
-    let edited = valle_timeline::edit::apply(&text, &op)
+    let edited = valle_timeline::edit::report(&text, &op)
         .map_err(|e| Failure::new("timeline", format!("{path}: {e}")))?;
     let root =
-        serde_json::from_str(&edited).map_err(|e| Failure::new("timeline", e.to_string()))?;
+        serde_json::from_str(&edited.text).map_err(|e| Failure::new("timeline", e.to_string()))?;
     let doc =
         valle_timeline::Document::read_edit(&root).map_err(|e| Failure::new("timeline", e))?;
     if doc.duration > Tick::ZERO {
         lower_document(&path, &doc)?;
     }
-    valle_project::write(Path::new(&path), edited.as_bytes(), true)
+    valle_project::write(Path::new(&path), edited.text.as_bytes(), true)
         .map_err(|e| Failure::new("timeline", e))?;
-    Ok(json!({ "status": "ok", "summary": format!("edited {path}"), "file": path }))
+    let summary = format!("edited {path}\n{}", edited.summary());
+    Ok(json!({ "status": "ok", "summary": summary, "file": path, "changes": edited.changes }))
 }
 
 /// The clips `filter` picks.
@@ -102,19 +103,21 @@ pub fn mixer(args: &Args) -> Result<Mixer, Failure> {
 
 /// Check stream presence once per file; checking a long edit does not decode its soundtrack.
 pub fn check_audio(args: &Args) -> Result<(), Failure> {
-    let (path, _, doc) = document(args, false)?;
+    let (path, _, doc) = document(args, true)?;
     let read = |p: &str| std::fs::read_to_string(p).ok();
     let streams = RefCell::new(BTreeMap::new());
     let audio = |p: &str| {
         if let Some(&has) = streams.borrow().get(p) {
             return Ok(has);
         }
+        if !p.starts_with("https://") && !p.starts_with("http://") && !Path::new(p).is_file() {
+            return Err(format!("{p}: not found"));
+        }
         let has = media::probe(Path::new(p))?.audio;
         streams.borrow_mut().insert(p.to_string(), has);
         Ok(has)
     };
-    mix::check(&path, &doc, &read, &audio)
-        .map_err(|e| Failure::new("sound", format!("{path}: {e}")))
+    mix::check(&path, &doc, &read, &audio).map_err(|e| Failure::new("sound", e))
 }
 
 pub fn lower(args: &Args) -> Result<Lowered, Failure> {

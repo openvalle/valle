@@ -615,7 +615,10 @@ mod tests {
             has("components/bad/bad.motion.tsx reads components/k.ts"),
             "{problems:?}"
         );
-        assert!(has("resource gone names media/gone.mp4"), "{problems:?}");
+        assert!(
+            has("resources.gone: media/gone.mp4: not found"),
+            "{problems:?}"
+        );
         assert!(!has("ok.motion.tsx"), "{problems:?}");
         assert_eq!(problems.len(), 3, "{problems:?}");
         assert_eq!(external.len(), 1);

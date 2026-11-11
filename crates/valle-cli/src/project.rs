@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 use valle_project::{Project, digest, history::now};
 
-use valle_native::media::Codec;
+use valle_native::media::{self, Codec};
 
 use crate::args::Args;
 use crate::cli::{self, ProjectCommand, RenderOptions};
@@ -66,6 +66,26 @@ fn create(dir: &Path, width: u32, height: u32, fps: &str) -> Result<Value, Failu
 fn show(p: &Project) -> Result<Value, Failure> {
     let mut out = p.show().map_err(failed)?;
     let mut lines = vec![format!("{} ({})", p.name, p.root.display())];
+    let mut probed = std::collections::BTreeMap::new();
+    for resource in out["resources"].as_array_mut().into_iter().flatten() {
+        let file = resource["file"].as_str().unwrap_or_default();
+        let timeline = p
+            .root
+            .join(resource["timeline"].as_str().unwrap_or_default());
+        let path = timeline.parent().unwrap_or(&p.root).join(file);
+        let info = probed
+            .entry(path.clone())
+            .or_insert_with(|| source_info(&path, file));
+        if let Some(info) = info {
+            resource["media"] = info.clone();
+            lines.push(format!(
+                "  {} ({}): {}",
+                resource["alias"].as_str().unwrap_or_default(),
+                resource["timeline"].as_str().unwrap_or_default(),
+                media_summary(info)
+            ));
+        }
+    }
     for t in out["timelines"].as_array().into_iter().flatten() {
         let path = t["path"].as_str().unwrap_or_default();
         lines.push(match t["error"].as_str() {
@@ -136,6 +156,92 @@ fn clip_of(path: &str, alias: &str) -> String {
     }
 }
 
+/// Probe playable media at the native CLI boundary; project manifests stay portable.
+/// An unavailable probe does not undo an import or prevent inspecting the rest of a project.
+fn source_info(path: &Path, written: &str) -> Option<Value> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "svg") {
+        if written.starts_with("https://") || written.starts_with("http://") {
+            return Some(json!({"error": "remote media has not been probed"}));
+        }
+        let picture = std::fs::read(path)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| valle_engine::image::Picture::load(&bytes, &mut Vec::new()));
+        return Some(match picture {
+            Ok(picture) => {
+                let size = match picture.natural() {
+                    valle_engine::layout::Natural::Size(size) => Some(size),
+                    _ => None,
+                };
+                json!({"duration":null,"width":size.map(|s| s[0]),"height":size.map(|s| s[1]),"fps":null,"audio":false,"hdr":null})
+            }
+            Err(error) => json!({"error": error}),
+        });
+    }
+    if !matches!(
+        ext.as_str(),
+        "mp4"
+            | "mov"
+            | "mkv"
+            | "webm"
+            | "avi"
+            | "m4v"
+            | "ts"
+            | "mts"
+            | "m2ts"
+            | "wav"
+            | "mp3"
+            | "m4a"
+            | "aac"
+            | "flac"
+            | "ogg"
+            | "opus"
+            | "aiff"
+            | "aif"
+    ) {
+        return None;
+    }
+    if written.starts_with("https://") || written.starts_with("http://") {
+        return Some(json!({"error": "remote media has not been probed"}));
+    }
+    Some(match media::probe(path) {
+        Ok(info) => json!({
+            "duration": info.duration.map(|t| t as f64 / media::TICKS_PER_SECOND as f64),
+            "width": info.size.map(|s| s[0]),
+            "height": info.size.map(|s| s[1]),
+            "fps": info.fps.map(|[n, d]| if d == 1 { n.to_string() } else { format!("{n}/{d}") }),
+            "audio": info.audio,
+            "hdr": info.hdr,
+        }),
+        Err(error) => json!({"error": error}),
+    })
+}
+
+fn media_summary(info: &Value) -> String {
+    if let Some(error) = info["error"].as_str() {
+        return format!("media info unavailable: {error}");
+    }
+    let mut parts = Vec::new();
+    if let Some(duration) = info["duration"].as_f64() {
+        parts.push(format!("{duration} s"));
+    }
+    if let (Some(w), Some(h)) = (info["width"].as_f64(), info["height"].as_f64()) {
+        parts.push(format!("{w}×{h}"));
+    }
+    if let Some(fps) = info["fps"].as_str() {
+        parts.push(format!("{fps} fps"));
+    }
+    parts.push(
+        if info["audio"] == true {
+            "audio"
+        } else {
+            "no audio"
+        }
+        .into(),
+    );
+    parts.join(", ")
+}
+
 fn add(p: &Project, from: &[PathBuf], link: bool) -> Result<Value, Failure> {
     let mut out = p.add(from, link).map_err(failed)?;
     // `path` can name a component's folder; the binding names the actual scene or media file.
@@ -146,7 +252,13 @@ fn add(p: &Project, from: &[PathBuf], link: bool) -> Result<Value, Failure> {
             .as_str()
             .or_else(|| resource[0].as_str())
             .expect("an added resource binds one file");
-        a["clip"] = clip_of(path, alias).into();
+        let clip = clip_of(path, alias);
+        let timeline = p.root.join(&p.timeline);
+        let info = source_info(&timeline.parent().unwrap_or(&p.root).join(path), path);
+        a["clip"] = clip.into();
+        if let Some(info) = info {
+            a["media"] = info;
+        }
     }
     let mut lines: Vec<String> = (out["added"].as_array().into_iter().flatten())
         .map(|a| {
@@ -158,7 +270,11 @@ fn add(p: &Project, from: &[PathBuf], link: bool) -> Result<Value, Failure> {
                 ""
             };
             let clip = a["clip"].as_str().unwrap_or_default();
-            format!("{alias}: {path}{again}; a clip shows it as {clip}")
+            let info = a
+                .get("media")
+                .map(|m| format!("; {}", media_summary(m)))
+                .unwrap_or_default();
+            format!("{alias}: {path}{again}{info}; a clip shows it as {clip}")
         })
         .collect();
     for f in out["failed"].as_array().into_iter().flatten() {
@@ -178,10 +294,28 @@ fn check(p: &Project, timeline: Option<String>, cost: bool) -> Result<Value, Fai
         .ok_or_else(|| failed(format!("{} is not in the project", path.display())))?;
     let (mut problems, external) = p.check(&rel).map_err(failed)?;
     let args = timeline_args(&path);
+    let mut warnings = Vec::new();
     if problems.is_empty() {
         let lowered = match cost {
-            true => motion::check(&args).map(|_| ()),
-            false => timeline::lower(&args).map(|_| ()),
+            true => motion::check(&args).map(|out| {
+                warnings.extend(out["warnings"].as_array().into_iter().flatten().cloned());
+            }),
+            false => timeline::check_audio(&args).and_then(|_| {
+                let doc = p.document(&rel).map_err(failed)?;
+                if doc.duration > valle_engine::time::Tick::ZERO {
+                    timeline::lower(&args)?;
+                }
+                for source in p.dependencies(&rel, &doc) {
+                    let parent = p.root.join(&source.timeline);
+                    let path = parent.parent().unwrap_or(&p.root).join(&source.written);
+                    if let Some(info) = source_info(&path, &source.written)
+                        && let Some(transfer) = info["hdr"].as_str()
+                    {
+                        warnings.push(motion::hdr_warning(&source.written, transfer));
+                    }
+                }
+                Ok(())
+            }),
         };
         // The timeline by its path in the project, as the summary names it.
         let full = path.to_string_lossy().replace('\\', "/");
@@ -216,7 +350,15 @@ fn check(p: &Project, timeline: Option<String>, cost: bool) -> Result<Value, Fai
     if !external.is_empty() {
         summary += &format!("; {} out of the project", counted(external.len(), "file"));
     }
-    Ok(json!({ "status": "ok", "summary": summary, "timeline": rel, "external": external }))
+    for warning in &warnings {
+        summary.push_str(&format!(
+            "\nwarning: {}",
+            warning["message"].as_str().unwrap_or_default()
+        ));
+    }
+    Ok(
+        json!({ "status": "ok", "summary": summary, "timeline": rel, "external": external, "warnings": warnings }),
+    )
 }
 
 fn save(p: &Project, message: Option<&str>) -> Result<Value, Failure> {

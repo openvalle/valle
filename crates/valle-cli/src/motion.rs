@@ -63,7 +63,18 @@ pub fn load(args: &Args) -> Result<Loaded, Failure> {
     let mut pools: BTreeMap<PathBuf, Rc<RefCell<Pool>>> = BTreeMap::new();
     let mut videos = BTreeMap::new();
     for (name, file) in scene.video_files(inputs) {
-        let failed = |e: String| Failure::new("video", format!("video resource {name}: {e}"));
+        let origin = inputs
+            .resource_origins
+            .get(&name)
+            .cloned()
+            .unwrap_or_else(|| format!("{}: resource {name}", args.file));
+        let failed = |e: String| Failure::new("video", format!("{origin}: {e}"));
+        if !file.starts_with("https://")
+            && !file.starts_with("http://")
+            && !Path::new(&file).is_file()
+        {
+            return Err(failed(format!("{file}: not found")));
+        }
         let path = match file.starts_with("https://") || file.starts_with("http://") {
             true => (UrlCache::global().and_then(|c| c.fetch(&file))).map_err(failed)?,
             false => PathBuf::from(&file),
@@ -177,6 +188,15 @@ pub fn chosen(args: &Args, count: i64) -> Result<Vec<i64>, Failure> {
     Ok(list)
 }
 
+/// The same warning in Motion, Timeline and Project checks.
+pub fn hdr_warning(file: &str, transfer: &str) -> Value {
+    json!({
+        "code": "unsupported-hdr",
+        "file": file,
+        "message": format!("{file}: HDR ({transfer}) video is not supported; it is rendered as SDR without tone mapping, so colors and brightness may be incorrect. Convert the source to SDR first."),
+    })
+}
+
 /// Check every frame without building drawing commands: each error once, with its frames.
 pub fn check(args: &Args) -> Result<Value, Failure> {
     if args.timeline {
@@ -191,11 +211,7 @@ pub fn check(args: &Args) -> Result<Value, Failure> {
     for (path, file) in videos {
         let info = media::probe(&path).map_err(|e| Failure::new("video", e))?;
         if let Some(transfer) = info.hdr {
-            warnings.push(json!({
-                "code": "unsupported-hdr",
-                "file": file,
-                "message": format!("{file}: HDR ({transfer}) video is not supported; it is rendered as SDR without tone mapping, so colors and brightness may be incorrect. Convert the source to SDR first."),
-            }));
+            warnings.push(hdr_warning(&file, transfer));
         }
     }
     let c = scene.composition();
@@ -358,18 +374,24 @@ pub fn render(args: &Args) -> Result<Value, Failure> {
         }
         crate::progress(k + 1, frames.len());
     }
+    let mut sheet = None;
     if args.storyboard {
-        let (size, pixels) = storyboard(size, &drawn);
-        write_png(Path::new(out), size, &pixels)?;
+        let board = storyboard(size, &drawn, &frames);
+        write_png(Path::new(out), board.size, &board.pixels)?;
+        sheet = Some(board.layout);
         written.push(out.to_string());
     }
-    Ok(json!({
+    let mut result = json!({
         "status": "ok",
         "summary": format!("{} drawn into {out}", counted(frames.len(), "frame")),
         "frames": frames,
         "files": written,
         "adapter": adapter,
-    }))
+    });
+    if let Some(sheet) = sheet {
+        result["storyboard"] = sheet;
+    }
+    Ok(result)
 }
 
 /// Frame `at` drawn: straight sRGB RGBA, rows top down.

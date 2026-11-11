@@ -311,6 +311,9 @@ fn the_service_reads_writes_and_runs_for_its_page_only() {
         serde_json::json!(0.5),
         "{edited}"
     );
+    assert_eq!(edited["changes"][0]["before"]["end"], 1.0);
+    assert_eq!(edited["changes"][0]["after"]["end"], 0.5);
+    assert!(edited["summary"].as_str().unwrap().contains("updated a"));
     let listed = studio.get("/api/list").json();
     let files = listed["files"].as_array().expect("files");
     assert!(files.iter().any(|f| f["path"] == "notes/a.txt"), "{listed}");

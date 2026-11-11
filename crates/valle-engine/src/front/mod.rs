@@ -1787,7 +1787,7 @@ mod tests {
                 ),
                 (
                     r#"{ "theme": "dark", "size": 1 }"#,
-                    "props: the scene declares no prop size in controls.props",
+                    "props: the scene declares no prop size in controls.props; available: title, count, theme, at",
                 ),
             ] {
                 let e = bound(json).err().expect(json);
@@ -1907,7 +1907,7 @@ mod tests {
                 ),
                 (
                     r#"{ "title": "T", "unit": "g" }"#,
-                    "data: the scene declares no data unit in controls.data",
+                    "data: the scene declares no data unit in controls.data; available: rows, title",
                 ),
             ] {
                 let e = bound(json).err().expect(json);

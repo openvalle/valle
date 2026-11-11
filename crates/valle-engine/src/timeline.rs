@@ -106,6 +106,7 @@ export default function Timeline() {{
     let entry = format!("{path}.motion.tsx");
     let inputs = Inputs {
         resources: l.s.bound,
+        resource_origins: l.s.origins,
         clips: Rc::new(l.s.clips),
         drawn: l.s.drawn,
         ..Inputs::default()
@@ -139,6 +140,7 @@ struct Shared {
     slots: Vec<(String, Holds)>,
     /// The files bound to each.
     bound: BTreeMap<String, Vec<String>>,
+    origins: BTreeMap<String, String>,
     /// The components imported, by the name the scene gives each, and their files.
     imports: Vec<(String, String)>,
     declared: HashMap<String, Rc<Declared>>,
@@ -213,10 +215,14 @@ impl Lowering<'_> {
     }
 
     /// A new resource of the scene holding `kind`, bound to `files`.
-    fn resource(&mut self, kind: Holds, files: Vec<String>) -> String {
+    fn resource(&mut self, kind: Holds, files: Vec<String>, origin: &str) -> String {
         let name = format!("r{}", self.s.slots.len());
         self.s.slots.push((name.clone(), kind));
         self.s.bound.insert(name.clone(), files);
+        self.s.origins.insert(
+            name.clone(),
+            format!("{}: {origin}", self.nesting.last().unwrap()),
+        );
         name
     }
 
@@ -297,14 +303,14 @@ impl Lowering<'_> {
             }
             Content::Image { src } => {
                 let file = self.file(src, &format!("{at}.src"))?;
-                let r = self.resource(Holds::Image, vec![file]);
+                let r = self.resource(Holds::Image, vec![file], &format!("resources.{src}"));
                 media(&r, "Image")
             }
             Content::Video { src } => {
                 let file = self.file(src, &format!("{at}.src"))?;
                 let length = (self.host.length)(&file);
                 scope.time = Some(source_time(clip, reads, length, &file)?);
-                let r = self.resource(Holds::Video, vec![file]);
+                let r = self.resource(Holds::Video, vec![file], &format!("resources.{src}"));
                 media(&r, "Video")
             }
             Content::Motion(c) => self.motion(clip, c, reads, &mut scope)?,
@@ -671,7 +677,7 @@ impl Lowering<'_> {
                 let files = self.files(alias, &w)?;
                 out.insert(
                     "fontFamily".into(),
-                    Value::String(self.resource(Holds::Font, files)),
+                    Value::String(self.resource(Holds::Font, files, &format!("resources.{alias}"))),
                 );
                 continue;
             }
@@ -1171,8 +1177,9 @@ impl Lowering<'_> {
             let w = format!("{at}.props.{k}");
             let Some(p) = d.props.iter().find(|p| p.name == *k) else {
                 return Err(format!(
-                    "{w}: {} declares no prop {k} in controls.props",
-                    c.component
+                    "{w}: {} declares no prop {k} in controls.props; available: {}",
+                    c.component,
+                    front::controls::names(&d.props)
                 ));
             };
             match v {
@@ -1218,7 +1225,11 @@ impl Lowering<'_> {
                     c.component, slot.name
                 ));
             }
-            let r = self.resource(slot.kind, files);
+            let origin = match c.resources.get(&slot.name) {
+                Some(alias) => format!("resources.{alias}"),
+                None => format!("{at}: component {} resources.{}", c.component, slot.name),
+            };
+            let r = self.resource(slot.kind, files, &origin);
             scope.names.insert(slot.name.clone(), Value::String(r));
         }
         let values = serde_json::to_string(&Value::Object(values)).unwrap_or_default();

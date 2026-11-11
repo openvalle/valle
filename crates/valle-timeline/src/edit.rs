@@ -19,7 +19,7 @@
 //!
 //! The text written back is indented JSON, its keys in order.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use serde_json::{Map, Value};
 
@@ -213,6 +213,139 @@ pub fn apply(text: &str, op: &Value) -> Result<String, Error> {
     checked(root)
 }
 
+/// An edit and its effects, shared by command-line and interactive editors.
+pub struct Edited {
+    pub text: String,
+    /// Changed clips and transitions, with their authored addresses and resolved time spans.
+    pub changes: Vec<Value>,
+}
+
+impl Edited {
+    pub fn summary(&self) -> String {
+        let mut lines = Vec::new();
+        for change in &self.changes {
+            let item = if change["after"].is_null() {
+                &change["before"]
+            } else {
+                &change["after"]
+            };
+            let action = change["action"].as_str().unwrap_or_default();
+            lines.push(if change["kind"] == "clip" {
+                format!(
+                    "{action} {} at {}: {}–{} s",
+                    item["id"].as_str().unwrap_or_default(),
+                    item["path"].as_str().unwrap_or_default(),
+                    item["start"],
+                    item["end"]
+                )
+            } else {
+                format!(
+                    "{action} transition {} → {} at {}",
+                    item["from"].as_str().unwrap_or_default(),
+                    item["to"].as_str().unwrap_or_default(),
+                    item["path"].as_str().unwrap_or_default()
+                )
+            });
+        }
+        if lines.is_empty() {
+            "no changes".into()
+        } else {
+            lines.join("\n")
+        }
+    }
+}
+
+/// Apply once, then describe both direct and dependent changes. Matching uses clip identities,
+/// not array positions, which move when a sequence is reordered or shortened.
+pub fn report(text: &str, op: &Value) -> Result<Edited, Error> {
+    let edited = apply(text, op)?;
+    let mut before_root: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let mut after_root: Value = serde_json::from_str(&edited).map_err(|e| e.to_string())?;
+    let before = Document::read_edit(&before_root)?;
+    let after = Document::read_edit(&after_root)?;
+    let rename = if op["op"] == "set" && op["field"] == "id" {
+        before
+            .tracks
+            .iter()
+            .flat_map(|t| &t.clips)
+            .find(|c| op["clip"] == c.id || op["clip"] == c.at)
+            .and_then(|old| {
+                after
+                    .tracks
+                    .iter()
+                    .flat_map(|t| &t.clips)
+                    .find(|c| c.at == old.at)
+                    .map(|new| (old.id.as_str(), new.id.as_str()))
+            })
+    } else {
+        None
+    };
+    let old = records(&before, &mut before_root)?;
+    let mut new: BTreeMap<_, _> = records(&after, &mut after_root)?
+        .into_iter()
+        .map(|(key, summary, raw)| (key, (summary, raw)))
+        .collect();
+    let mut changes = Vec::new();
+    for (mut key, before, raw) in old {
+        if let Some((from, to)) = rename {
+            // Clip key: [kind, id]; transition key: [kind, track, from, to].
+            let start = if key[0] == "clip" { 1 } else { 2 };
+            for id in &mut key[start..] {
+                if id == from {
+                    *id = to.to_string();
+                }
+            }
+        }
+        let kind = key[0].clone();
+        if let Some((after, next_raw)) = new.remove(&key) {
+            if before != after || raw != next_raw {
+                changes.push(serde_json::json!({"kind":kind,"action":"updated","before":before,"after":after}));
+            }
+        } else {
+            changes.push(
+                serde_json::json!({"kind":kind,"action":"removed","before":before,"after":null}),
+            );
+        }
+    }
+    for (key, (after, _)) in new {
+        changes
+            .push(serde_json::json!({"kind":key[0],"action":"added","before":null,"after":after}));
+    }
+    Ok(Edited {
+        text: edited,
+        changes,
+    })
+}
+
+/// Identity, public summary, and authored fields (to detect edits that leave timing intact).
+fn records(doc: &Document, root: &mut Value) -> Result<Vec<(Vec<String>, Value, Value)>, Error> {
+    let mut out = Vec::new();
+    for t in &doc.tracks {
+        for c in &t.clips {
+            let mut raw = find(root, &c.at)?.clone();
+            // Making a generated id explicit preserves identity; it is not an authored edit.
+            raw.as_object_mut().unwrap().remove("id");
+            let summary = serde_json::json!({
+                "id":c.id,"path":c.at,"start":c.start.seconds(),"end":c.end().seconds(),
+                "kind":kind(&c.content),"anchor":c.anchor.as_ref().map(|(id, _)| id),
+            });
+            out.push((vec!["clip".into(), c.id.clone()], summary, raw));
+        }
+        for transition in &t.transitions {
+            let from = &t.clips[transition.from].id;
+            let to = &t.clips[transition.to].id;
+            let raw = find(root, &transition.at)?.clone();
+            let summary = serde_json::json!({"path":transition.at,"from":from,"to":to,"transition":raw["transition"]});
+            out.push((
+                vec!["transition".into(), t.at.clone(), from.clone(), to.clone()],
+                summary,
+                raw,
+            ));
+        }
+    }
+    Ok(out)
+}
+
 /// Delete the clip, its dependent clips and transitions, preserving unrelated identities.
 fn delete(root: &mut Value, doc: &Document, id: &str) -> Result<(), Error> {
     let mut removed = HashSet::from([id]);
@@ -386,6 +519,101 @@ mod tests {
         ]
       }
     }"##;
+
+    #[test]
+    fn reports_direct_and_cascaded_changes_without_mistaking_shifted_clips() {
+        let mut root: Value = serde_json::from_str(DOC).unwrap();
+        root["tracks"]["visual"][0]["items"]
+            .as_array_mut()
+            .unwrap()
+            .insert(
+                1,
+                json!({"transition":"fade","inOffset":0.1,"outOffset":0.1}),
+            );
+        let text = root.to_string();
+        let deleted = report(&text, &json!({"op":"delete","clip":"b"})).unwrap();
+        let removed: Vec<_> = deleted
+            .changes
+            .iter()
+            .filter(|c| c["action"] == "removed")
+            .collect();
+        assert_eq!(removed.len(), 3, "{}", deleted.summary());
+        assert!(removed.iter().any(|c| c["before"]["anchor"] == "b"));
+        assert!(
+            removed
+                .iter()
+                .any(|c| c["kind"] == "transition" && c["before"]["to"] == "b")
+        );
+        let moved = report(&text, &json!({"op":"move","clip":"b","index":0})).unwrap();
+        let b = moved
+            .changes
+            .iter()
+            .find(|c| c["after"]["id"] == "b")
+            .unwrap();
+        assert_eq!(b["before"]["start"], 1.0);
+        assert_eq!(b["after"]["start"], 0.0);
+        assert_eq!(b["after"]["end"], 2.0);
+        assert_eq!(
+            moved
+                .changes
+                .iter()
+                .filter(|c| c["action"] == "removed")
+                .count(),
+            1
+        );
+        let rename = report(
+            &text,
+            &json!({"op":"set","clip":"b","field":"id","value":"hero"}),
+        )
+        .unwrap();
+        assert!(rename.changes.iter().all(|c| c["action"] == "updated"));
+        assert!(
+            rename
+                .changes
+                .iter()
+                .any(|c| c["before"]["id"] == "b" && c["after"]["id"] == "hero")
+        );
+        let style = report(
+            DOC,
+            &json!({"op":"set","clip":"a","field":"color","value":"white"}),
+        )
+        .unwrap();
+        assert_eq!(style.changes.len(), 1);
+        assert_eq!(style.changes[0]["before"], style.changes[0]["after"]);
+        let noop = report(DOC, &json!({"op":"trim","clip":"a","duration":1})).unwrap();
+        assert!(noop.changes.is_empty());
+    }
+
+    #[test]
+    fn deletion_preserves_unnamed_survivors_and_reports_additions() {
+        let root = json!({"canvas":{"width":64,"height":36,"fps":30},"tracks":{
+            "visual":[{"id":"story","clips":[
+                {"kind":"solid","color":"red","start":0,"duration":1},
+                {"kind":"solid","color":"blue","start":1,"duration":2}
+            ]}],
+            "caption":[{"clips":[{"id":"title","text":"Here","start":{"clip":"story.1"},"duration":0.5}]}]
+        }});
+        let edited = report(&root.to_string(), &json!({"op":"delete","clip":"story.0"})).unwrap();
+        let next = crate::parse(&edited.text).unwrap();
+        assert_eq!(next.clip("story.1").unwrap().duration.seconds(), 2.0);
+        assert_eq!(next.clip("title").unwrap().start.seconds(), 1.0);
+        assert_eq!(edited.changes.len(), 2);
+        assert_eq!(edited.changes[0]["action"], "removed");
+        assert_eq!(edited.changes[0]["before"]["id"], "story.0");
+        assert_eq!(edited.changes[1]["action"], "updated");
+        assert_eq!(edited.changes[1]["after"]["id"], "story.1");
+        let added = report(
+            &edited.text,
+            &json!({"op":"add","track":"story","clip":{
+                "id":"last","kind":"solid","color":"green","start":3,"duration":1
+            }}),
+        )
+        .unwrap();
+        assert_eq!(added.changes.len(), 1);
+        assert_eq!(added.changes[0]["action"], "added");
+        assert_eq!(added.changes[0]["after"]["start"], 3.0);
+        assert_eq!(added.changes[0]["after"]["end"], 4.0);
+    }
 
     fn edited(op: Value) -> Value {
         let text = apply(DOC, &op).expect("edited");

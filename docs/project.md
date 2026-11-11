@@ -32,6 +32,14 @@ entry timeline's `resources`, by its file name without the extension (`title.mot
 `title`; a second `title` is `title-2`). A file already in the project is reused. Clips then
 use that name: `"src": "intro"` for footage, `"component": "title"` for a scene.
 
+For local video and audio files, `add` and `show` include `media`: source `duration` in
+seconds, display `width` and `height` after rotation, rational `fps` as text (for example
+`"30000/1001"`), and `audio` indicating whether an audio stream exists. These are source
+facts, not the timeline canvas. Images also report their intrinsic dimensions when present.
+Unknown or inapplicable values are `null`. A failed probe
+adds `media.error`; the import and the rest of `show` remain usable. Remote files are not
+downloaded just to display their metadata.
+
 ## Look and check
 
 ```sh
@@ -40,7 +48,10 @@ valle project check           # the entry timeline, its files and its components
 valle project check timelines/teaser.timeline.json --cost   # plan every frame too
 ```
 
-`check` reports every problem at once; fix them and check again.
+`check` reports missing files and component boundaries, validates the timeline and requires
+an audio stream for audio-track sources, including nested timelines. It warns about tagged
+HDR footage. `--cost` also checks every frame and retains those warnings in both text and
+`warnings` in JSON. Fix reported problems and check again.
 
 ## Snapshots
 

@@ -152,7 +152,7 @@ impl Project {
             }
             if n.missing {
                 problems.push(format!(
-                    "{}: resource {} names {}, which is not there",
+                    "{}: resources.{}: {}: not found",
                     n.timeline, n.alias, n.written
                 ));
                 continue;

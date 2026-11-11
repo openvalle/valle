@@ -150,9 +150,22 @@ fn linked_edits_persist_together_and_invalid_renames_do_not_write() {
         "error"
     );
     assert_eq!(timeline.text(), before);
-    assert_eq!(
-        timeline.edit(json!({"op":"delete","clip":"hero"}))["status"],
-        "ok"
+    let deleted = timeline.edit(json!({"op":"delete","clip":"hero"}));
+    assert_eq!(deleted["status"], "ok");
+    let changes = deleted["changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 4, "{deleted}");
+    for id in ["hero", "title", "detail"] {
+        assert!(
+            changes
+                .iter()
+                .any(|c| c["action"] == "removed" && c["before"]["id"] == id)
+        );
+        assert!(deleted["summary"].as_str().unwrap().contains(id));
+    }
+    assert!(
+        changes
+            .iter()
+            .any(|c| c["kind"] == "transition" && c["action"] == "removed")
     );
     let root: Value = serde_json::from_str(&timeline.text()).unwrap();
     assert_eq!(

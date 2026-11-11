@@ -102,7 +102,7 @@ export const service = {
 
   /** A timeline's text with `op` done, and where its clips are then. */
   edit: (text: string, op?: unknown) =>
-    post<{ text: string; layout: Layout }>("/api/edit", { text, op }),
+    post<{ text: string; layout: Layout; summary: string }>("/api/edit", { text, op }),
 
   /** `valle project <args> --json` on the project open. */
   project: (args: string[]) => post<Record<string, any>>("/api/project", { args }),

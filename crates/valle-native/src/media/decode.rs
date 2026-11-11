@@ -36,7 +36,28 @@ pub struct Reader {
 pub fn probe(path: &Path) -> Result<Info, String> {
     let input = format::input(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let audio = input.streams().best(media::Type::Audio).is_some();
-    let hdr = input.streams().best(media::Type::Video).and_then(|s| {
+    let video = input.streams().best(media::Type::Video);
+    let sound = input.streams().best(media::Type::Audio);
+    let duration = video
+        .as_ref()
+        .or(sound.as_ref())
+        .and_then(|s| duration(s, &input));
+    let mut size = None;
+    let mut fps = None;
+    if let Some(s) = &video {
+        // SAFETY: the parameters belong to the live input and are only read.
+        let p = unsafe { &*s.parameters().as_ptr() };
+        if p.width > 0 && p.height > 0 {
+            size = Some(orientation(s)?.size([p.width as u32, p.height as u32]));
+        }
+        for rate in [s.avg_frame_rate(), s.rate()] {
+            if rate.numerator() > 0 && rate.denominator() > 0 {
+                fps = Some([rate.numerator() as u32, rate.denominator() as u32]);
+                break;
+            }
+        }
+    }
+    let hdr = video.and_then(|s| {
         // SAFETY: the parameters belong to the live input and are only read.
         let transfer = unsafe { (*s.parameters().as_ptr()).color_trc };
         match transfer {
@@ -45,7 +66,35 @@ pub fn probe(path: &Path) -> Result<Info, String> {
             _ => None,
         }
     });
-    Ok(Info { audio, hdr })
+    Ok(Info {
+        duration,
+        size,
+        fps,
+        audio,
+        hdr,
+    })
+}
+
+fn orientation(stream: &format::stream::Stream<'_>) -> Result<Orientation, String> {
+    stream
+        .side_data()
+        .find(|s| s.kind() == codec::packet::side_data::Type::DisplayMatrix)
+        .map(|s| Orientation::matrix(s.data()))
+        .transpose()
+        .map(|o| o.unwrap_or(Orientation::IDENTITY))
+}
+
+fn duration(stream: &format::stream::Stream<'_>, input: &format::context::Input) -> Option<i64> {
+    let tb = stream.time_base();
+    let ticks = if stream.duration() > 0 && tb.numerator() > 0 && tb.denominator() > 0 {
+        stream.duration() as i128 * tb.numerator() as i128 * TICKS_PER_SECOND as i128
+            / tb.denominator() as i128
+    } else if input.duration() > 0 {
+        input.duration() as i128 * TICKS_PER_SECOND as i128 / 1_000_000
+    } else {
+        return None;
+    };
+    i64::try_from(ticks).ok()
 }
 
 /// How long the video stream of the file at `path` is, in ticks: its own length, else the
@@ -54,17 +103,7 @@ pub fn length(path: &Path) -> Result<i64, String> {
     let bad = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
     let input = format::input(path).map_err(|e| bad(&e))?;
     let stream = (input.streams().best(media::Type::Video)).ok_or_else(|| bad(&"no video"))?;
-    let tb = stream.time_base();
-    let ticks = if stream.duration() > 0 {
-        let n = stream.duration() as i128 * tb.numerator() as i128 * TICKS_PER_SECOND as i128;
-        n / (tb.denominator() as i128).max(1)
-    } else if input.duration() > 0 {
-        // Microseconds.
-        input.duration() as i128 * TICKS_PER_SECOND as i128 / 1_000_000
-    } else {
-        return Err(bad(&"the file does not say how long it is"));
-    };
-    Ok(ticks as i64)
+    duration(&stream, &input).ok_or_else(|| bad(&"the file does not say how long it is"))
 }
 
 impl Reader {
@@ -74,13 +113,7 @@ impl Reader {
         let stream = (input.streams().best(media::Type::Video)).ok_or_else(|| bad(&"no video"))?;
         let index = stream.index();
         let tb = stream.time_base();
-        let orientation = stream
-            .side_data()
-            .find(|s| s.kind() == codec::packet::side_data::Type::DisplayMatrix)
-            .map(|s| Orientation::matrix(s.data()))
-            .transpose()
-            .map_err(|e| bad(&e))?
-            .unwrap_or(Orientation::IDENTITY);
+        let orientation = orientation(&stream).map_err(|e| bad(&e))?;
         let mut context =
             codec::context::Context::from_parameters(stream.parameters()).map_err(|e| bad(&e))?;
         if decoding == Decoding::Hardware {

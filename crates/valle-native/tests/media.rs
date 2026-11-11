@@ -124,6 +124,9 @@ fn fractional_fps_keeps_the_final_frame_duration() {
     drop(writer);
     let step = TICKS_PER_SECOND * 1001 / 30_000;
     assert_eq!(media::length(&path).unwrap(), 3 * step);
+    let info = media::probe(&path).unwrap();
+    assert_eq!(info.duration, Some(3 * step));
+    assert_eq!(info.fps, Some([30_000, 1001]));
     let mut reader = media::reader(&path, Some(Decoding::Software)).unwrap();
     let last = reader.frame(2 * step).unwrap();
     assert_eq!(reader.position(), Some(2 * step));
@@ -203,6 +206,10 @@ fn muxed_pcm_keeps_channels_and_a_partial_final_block() {
     drop(writer);
     let actual = media::sound(&path).unwrap().unwrap();
     assert_eq!(actual, samples);
+    let info = media::probe(&path).unwrap();
+    assert!(info.audio);
+    assert_eq!(info.duration, Some(TICKS_PER_SECOND / 8));
+    assert_eq!(info.size, Some([64, 32]));
 }
 
 #[test]
@@ -227,6 +234,9 @@ fn invalid_files_and_missing_streams_return_errors() {
     assert_eq!(
         media::probe(&path).unwrap(),
         media::Info {
+            duration: Some(64 * TICKS_PER_SECOND / i64::from(RATE)),
+            size: None,
+            fps: None,
             audio: true,
             hdr: None
         }
@@ -257,6 +267,9 @@ fn tagged_rotation_changes_dimensions_and_corner_pixels() {
         assert_eq!(
             media::probe(&path).unwrap(),
             media::Info {
+                duration: Some(TICKS_PER_SECOND),
+                size: Some(size),
+                fps: Some([4, 1]),
                 audio: false,
                 hdr: None
             }
@@ -293,13 +306,10 @@ fn tagged_rotation_changes_dimensions_and_corner_pixels() {
 fn hdr_transfer_tags_are_reported_by_probe() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/resources/video");
     for (file, hdr) in [("pq.mp4", "PQ"), ("hlg.mp4", "HLG")] {
-        assert_eq!(
-            media::probe(&root.join(file)).unwrap(),
-            media::Info {
-                audio: false,
-                hdr: Some(hdr)
-            }
-        );
+        let info = media::probe(&root.join(file)).unwrap();
+        assert_eq!(info.hdr, Some(hdr));
+        assert!(!info.audio);
+        assert!(info.duration.is_some());
     }
 }
 

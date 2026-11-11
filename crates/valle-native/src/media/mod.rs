@@ -88,6 +88,12 @@ pub fn length(path: &Path) -> Result<i64, String> {
 /// Stream metadata, without decoding the whole file.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Info {
+    /// Selected video stream's duration, or audio's for audio-only files, in ticks.
+    pub duration: Option<i64>,
+    /// Display dimensions, after applying the stream's orientation.
+    pub size: Option<[u32; 2]>,
+    /// Average video frame rate, as numerator and denominator; unknown for some sources.
+    pub fps: Option<[u32; 2]>,
     pub audio: bool,
     /// HDR transfer function of the selected video stream, when tagged: PQ or HLG.
     pub hdr: Option<&'static str>,

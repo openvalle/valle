@@ -117,7 +117,12 @@ impl Scene {
         // `measureText`'s own text, of the same fonts.
         let mut measuring = Text::new(fonts);
         for slot in &front.resources {
-            let fail = |e: String| format!("{entry}: resource {}: {e}", slot.name);
+            let origin = inputs
+                .resource_origins
+                .get(&slot.name)
+                .cloned()
+                .unwrap_or_else(|| format!("{entry}: resource {}", slot.name));
+            let fail = |e: String| format!("{origin}: {e}");
             let files = (inputs.resources.get(&slot.name)).unwrap_or(&slot.default);
             if files.is_empty() {
                 return Err(fail("nothing is bound to it, and it has no default".into()));

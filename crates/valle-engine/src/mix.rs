@@ -68,18 +68,23 @@ pub fn check(
         for (i, source) in sources.iter().enumerate() {
             match source {
                 Source::File(file) => {
-                    if !audio(file)?
+                    let origin = source_origin(path, doc, &mix, i);
+                    if !audio(file).map_err(|e| format!("{origin}: {e}"))?
                         && let Some(c) = mix
                             .tracks
                             .iter()
                             .flat_map(|t| &t.clips)
                             .find(|c| c.source == i && !c.optional)
                     {
-                        return Err(format!("{}: its file has no sound ({file})", c.what));
+                        return Err(format!(
+                            "{origin}: {}: its file has no sound ({file})",
+                            c.what
+                        ));
                     }
                 }
                 Source::Timeline(file) => {
-                    let text = read(file).ok_or_else(|| format!("{file}: not found"))?;
+                    let origin = source_origin(path, doc, &mix, i);
+                    let text = read(file).ok_or_else(|| format!("{origin}: {file}: not found"))?;
                     let inner = valle_timeline::parse(&text).map_err(|e| format!("{file}: {e}"))?;
                     visit(file, &inner, read, audio, nesting)?;
                 }
@@ -89,6 +94,29 @@ pub fn check(
         Ok(())
     }
     visit(path, doc, read, audio, &mut Vec::new())
+}
+
+/// Keep the user's alias when the mix has deduplicated files into numeric source slots.
+fn source_origin(path: &str, doc: &Document, mix: &Mix, index: usize) -> String {
+    let clip = mix
+        .tracks
+        .iter()
+        .flat_map(|t| &t.clips)
+        .find(|c| c.source == index)
+        .and_then(|c| {
+            doc.tracks
+                .iter()
+                .flat_map(|t| &t.clips)
+                .find(|d| d.at == c.what)
+        });
+    let alias = clip.and_then(|c| match &c.content {
+        Content::Video { src } | Content::Audio { src } | Content::Timeline { src } => Some(src),
+        _ => None,
+    });
+    match alias {
+        Some(alias) => format!("{path}: resources.{alias}"),
+        None => path.to_string(),
+    }
 }
 
 fn mixer_in(path: &str, doc: &Document, host: &Host<'_>, nesting: &[&str]) -> Result<Mixer, Error> {
