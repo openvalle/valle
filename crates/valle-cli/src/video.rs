@@ -135,6 +135,7 @@ pub fn render(
         ),
         "file": out.display().to_string(),
         "frames": frames.len(),
+        "fps": c.fps.to_string(),
         "width": size[0],
         "height": size[1],
         "codec": format!("{codec:?}").to_lowercase(),

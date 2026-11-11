@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use clap::{Args as Group, Parser, Subcommand, ValueEnum};
 use valle_native::media::{Codec, Decoding, Encoding};
 use valle_timeline::query::Filter;
+use valle_timeline::time::Rate;
 
 use crate::Failure;
 use crate::args::{self, Args, Frames};
@@ -338,6 +339,9 @@ pub struct RenderOptions {
     /// Output pixels, without relayout, up to 7680x4320
     #[arg(long, value_name = "WxH", value_parser = size, allow_hyphen_values = true)]
     output_size: Option<[u32; 2]>,
+    /// Output frames a second, such as 30, 60 or 30000/1001, without changing duration
+    #[arg(long, value_name = "FPS", value_parser = Rate::parse, allow_hyphen_values = true)]
+    fps: Option<Rate>,
     /// A video's codec; h264 for a .mp4 and prores (4444, with alpha) for a .mov unless given
     #[arg(long)]
     codec: Option<CodecName>,
@@ -439,6 +443,7 @@ impl RenderOptions {
         args.step = self.step;
         args.per_page = self.per_page;
         args.output_size = self.output_size;
+        args.fps = self.fps;
         args.codec = self.codec.map(|c| match c {
             CodecName::H264 => Codec::H264,
             CodecName::Hevc => Codec::Hevc,
@@ -748,6 +753,8 @@ mod tests {
             "8M",
             "--output-size",
             "3840x2160",
+            "--fps",
+            "60000/1001",
         ]);
         assert_eq!(a.out.as_deref(), Some("x.mp4"));
         assert_eq!(a.codec, Some(Codec::Hevc));
@@ -763,6 +770,7 @@ mod tests {
             names,
             [
                 "output-size=3840x2160",
+                "fps=60000/1001",
                 "codec=hevc",
                 "encoder=vt",
                 "decoder=ffmpeg",
@@ -905,6 +913,23 @@ mod tests {
                 &[&base[..], &["--storyboard", left, "2", right, "2"]].concat(),
                 "cannot be used with",
             );
+        }
+    }
+
+    #[test]
+    fn render_frame_rates_are_positive_and_exact() {
+        let base = ["motion", "render", "a.motion.tsx", "-o", "x.png", "--fps"];
+        for (written, ratio) in [
+            ("60", (60, 1)),
+            ("29.97", (2997, 100)),
+            ("30000/1001", (30000, 1001)),
+        ] {
+            let a = scene(&[&base[..], &[written]].concat());
+            let fps = a.fps.unwrap();
+            assert_eq!((fps.num(), fps.den()), ratio);
+        }
+        for bad in ["0", "-30", "30/0", "0/1001", "NaN", "inf", "30/1/2"] {
+            assert!(parse(&[&base[..], &[bad]].concat()).is_err(), "{bad}");
         }
     }
 }

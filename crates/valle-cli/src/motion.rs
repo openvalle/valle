@@ -56,13 +56,15 @@ pub fn load(args: &Args) -> Result<Loaded, Failure> {
         Some(l) => (l.entry.as_str(), &l.inputs),
         None => (file.as_str(), &args.inputs),
     };
+    let mut inputs = inputs.clone();
+    inputs.fps = args.fps.or(inputs.fps);
     let mut scene =
-        Scene::load(entry, &read, inputs, fonts()).map_err(|e| Failure::new("scene", e))?;
+        Scene::load(entry, &read, &inputs, fonts()).map_err(|e| Failure::new("scene", e))?;
     let decoding = args.decoder;
     // The resources of one file share its decoders.
     let mut pools: BTreeMap<PathBuf, Rc<RefCell<Pool>>> = BTreeMap::new();
     let mut videos = BTreeMap::new();
-    for (name, file) in scene.video_files(inputs) {
+    for (name, file) in scene.video_files(&inputs) {
         let origin = inputs
             .resource_origins
             .get(&name)
@@ -415,6 +417,7 @@ pub fn render(args: &Args) -> Result<Value, Failure> {
         "status": "ok",
         "summary": format!("{} drawn into {destination}", counted(frames.len(), "frame")),
         "frames": frames,
+        "fps": c.fps.to_string(),
         "files": written,
         "adapter": adapter,
     });

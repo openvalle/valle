@@ -51,6 +51,7 @@ Both `check` and `render` take the bindings `--props`, `--data` (JSON, or `@file
 | `--step N` | Storyboard: take frames 0, N, 2N, …; 1 takes every frame |
 | `--per-page N` | Storyboard: frames per PNG, default 12; multiple pages use `NAME-001.png`, `NAME-002.png`, … |
 | `--output-size WxH` | Output pixels, without changing the layout; up to 7680x4320 |
+| `--fps FPS` | Output frame rate, such as `30`, `60` or `30000/1001`; samples the same animation at that rate without editing the source |
 | `--codec h264\|hevc\|prores` | `h264` for `.mp4` and `prores` (4444, with alpha) for `.mov` unless given |
 | `--bitrate 8M` | Bits a second, in place of the codec's quality setting |
 | `--encoder vt\|ffmpeg` | The hardware encoder where it has the codec, unless given |
@@ -59,6 +60,12 @@ Both `check` and `render` take the bindings `--props`, `--data` (JSON, or `@file
 `--samples`, `--step` and `--per-page` require `--storyboard` and positive integers.
 Choose only one of `--samples`, `--step`, `--frame` or `--frames`. A storyboard output must
 end in `.png`; a single page keeps that name. See `valle docs motion storyboards` for examples.
+
+`--fps` applies to Motion, Timeline and Project renders: video, PNG sequences, individual
+frames and storyboards. Frame numbers and `--step` refer to the output rate. Without it,
+the scene's `composition.fps` or the timeline's `canvas.fps` is used. A `.wav` has no video
+frame rate and rejects this option. The JSON result reports the effective `fps` as a ratio
+or integer string; Project render records also keep an explicit `--fps`.
 
 ## Output
 

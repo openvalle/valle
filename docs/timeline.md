@@ -39,10 +39,15 @@ valle timeline check edit.timeline.json
 valle timeline render edit.timeline.json --frame 60 -o frame.png   # look at one frame
 valle timeline render edit.timeline.json --storyboard --step 30 --per-page 12 -o sheet.png
 valle timeline render edit.timeline.json -o edit.mp4
+valle timeline render edit.timeline.json --fps 60 -o edit-60fps.mp4
 ```
 
 A visual track plays its clips one after another (`items`), or each at its `start` (`clips`).
 Later visual tracks draw on top. The document's length is where its last clip ends.
+
+`render --fps` overrides `canvas.fps` for this export only. Clip times and audio timing stay
+in seconds; Motion hooks, motion blur and transition frame progress use the output rate.
+The source JSON is unchanged. Selected frame numbers refer to this rate too.
 
 Storyboards use the same sampling and pagination as Motion: without an explicit selection,
 they sample up to 12 frames including the first and last. `--step 30` selects every 30th

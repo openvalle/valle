@@ -214,12 +214,22 @@ impl Front {
             _ => {}
         }
         let values = serde_json::Value::Object(values).to_string();
-        let composition = scene.composition.ok_or_else(|| {
+        let mut composition = scene.composition.ok_or_else(|| {
             format!(
                 "{entry}: a scene exports its composition, such as `export const composition \
                      = {{ width: 1920, height: 1080, fps: 30, duration: 5 }}`"
             )
         })?;
+        let mut clips = inputs.clips.clone();
+        if let Some(fps) = inputs.fps {
+            composition.fps = fps;
+            // Transitions count output frames too; leave authored clip times unchanged.
+            for clip in Rc::make_mut(&mut clips).values_mut() {
+                if clip.frames.is_some() {
+                    Rc::make_mut(clip).frames = Some(fps);
+                }
+            }
+        }
         let role = scene.role;
         if let Some(k) = (inputs.pictures.keys()).find(|k| !role.inputs().contains(&k.as_str())) {
             return Err(format!(
@@ -281,7 +291,7 @@ impl Front {
             context,
             typeset: Rc::default(),
             shaders: RefCell::default(),
-            clips: inputs.clips.clone(),
+            clips,
             drawn: inputs.drawn.clone(),
         };
         front.context.with(|ctx| -> Result<(), Error> {
@@ -1021,6 +1031,68 @@ mod tests {
                 ));
                 assert!(e.contains(want), "{body}: {e}");
             }
+        });
+    }
+
+    #[test]
+    fn output_rate_updates_hooks_shutter_and_transition_frames() {
+        big_stack(|| {
+            let source = indoc! {r#"
+                export const composition = { width: 320, height: 180, fps: 30, duration: 4 };
+                function Clock() {
+                  return <Text>{`${useComposition().fps} ${useCurrentTime().seconds}`}</Text>;
+                }
+                export default function Scene() {
+                  return <Shutter samples={2} angle={360}><Clock /></Shutter>;
+                }
+            "#};
+            let mut inputs = Inputs::default();
+            Rc::make_mut(&mut inputs.clips).insert(
+                "transition".into(),
+                Rc::new(crate::template::Clip {
+                    start: Tick::ZERO,
+                    end: Tick::parse_seconds("1").unwrap(),
+                    on: [Tick::ZERO, Tick::parse_seconds("1").unwrap()],
+                    time: crate::template::ClipTime::Source {
+                        trim: Tick::ZERO,
+                        rate: crate::time::Speed::ONE,
+                        map: vec![],
+                        length: None,
+                    },
+                    frames: Some(Rate::new(30, 1).unwrap()),
+                }),
+            );
+            // 60 fps samples a quarter frame to each side, without changing duration.
+            inputs.fps = Some(Rate::new(60, 1).unwrap());
+            let mut f = load_bound(&[("scene.motion.tsx", source)], &inputs).unwrap();
+            assert_eq!(f.composition.fps, inputs.fps.unwrap());
+            assert_eq!(f.composition.duration, Tick::parse_seconds("4").unwrap());
+            let center = Tick::parse_seconds("1").unwrap();
+            let expected: Vec<_> = (0..2)
+                .map(|k| {
+                    let t = center + Rate::new(60, 1).unwrap().shutter(360, k, 2);
+                    format!("60 {}", crate::js::number_to_string(t.seconds()))
+                })
+                .collect();
+            assert_eq!(texts(&at(&mut f, "1")), expected);
+            let half = Tick::parse_seconds("0.5").unwrap();
+            assert_eq!(
+                f.clips["transition"]
+                    .at(crate::template::ClipPart::Progress, half)
+                    .unwrap(),
+                V::Num(30.0 / 59.0)
+            );
+            assert_eq!(
+                inputs.clips["transition"].frames,
+                Some(Rate::new(30, 1).unwrap())
+            );
+            assert_eq!(
+                load(&[("scene.motion.tsx", source)])
+                    .unwrap()
+                    .composition
+                    .fps,
+                Rate::new(30, 1).unwrap()
+            );
         });
     }
 

@@ -14,6 +14,7 @@ use serde_json::{Map, Number, Value};
 use super::rewrite::{bare, key};
 use crate::style::{color, css};
 use crate::template::Clips;
+use crate::time::Rate;
 
 /// A prop `controls.props` declares, or data `controls.data` does.
 #[derive(Clone, Debug, PartialEq)]
@@ -63,6 +64,9 @@ const LENGTHS: [&str; 15] = [
 /// Values bound to a scene's controls from outside: the command line's, or a Timeline clip's.
 #[derive(Clone, Debug, Default)]
 pub struct Inputs {
+    /// The host's render rate, overriding the authored composition before tracing. Durations
+    /// and clocks stay in seconds; useComposition() and temporal effects use this rate.
+    pub fps: Option<Rate>,
     pub props: Map<String, Value>,
     pub data: Map<String, Value>,
     /// The files of each resource bound, by its name: paths `read` takes, in place of the

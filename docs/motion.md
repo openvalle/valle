@@ -40,9 +40,21 @@ export default function Title() {
 valle motion check title.motion.tsx
 valle motion render title.motion.tsx --frames 0,15,45,89 --storyboard -o sheet.png
 valle motion render title.motion.tsx -o title.mp4
+valle motion render title.motion.tsx --fps 60 --output-size 3840x2160 -o title-4k.mp4
 ```
 
 Look at individual frames with `--frame N`, or at several frames together with `--storyboard`.
+
+`render --fps 60` samples the same animation at 60 frames per second without rewriting the
+TSX. `useComposition().fps`, motion blur and shutter samples use that output rate. Direct
+reads of the exported `composition.fps` still give the authored value; use the hook when
+you need the actual rate. Frame numbers in `--frame` and `--frames` refer to the output:
+frame 60 is at one second when rendering at 60 fps. Without `--fps`, the authored rate applies.
+
+Integer, decimal and fractional rates are accepted. `29.97` means exactly 2997/100;
+use `30000/1001` for the NTSC rate. Duration and animation timing stay in seconds. As with
+the authored rate, a video contains all frames starting before its duration, so its encoded
+duration can extend by less than one output frame to complete the last frame.
 
 ## Storyboards
 

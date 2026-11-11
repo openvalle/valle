@@ -3,6 +3,7 @@
 use serde_json::{Map, Value};
 use valle_engine::front::Inputs;
 use valle_native::media::{Codec, Decoding, Encoding};
+use valle_timeline::time::Rate;
 
 use crate::Failure;
 
@@ -23,6 +24,8 @@ pub struct Args {
     pub per_page: Option<u32>,
     /// Output pixels, if not the canvas's.
     pub output_size: Option<[u32; 2]>,
+    /// The output frame rate, without changing the scene's duration.
+    pub fps: Option<Rate>,
     pub codec: Option<Codec>,
     pub encoder: Option<Encoding>,
     pub decoder: Option<Decoding>,
@@ -38,7 +41,7 @@ pub enum Frames {
 }
 
 impl Args {
-    /// Reject storyboard output formats before loading a scene or opening an encoder.
+    /// Reject incompatible output options before loading a scene or opening an encoder.
     pub fn validate_output(&self) -> Result<(), Failure> {
         if self.storyboard
             && self
@@ -48,6 +51,17 @@ impl Args {
         {
             return Err(Failure::new("usage", "a storyboard is a .png"));
         }
+        if self.fps.is_some()
+            && self
+                .out
+                .as_ref()
+                .is_some_and(|out| out.to_ascii_lowercase().ends_with(".wav"))
+        {
+            return Err(Failure::new(
+                "usage",
+                "--fps applies to images and video, not .wav",
+            ));
+        }
         Ok(())
     }
 
@@ -56,6 +70,9 @@ impl Args {
         let mut out = Vec::new();
         if let Some([w, h]) = self.output_size {
             out.push(("output-size", format!("{w}x{h}")));
+        }
+        if let Some(fps) = self.fps {
+            out.push(("fps", fps.to_string()));
         }
         if let Some(codec) = self.codec {
             let name = match codec {
