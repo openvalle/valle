@@ -1,0 +1,157 @@
+name: Install scripts
+
+# The scripts a person pipes into a shell, run on every system they are for: they must install
+# the latest release and leave a valle that runs.
+on:
+  push:
+    paths: [scripts/install.sh, scripts/install.ps1, .github/workflows/install.yml]
+  pull_request:
+    paths: [scripts/install.sh, scripts/install.ps1, .github/workflows/install.yml]
+  # After a release, to see its packages install.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: install-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unix:
+    name: install.sh (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            runner: macos-15
+          - name: macos-x86_64
+            runner: macos-15-intel
+          - name: linux-x86_64
+            runner: ubuntu-24.04
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Lint
+        if: runner.os == 'Linux'
+        run: shellcheck -s sh scripts/install.sh
+      # As a person runs it: piped into sh, in a home of its own.
+      - name: Install
+        run: |
+          export HOME="$RUNNER_TEMP/home"
+          mkdir -p "$HOME"
+          touch "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zshrc"
+          cat scripts/install.sh | SHELL=/bin/bash sh
+          test "$("$HOME/.valle/bin/valle" --version)" != ""
+          grep -q '.valle/bin' "$HOME/.bashrc" "$HOME/.bash_profile"
+      - name: Install again, over itself
+        run: |
+          export HOME="$RUNNER_TEMP/home"
+          cat scripts/install.sh | SHELL=/bin/bash sh
+          # The PATH line is written once.
+          test "$(cat "$HOME/.bashrc" "$HOME/.bash_profile" | grep -c '.valle/bin')" = 1
+      # A container or a CI job often has no SHELL: it still installs, and says the line that
+      # adds the folder to PATH. (macOS's sh names a shell itself, and writes the line too.)
+      - name: Install with no SHELL set
+        run: |
+          export HOME="$RUNNER_TEMP/bare"
+          mkdir -p "$HOME"
+          cat scripts/install.sh | env -u SHELL sh | tee "$RUNNER_TEMP/bare.log"
+          "$HOME/.valle/bin/valle" --version
+          grep -q 'export PATH="$HOME/.valle/bin:$PATH"' "$RUNNER_TEMP/bare.log"
+      - name: Draw a frame with what it installed
+        run: |
+          "$RUNNER_TEMP/home/.valle/bin/valle" motion render examples/hello.motion.tsx --frame 30 -o frame.png --json
+
+  # The oldest systems the Linux package is for, and one it is not.
+  containers:
+    name: install.sh (${{ matrix.image }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: almalinux:8
+            expect: installs
+          - image: debian:10
+            expect: installs
+          - image: ubuntu:20.04
+            expect: installs
+          - image: alpine:3.20
+            expect: refuses
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install in ${{ matrix.image }}
+        run: |
+          docker run --rm -v "$PWD/scripts/install.sh:/install.sh:ro" -e EXPECT='${{ matrix.expect }}' '${{ matrix.image }}' sh -c '
+            if ! command -v curl > /dev/null; then
+              if command -v apt-get > /dev/null; then
+                # Debian 10 has moved to the archive.
+                if grep -q buster /etc/os-release; then
+                  sed -i "s|deb.debian.org|archive.debian.org|g; s|security.debian.org|archive.debian.org|g; /buster-updates/d" /etc/apt/sources.list
+                fi
+                apt-get update -qq && apt-get install -y -qq curl ca-certificates > /dev/null
+              elif command -v apk > /dev/null; then
+                apk add -q curl
+              fi
+            fi
+            if sh /install.sh; then
+              test "$EXPECT" = installs && "$HOME/.valle/bin/valle" --version
+            else
+              test "$EXPECT" = refuses && ! test -e "$HOME/.valle/bin/valle"
+            fi'
+
+  windows:
+    name: install.ps1 (${{ matrix.name }}, ${{ matrix.shell }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            runner: windows-2022
+            shell: pwsh
+          # Windows PowerShell 5.1, which every Windows has.
+          - name: windows-x86_64
+            runner: windows-2022
+            shell: powershell
+          - name: windows-arm64
+            runner: windows-11-arm
+            shell: pwsh
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # As a person runs it: the script's text given to Invoke-Expression.
+      - name: Install
+        run: |
+          $env:VALLE_INSTALL = Join-Path $env:RUNNER_TEMP 'valle'
+          Get-Content -Raw scripts/install.ps1 | Invoke-Expression
+          $exe = Join-Path $env:VALLE_INSTALL 'bin\valle.exe'
+          if (-not (Test-Path $exe)) { throw "no $exe" }
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'valle does not run' }
+          $user = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if (($user -split ';') -notcontains (Join-Path $env:VALLE_INSTALL 'bin')) { throw "not on the user's PATH: $user" }
+      - name: Install again, over itself
+        run: |
+          $env:VALLE_INSTALL = Join-Path $env:RUNNER_TEMP 'valle'
+          Get-Content -Raw scripts/install.ps1 | Invoke-Expression
+          $bin = Join-Path $env:VALLE_INSTALL 'bin'
+          $count = @([Environment]::GetEnvironmentVariable('Path', 'User') -split ';' | Where-Object { $_ -eq $bin }).Count
+          if ($count -ne 1) { throw "on the user's PATH $count times" }
+          if (Test-Path (Join-Path $bin 'valle.exe.old')) { throw 'the old executable was left behind' }
+      - name: Draw a frame with what it installed
+        run: |
+          & (Join-Path $env:RUNNER_TEMP 'valle\bin\valle.exe') motion render examples/hello.motion.tsx --frame 30 -o frame.png --json
+          if ($LASTEXITCODE -ne 0) { throw 'the frame was not drawn' }
