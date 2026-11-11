@@ -172,21 +172,76 @@ jobs:
             web/packages/engine/LICENSE
           if-no-files-found: error
 
+  package-linux:
+    # Built in manylinux_2_28, AlmaLinux 8's glibc: the package runs where glibc is 2.28 or later,
+    # as the lavapipe it embeds does. Drawing in it is the check that it does.
+    needs: web
+    name: package (linux-${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: quay.io/pypa/manylinux_2_28_${{ matrix.arch == 'arm64' && 'aarch64' || 'x86_64' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # libclang, for the FFmpeg bindings.
+      - name: Install clang and the Rust toolchain
+        run: |
+          dnf install -y -q clang-devel
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: manylinux
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v1' }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: web
+          path: web
+      - name: Package
+        run: cargo xtask package --web-built
+      - name: Need no glibc past 2.28
+        run: |
+          newest=$(objdump -T dist/valle | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "$newest"
+          test "$(printf '%s\nGLIBC_2.28\n' "$newest" | sort -V | tail -1)" = GLIBC_2.28
+      # No GPU here: it must draw on the lavapipe it carries.
+      - name: Draw on the embedded lavapipe
+        run: |
+          result=$(dist/valle motion render examples/01-kinetic-title.motion.tsx --frame 30 -o frame.png --json)
+          echo "$result"
+          grep -q '(bundled lavapipe)' <<< "$result"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: valle-linux-${{ matrix.arch }}
+          path: dist/valle
+          if-no-files-found: error
+
   package:
     # The executables a release ships, built from each push to a long-lived branch or a version
-    # tag, with Studio embedded, and the pinned lavapipe on Linux and Windows.
+    # tag, with Studio embedded, and the pinned lavapipe on Windows.
     needs: web
     name: package (${{ matrix.platform }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: linux-x86_64
-            runner: ubuntu-24.04
           - platform: macos-arm64
             runner: macos-15
+          - platform: macos-x86_64
+            runner: macos-15-intel
           - platform: windows-x86_64
             runner: windows-2022
+          - platform: windows-arm64
+            runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -205,7 +260,7 @@ jobs:
         run: cargo xtask package --web-built
       # The package alone, with no GPU: it must draw on the lavapipe it carries.
       - name: Draw on the embedded lavapipe
-        if: runner.os != 'macOS'
+        if: runner.os == 'Windows'
         shell: bash
         run: |
           result=$(dist/valle motion render examples/01-kinetic-title.motion.tsx --frame 30 -o frame.png --json)
@@ -267,7 +322,7 @@ jobs:
   release:
     # A version tag drafts a GitHub release of the packages, for a person to read and publish.
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [check, gpu, windows, package]
+    needs: [check, gpu, windows, package-linux, package]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -287,11 +342,13 @@ jobs:
       - name: Archive the packages
         run: |
           mkdir release
-          for platform in linux-x86_64 macos-arm64; do
+          for platform in linux-x86_64 linux-arm64 macos-arm64 macos-x86_64; do
             chmod +x "artifacts/valle-$platform/valle"
             tar -czf "release/valle-$GITHUB_REF_NAME-$platform.tar.gz" -C "artifacts/valle-$platform" valle
           done
-          (cd artifacts/valle-windows-x86_64 && zip -9 "../../release/valle-$GITHUB_REF_NAME-windows-x86_64.zip" valle.exe)
+          for platform in windows-x86_64 windows-arm64; do
+            (cd "artifacts/valle-$platform" && zip -9 "../../release/valle-$GITHUB_REF_NAME-$platform.zip" valle.exe)
+          done
           (cd release && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
       - name: Draft the release
         env:
