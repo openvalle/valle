@@ -66,6 +66,6 @@ fn main() -> std::io::Result<()> {
     }
     source.push_str("]\n");
     fs::write(out.join("web.rs"), source)?;
-    println!("cargo:warning=embedded web: {raw_size} bytes -> {br_size} bytes (Brotli)");
+    println!("embedded web: {raw_size} bytes -> {br_size} bytes (Brotli)");
     Ok(())
 }
