@@ -23,6 +23,8 @@ use crate::{Failure, video};
 pub struct Loaded {
     pub scene: Scene,
     pub urls: Vec<(String, PathBuf)>,
+    /// Video sources by local path, once each, with their authored names for diagnostics.
+    videos: BTreeMap<PathBuf, String>,
 }
 
 pub fn load(args: &Args) -> Result<Loaded, Failure> {
@@ -59,6 +61,7 @@ pub fn load(args: &Args) -> Result<Loaded, Failure> {
     let decoding = args.decoder;
     // The resources of one file share its decoders.
     let mut pools: BTreeMap<PathBuf, Rc<RefCell<Pool>>> = BTreeMap::new();
+    let mut videos = BTreeMap::new();
     for (name, file) in scene.video_files(inputs) {
         let failed = |e: String| Failure::new("video", format!("video resource {name}: {e}"));
         let path = match file.starts_with("https://") || file.starts_with("http://") {
@@ -69,6 +72,7 @@ pub fn load(args: &Args) -> Result<Loaded, Failure> {
             Some(p) => p.clone(),
             None => {
                 let first = media::reader(&path, decoding).map_err(failed)?;
+                videos.insert(path.clone(), file);
                 let pool = Rc::new(RefCell::new(Pool {
                     path: path.clone(),
                     decoding,
@@ -87,6 +91,7 @@ pub fn load(args: &Args) -> Result<Loaded, Failure> {
     Ok(Loaded {
         scene,
         urls: urls.into_inner(),
+        videos,
     })
 }
 
@@ -174,7 +179,25 @@ pub fn chosen(args: &Args, count: i64) -> Result<Vec<i64>, Failure> {
 
 /// Check every frame without building drawing commands: each error once, with its frames.
 pub fn check(args: &Args) -> Result<Value, Failure> {
-    let Loaded { scene, urls } = load(args)?;
+    if args.timeline {
+        crate::timeline::check_audio(args)?;
+    }
+    let Loaded {
+        scene,
+        urls,
+        videos,
+    } = load(args)?;
+    let mut warnings = Vec::new();
+    for (path, file) in videos {
+        let info = media::probe(&path).map_err(|e| Failure::new("video", e))?;
+        if let Some(transfer) = info.hdr {
+            warnings.push(json!({
+                "code": "unsupported-hdr",
+                "file": file,
+                "message": format!("{file}: HDR ({transfer}) video is not supported; it is rendered as SDR without tone mapping, so colors and brightness may be incorrect. Convert the source to SDR first."),
+            }));
+        }
+    }
     let c = scene.composition();
     let count = c.fps.frames_in(c.duration);
     let mut checker = scene.into_checker();
@@ -201,7 +224,7 @@ pub fn check(args: &Args) -> Result<Value, Failure> {
             }
         }
     }
-    let warnings = slow(&retraced, frames.len());
+    warnings.extend(slow(&retraced, frames.len()));
     let urls: Vec<Value> = (urls.iter())
         .map(|(url, file)| json!({ "url": url, "sha256": sha256_of(file) }))
         .collect();

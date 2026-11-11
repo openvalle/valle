@@ -8,6 +8,7 @@ use std::path::Path;
 
 use valle_ffmpeg::Version;
 
+mod orientation;
 mod textures;
 mod v7;
 mod v8;
@@ -81,6 +82,22 @@ pub fn length(path: &Path) -> Result<i64, String> {
         Version::V7 => v7::decode::length(path),
         Version::V8 => v8::decode::length(path),
         Version::V9 => v9::decode::length(path),
+    }
+}
+
+/// Stream metadata, without decoding the whole file.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Info {
+    pub audio: bool,
+    /// HDR transfer function of the selected video stream, when tagged: PQ or HLG.
+    pub hdr: Option<&'static str>,
+}
+
+pub fn probe(path: &Path) -> Result<Info, String> {
+    match version()? {
+        Version::V7 => v7::decode::probe(path),
+        Version::V8 => v8::decode::probe(path),
+        Version::V9 => v9::decode::probe(path),
     }
 }
 

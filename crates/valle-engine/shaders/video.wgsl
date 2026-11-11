@@ -7,6 +7,7 @@ struct Frame {
   u: vec4u,
   v: vec4u,
   a: vec4u,
+  orientation: vec4u,
 }
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(0) @binding(1) var<storage, read> planes: array<u32>;
@@ -52,5 +53,14 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   let rgb = floor(vec3f(y + rv * cr, y + gu * cb + gv * cr, y + bu * cb) + 0.5);
   var alpha = 255.0;
   if frame.a.z != 0u { alpha = sample(frame.a, at); }
-  textureStore(output, vec2i(at), clamp(vec4f(rgb, alpha), vec4f(0.0), vec4f(255.0)) / 255.0);
+  var destination = at;
+  var width = frame.size.x;
+  switch frame.orientation.x {
+    case 1u: { destination = vec2u(frame.size.y - 1u - at.y, at.x); width = frame.size.y; }
+    case 2u: { destination = frame.size - 1u - at; }
+    case 3u: { destination = vec2u(at.y, frame.size.x - 1u - at.x); width = frame.size.y; }
+    default: {}
+  }
+  if frame.orientation.y != 0u { destination.x = width - 1u - destination.x; }
+  textureStore(output, vec2i(destination), clamp(vec4f(rgb, alpha), vec4f(0.0), vec4f(255.0)) / 255.0);
 }

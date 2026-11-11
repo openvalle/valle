@@ -50,6 +50,7 @@ const CASES: {
   { entry: "tests/resources/shaders/scene.motion.tsx", frames: [0, 2, 3, 1] },
   { entry: "tests/resources/shaders/transitions.motion.tsx", frames: [0, 1, 2, 3, 4] },
   { entry: "tests/resources/shaders/grade.timeline.json", frames: [0] },
+  { entry: "tests/resources/video/rotation.motion.tsx", frames: [0, 2, 1] },
   {
     entry: "tests/resources/timeline/captions/animations.timeline.json",
     frames: [6, 57, 111, 153, 207, 249, 282],

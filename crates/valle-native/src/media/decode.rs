@@ -9,7 +9,8 @@ use std::ptr;
 use super::ff;
 use ff::{Packet, codec, decoder, format, frame, media, software};
 
-use crate::media::{AHEAD, Decoding, Read, TICKS_PER_SECOND};
+use crate::media::orientation::Orientation;
+use crate::media::{AHEAD, Decoding, Info, Read, TICKS_PER_SECOND};
 
 pub struct Reader {
     input: format::context::Input,
@@ -18,6 +19,7 @@ pub struct Reader {
     /// The stream's time base, a tick count each.
     base: (i64, i64),
     size: [u32; 2],
+    orientation: Orientation,
     /// The frame shown now and the one after it, each with when it starts, in ticks.
     current: Option<(i64, frame::Video)>,
     next: Option<(i64, frame::Video)>,
@@ -28,6 +30,22 @@ pub struct Reader {
     /// The RGBA of `current`, once converted.
     converted: Option<(i64, Vec<u8>)>,
     scaler: Option<(format::Pixel, software::scaling::Context)>,
+}
+
+/// The same streams the readers select, from FFmpeg's stream-info probe.
+pub fn probe(path: &Path) -> Result<Info, String> {
+    let input = format::input(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let audio = input.streams().best(media::Type::Audio).is_some();
+    let hdr = input.streams().best(media::Type::Video).and_then(|s| {
+        // SAFETY: the parameters belong to the live input and are only read.
+        let transfer = unsafe { (*s.parameters().as_ptr()).color_trc };
+        match transfer {
+            ff::ffi::AVColorTransferCharacteristic::AVCOL_TRC_SMPTE2084 => Some("PQ"),
+            ff::ffi::AVColorTransferCharacteristic::AVCOL_TRC_ARIB_STD_B67 => Some("HLG"),
+            _ => None,
+        }
+    });
+    Ok(Info { audio, hdr })
 }
 
 /// How long the video stream of the file at `path` is, in ticks: its own length, else the
@@ -56,6 +74,13 @@ impl Reader {
         let stream = (input.streams().best(media::Type::Video)).ok_or_else(|| bad(&"no video"))?;
         let index = stream.index();
         let tb = stream.time_base();
+        let orientation = stream
+            .side_data()
+            .find(|s| s.kind() == codec::packet::side_data::Type::DisplayMatrix)
+            .map(|s| Orientation::matrix(s.data()))
+            .transpose()
+            .map_err(|e| bad(&e))?
+            .unwrap_or(Orientation::IDENTITY);
         let mut context =
             codec::context::Context::from_parameters(stream.parameters()).map_err(|e| bad(&e))?;
         if decoding == Decoding::Hardware {
@@ -88,6 +113,7 @@ impl Reader {
             stream: index,
             base: (tb.numerator() as i64, tb.denominator() as i64),
             size,
+            orientation,
             current: None,
             next: None,
             sent: false,
@@ -200,19 +226,13 @@ impl Reader {
         let (_, scaler) = self.scaler.as_mut().expect("just made");
         let mut out = frame::Video::new(format::Pixel::RGBA, w, h);
         scaler.run(f, &mut out).map_err(|e| e.to_string())?;
-        let (stride, row) = (out.stride(0), w as usize * 4);
-        let data = out.data(0);
-        let mut pixels = Vec::with_capacity(row * h as usize);
-        for y in 0..h as usize {
-            pixels.extend_from_slice(&data[y * stride..y * stride + row]);
-        }
-        Ok(pixels)
+        Ok(self.orientation.rgba(out.data(0), out.stride(0), self.size))
     }
 }
 
 impl Read for Reader {
     fn size(&self) -> [u32; 2] {
-        self.size
+        self.orientation.size(self.size)
     }
 
     fn position(&self) -> Option<i64> {

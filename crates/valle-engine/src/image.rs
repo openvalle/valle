@@ -15,6 +15,7 @@ use zune_jpeg::zune_core::options::DecoderOptions;
 use crate::layout::Natural;
 use crate::svg::file::{self, Document};
 
+pub mod orientation;
 pub mod yuv;
 
 /// What a resource shows: one of the scene's images, by its index there, an SVG file, or nothing.
@@ -76,12 +77,14 @@ impl Image {
     }
 
     /// Keep a decoded video's planes in their original format until the renderer needs them.
+    /// `size` is coded size; the image exposes display size after applying the orientation.
     pub fn from_yuv(
         size: [u32; 2],
         pixels: impl Into<Arc<[u8]>>,
         layout: yuv::Layout,
     ) -> Result<Self, String> {
         let pixels = pixels.into();
+        let size = layout.orientation.size(size);
         layout.planes(size, &pixels).validate()?;
         Ok(Self {
             size,
@@ -100,8 +103,12 @@ impl Image {
             None => self.clone(),
             Some(layout) => Self::new(
                 self.size,
-                yuv::rgba(&layout.planes(self.size, &self.pixels))
-                    .expect("validated YUV")
+                layout
+                    .orientation
+                    .rgba(
+                        yuv::rgba(&layout.planes(self.size, &self.pixels)).expect("validated YUV"),
+                        layout.orientation.size(self.size),
+                    )
                     .into(),
             ),
         }

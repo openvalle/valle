@@ -45,6 +45,52 @@ pub fn mixer(path: &str, doc: &Document, host: &Host<'_>) -> Result<Mixer, Error
     mixer_in(path, doc, host, &[])
 }
 
+/// Validate the mix's sources without decoding their PCM. Only audio clips require a sound
+/// stream; a visual clip may be silent. Nested documents use the same rules as the mixer.
+pub fn check(
+    path: &str,
+    doc: &Document,
+    read: &dyn Fn(&str) -> Option<String>,
+    audio: &dyn Fn(&str) -> Result<bool, String>,
+) -> Result<(), Error> {
+    fn visit(
+        path: &str,
+        doc: &Document,
+        read: &dyn Fn(&str) -> Option<String>,
+        audio: &dyn Fn(&str) -> Result<bool, String>,
+        nesting: &mut Vec<String>,
+    ) -> Result<(), Error> {
+        if nesting.iter().any(|p| p == path) {
+            return Err(format!("{path} is nested in itself"));
+        }
+        nesting.push(path.to_string());
+        let (mix, sources) = mix(path, doc)?;
+        for (i, source) in sources.iter().enumerate() {
+            match source {
+                Source::File(file) => {
+                    if !audio(file)?
+                        && let Some(c) = mix
+                            .tracks
+                            .iter()
+                            .flat_map(|t| &t.clips)
+                            .find(|c| c.source == i && !c.optional)
+                    {
+                        return Err(format!("{}: its file has no sound ({file})", c.what));
+                    }
+                }
+                Source::Timeline(file) => {
+                    let text = read(file).ok_or_else(|| format!("{file}: not found"))?;
+                    let inner = valle_timeline::parse(&text).map_err(|e| format!("{file}: {e}"))?;
+                    visit(file, &inner, read, audio, nesting)?;
+                }
+            }
+        }
+        nesting.pop();
+        Ok(())
+    }
+    visit(path, doc, read, audio, &mut Vec::new())
+}
+
 fn mixer_in(path: &str, doc: &Document, host: &Host<'_>, nesting: &[&str]) -> Result<Mixer, Error> {
     let (mix, sources) = mix(path, doc)?;
     let mut pcm = Vec::new();
@@ -560,6 +606,21 @@ fn strip(v: &Value, names: &Names, what: &str, master: bool) -> Result<Strip, Er
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checking_nested_sound_rejects_cycles_without_decoding() {
+        let text = r#"{
+            "canvas":{"width":64,"height":36,"fps":30},
+            "resources":{"inner":"edit.timeline.json"},
+            "tracks":{"visual":[{"items":[{"id":"nested","kind":"timeline","src":"inner","duration":1}]}]}
+        }"#;
+        let doc = valle_timeline::parse(text).unwrap();
+        let error = check("edit.timeline.json", &doc, &|_| Some(text.into()), &|_| {
+            panic!("a timeline is not an audio file")
+        })
+        .unwrap_err();
+        assert!(error.contains("nested in itself"), "{error}");
+    }
 
     /// A file of a steady 0.5 on both channels, 4 s long; "quiet.mp4" has no sound.
     fn sound(path: &str) -> Result<Option<Vec<f32>>, String> {

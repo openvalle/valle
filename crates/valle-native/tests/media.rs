@@ -220,11 +220,87 @@ fn invalid_files_and_missing_streams_return_errors() {
         assert!(media::reader(&path, Some(Decoding::Software)).is_err());
         assert!(media::length(&path).is_err());
         assert!(media::sound(&path).is_err());
+        assert!(media::probe(&path).is_err());
     }
     let path = dir.0.join("only-audio.wav");
     wav(&path, RATE, 1, &[0; 64]);
+    assert_eq!(
+        media::probe(&path).unwrap(),
+        media::Info {
+            audio: true,
+            hdr: None
+        }
+    );
     assert!(media::reader(&path, Some(Decoding::Software)).is_err());
     assert!(media::length(&path).is_err());
+}
+
+#[test]
+fn tagged_rotation_changes_dimensions_and_corner_pixels() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/resources/video");
+    let colors = [
+        [253, 0, 0, 255],
+        [0, 255, 0, 255],
+        [0, 0, 254, 255],
+        [253, 253, 0, 255],
+    ];
+    // Corner order: top-left, top-right, bottom-left, bottom-right. Expected positions are
+    // authored independently of the decoder and of the browser's rotation implementation.
+    for (file, size, corners) in [
+        ("quadrants.mp4", [96, 64], [0, 1, 2, 3]),
+        ("rotate90.mp4", [64, 96], [1, 3, 0, 2]),
+        ("rotate180.mp4", [96, 64], [3, 2, 1, 0]),
+        ("rotate270.mp4", [64, 96], [2, 0, 3, 1]),
+        ("mirror90.mp4", [64, 96], [3, 1, 2, 0]),
+    ] {
+        let path = root.join(file);
+        assert_eq!(
+            media::probe(&path).unwrap(),
+            media::Info {
+                audio: false,
+                hdr: None
+            }
+        );
+        let mut reader = media::reader(&path, Some(Decoding::Software)).unwrap();
+        assert_eq!(reader.size(), size, "{file}");
+        for index in [0, 2, 1, 1, 3] {
+            let pixels = reader.frame(index * TICKS_PER_SECOND / 4).unwrap();
+            let [w, h] = size;
+            assert_eq!(pixels.len(), (w * h * 4) as usize);
+            for (corner, [x, y]) in [
+                [w / 4, h / 4],
+                [3 * w / 4, h / 4],
+                [w / 4, 3 * h / 4],
+                [3 * w / 4, 3 * h / 4],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let at = ((y * w + x) * 4) as usize;
+                for (channel, expected) in colors[corners[corner]].iter().enumerate() {
+                    assert!(
+                        pixels[at + channel].abs_diff(*expected) <= 5,
+                        "{file} frame {index} corner {corner}: {:?}",
+                        &pixels[at..at + 4]
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn hdr_transfer_tags_are_reported_by_probe() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/resources/video");
+    for (file, hdr) in [("pq.mp4", "PQ"), ("hlg.mp4", "HLG")] {
+        assert_eq!(
+            media::probe(&root.join(file)).unwrap(),
+            media::Info {
+                audio: false,
+                hdr: Some(hdr)
+            }
+        );
+    }
 }
 
 #[test]

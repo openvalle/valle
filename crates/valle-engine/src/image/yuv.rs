@@ -2,6 +2,8 @@
 //! them: by the matrix and range the file tags, its values taken as sRGB's, chroma interpolated
 //! bilinearly from the middle of the pixels it covers. GPU video input uses the same convention.
 
+use super::orientation::Orientation;
+
 /// How a frame's planes hold its samples, 8 bits each: those WebCodecs decodes 8-bit 4:2:0 into.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Format {
@@ -20,13 +22,15 @@ pub struct Layout {
     pub planes: Vec<(usize, usize)>,
     pub bt709: bool,
     pub full: bool,
+    pub orientation: Orientation,
 }
 
 impl Layout {
+    /// `size` is display size; planes remain in coded order until conversion.
     pub fn planes<'a>(&'a self, size: [u32; 2], bytes: &'a [u8]) -> Planes<'a> {
         Planes {
             format: self.format,
-            size,
+            size: self.orientation.size(size),
             planes: &self.planes,
             bytes,
             bt709: self.bt709,

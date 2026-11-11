@@ -2,6 +2,8 @@
 //! as, which the Motion commands then check and draw; `valle timeline query`; and `valle
 //! timeline edit`.
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde_json::{Value, json};
@@ -96,6 +98,23 @@ pub fn mixer(args: &Args) -> Result<Mixer, Failure> {
         sound: &sound,
     };
     mix::mixer(&path, &doc, &host).map_err(|e| Failure::new("sound", format!("{path}: {e}")))
+}
+
+/// Check stream presence once per file; checking a long edit does not decode its soundtrack.
+pub fn check_audio(args: &Args) -> Result<(), Failure> {
+    let (path, _, doc) = document(args, false)?;
+    let read = |p: &str| std::fs::read_to_string(p).ok();
+    let streams = RefCell::new(BTreeMap::new());
+    let audio = |p: &str| {
+        if let Some(&has) = streams.borrow().get(p) {
+            return Ok(has);
+        }
+        let has = media::probe(Path::new(p))?.audio;
+        streams.borrow_mut().insert(p.to_string(), has);
+        Ok(has)
+    };
+    mix::check(&path, &doc, &read, &audio)
+        .map_err(|e| Failure::new("sound", format!("{path}: {e}")))
 }
 
 pub fn lower(args: &Args) -> Result<Lowered, Failure> {

@@ -51,3 +51,30 @@ reads, sparse bindings, animated uniforms, matrix layout and straight alpha.
 The transition scene samples all 13 built-ins, and the Timeline tests temperature
 adjustment. These have no captured PNG baselines: CLI tests assert expected
 pixels and the browser compares with the native frames at runtime.
+
+`video/` contains authored 96×64, 4 fps, one-second media fixtures (no audio).
+`quadrants.mp4` has red/green on the top row and blue/yellow on the bottom row.
+The `rotate90`, `rotate180`,
+`rotate270` and `mirror90` files contain the same compressed frames with display
+matrices; the angles follow FFmpeg's counter-clockwise convention. Native tests
+assert display dimensions and corner colors, and `rotation.motion.tsx` compares
+browser playback with native output, including backward seeking.
+
+The fixtures were generated with FFmpeg 9:
+
+```sh
+ffmpeg -f lavfi -i 'color=c=red:s=96x64:r=4:d=1' \
+  -vf 'drawbox=x=48:y=0:w=48:h=32:color=lime:t=fill,drawbox=x=0:y=32:w=48:h=32:color=blue:t=fill,drawbox=x=48:y=32:w=48:h=32:color=yellow:t=fill' \
+  -c:v libx264 -crf 10 quadrants.mp4
+ffmpeg -display_rotation 90 -i quadrants.mp4 -c copy rotate90.mp4
+ffmpeg -display_rotation 180 -i quadrants.mp4 -c copy rotate180.mp4
+ffmpeg -display_rotation 270 -i quadrants.mp4 -c copy rotate270.mp4
+ffmpeg -display_rotation 90 -display_hflip -i quadrants.mp4 -c copy mirror90.mp4
+ffmpeg -i quadrants.mp4 -pix_fmt yuv420p10le -c:v libx265 \
+  -x265-params 'log-level=error:pools=1:colorprim=9:transfer=16:colormatrix=9' pq.mp4
+ffmpeg -i quadrants.mp4 -pix_fmt yuv420p10le -c:v libx265 \
+  -x265-params 'log-level=error:pools=1:colorprim=9:transfer=18:colormatrix=9' hlg.mp4
+```
+
+`pq.mp4` and `hlg.mp4` are 10-bit HEVC copies tagged BT.2020 with PQ and HLG.
+They test detection and check warnings only, not HDR color accuracy or tone mapping.

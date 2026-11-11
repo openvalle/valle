@@ -36,6 +36,7 @@ impl Video {
         target: &wgpu::Texture,
     ) {
         let layout = image.yuv.as_ref().expect("YUV image");
+        let size = layout.orientation.size(image.size);
         let plane = |i: usize, component: u32, step: u32| {
             let (offset, stride) = layout.planes[i];
             [offset as u32 + component, stride as u32, step, 0]
@@ -50,16 +51,17 @@ impl Video {
             [0; 4]
         };
         let words = [
-            [
-                image.size[0],
-                image.size[1],
-                layout.bt709 as u32,
-                layout.full as u32,
-            ],
+            [size[0], size[1], layout.bt709 as u32, layout.full as u32],
             plane(0, 0, 1),
             u,
             v,
             alpha,
+            [
+                layout.orientation.turns,
+                layout.orientation.flip as u32,
+                0,
+                0,
+            ],
         ];
         let info = gpu
             .device
@@ -105,13 +107,14 @@ impl Video {
         let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &group, &[]);
-        pass.dispatch_workgroups(image.size[0].div_ceil(8), image.size[1].div_ceil(8), 1);
+        pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::image::orientation::Orientation;
     use crate::image::yuv;
 
     #[test]
@@ -148,7 +151,22 @@ mod tests {
                         (0..stride * height + 3).map(|k| ((k * 73 + k / 7 + i * 31) % 256) as u8),
                     );
                 }
-                for (bt709, full) in [(false, false), (false, true), (true, false), (true, true)] {
+                let cases = [(false, false), (false, true), (true, false), (true, true)]
+                    .into_iter()
+                    .flat_map(|(bt709, full)| {
+                        let count = if size == [3, 5] { 8 } else { 1 };
+                        (0..count).map(move |i| {
+                            (
+                                bt709,
+                                full,
+                                Orientation {
+                                    turns: i % 4,
+                                    flip: i >= 4,
+                                },
+                            )
+                        })
+                    });
+                for (bt709, full, orientation) in cases {
                     let image = Image::from_yuv(
                         size,
                         pixels.clone(),
@@ -157,6 +175,7 @@ mod tests {
                             planes: planes.clone(),
                             bt709,
                             full,
+                            orientation,
                         },
                     )
                     .unwrap();
@@ -210,7 +229,7 @@ mod tests {
                         // GPU fused arithmetic can put a half-byte on the other side of rounding.
                         assert!(
                             max <= 1,
-                            "{size:?} {format:?} bt709={bt709} full={full}, mip {level}: max {max}"
+                            "{size:?} {format:?} {orientation:?} bt709={bt709} full={full}, mip {level}: max {max}"
                         );
                         drop(mapped);
                         buffer.unmap();

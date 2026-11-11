@@ -164,7 +164,8 @@ impl Video for Frames {
 
 /// A frame as the worker gives it: little-endian u32s of its format (0 for straight RGBA, 1
 /// I420, 2 NV12, 3 I420A), BT.709 or not, full range or not, its width and height, its count of
-/// planes and each one's offset and bytes a row, then the planes. Keep YUV for GPU conversion.
+/// planes, clockwise quarter turns, horizontal reflection, and each plane's offset and bytes a
+/// row, then the planes. Keep YUV for GPU conversion and orientation.
 fn planes(given: &[u8], size: [u32; 2]) -> Result<Image, String> {
     let word = |i: usize| -> Result<u32, String> {
         let bytes = given
@@ -174,7 +175,14 @@ fn planes(given: &[u8], size: [u32; 2]) -> Result<Image, String> {
     };
     let [kind, bt709, full, w, h, count] = [0, 1, 2, 3, 4, 5].map(word);
     let [w, h] = [w?, h?];
-    if [w, h] != size {
+    let orientation = valle_engine::image::orientation::Orientation {
+        turns: word(6)?,
+        flip: word(7)? == 1,
+    };
+    if orientation.turns > 3 {
+        return Err("engine bug: invalid video rotation".into());
+    }
+    if orientation.size([w, h]) != size {
         return Err(format!(
             "a frame of {w}×{h} px, not {}×{} px",
             size[0], size[1]
@@ -185,26 +193,34 @@ fn planes(given: &[u8], size: [u32; 2]) -> Result<Image, String> {
         return Err("engine bug: a frame has too many planes".into());
     }
     let planes: Vec<(usize, usize)> = (0..count)
-        .map(|i| Ok((word(6 + 2 * i)? as usize, word(7 + 2 * i)? as usize)))
+        .map(|i| Ok((word(8 + 2 * i)? as usize, word(9 + 2 * i)? as usize)))
         .collect::<Result<_, String>>()?;
     let data = given
-        .get((6 + 2 * count) * 4..)
+        .get((8 + 2 * count) * 4..)
         .ok_or("engine bug: a frame's header is short")?;
     let format = match kind? {
-        0 if data.len() == (w * h * 4) as usize => return Ok(Image::new(size, data.into())),
+        0 if data.len() == (w * h * 4) as usize => {
+            let pixels = if orientation == Default::default() {
+                data.into()
+            } else {
+                orientation.rgba(data.to_vec(), [w, h]).into()
+            };
+            return Ok(Image::new(size, pixels));
+        }
         1 => yuv::Format::I420,
         2 => yuv::Format::Nv12,
         3 => yuv::Format::I420a,
         k => return Err(format!("engine bug: a frame of kind {k}")),
     };
     Image::from_yuv(
-        size,
+        [w, h],
         data,
         yuv::Layout {
             format,
             planes,
             bt709: bt709? == 1,
             full: full? == 1,
+            orientation,
         },
     )
 }

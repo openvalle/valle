@@ -52,7 +52,8 @@ export class Reader {
     if (!first) {
       throw new Error("no frame in it");
     }
-    const { width, height } = first.visibleRect;
+    const { width: w, height: h } = first.visibleRect;
+    const [width, height] = first.rotation % 180 ? [h, w] : [w, h];
     first.close();
     return { width, height, duration: await this.#track.computeDuration() };
   }
@@ -107,7 +108,8 @@ export class Reader {
 const FORMATS: Record<string, number> = { I420: 1, NV12: 2, I420A: 3 };
 
 /** A frame as the engine takes it: little-endian u32s of its format (0 for straight RGBA), BT.709
- * or not, full range or not, its width and height, its count of planes and each one's offset and
+ * or not, full range or not, its coded width and height, its count of planes,
+ * clockwise quarter turns, horizontal reflection after rotation, and each plane's offset and
  * bytes a row, then the planes. The engine converts 8-bit 4:2:0 itself, as the native engine
  * does: by the matrix and range the file tags, BT.709 or BT.601 by its height when it tags none,
  * its values taken as sRGB's. The browser converts the others. */
@@ -119,14 +121,23 @@ async function planes(sample: VideoSample, tags: VideoColorSpaceInit): Promise<U
     const options = kind ? {} : ({ format: "RGBA", colorSpace: "srgb" } as const);
     const size = frame.allocationSize(options);
     const count = kind === 0 ? 0 : kind === 2 ? 2 : kind === 3 ? 4 : 3;
-    const header = 4 * (6 + 2 * count);
+    const header = 4 * (8 + 2 * count);
     const out = new Uint8Array(header + size);
     const layout = await frame.copyTo(out.subarray(header), options);
     const { matrix, fullRange } = tags;
     const bt601 = matrix === "bt470bg" || matrix === "smpte170m" || matrix === "smpte240m";
     const bt709 = matrix === "bt709" || (!bt601 && height >= 720);
     const words = new DataView(out.buffer);
-    const fields = [kind, bt709 ? 1 : 0, fullRange ? 1 : 0, width, height, count];
+    const fields = [
+      kind,
+      bt709 ? 1 : 0,
+      fullRange ? 1 : 0,
+      width,
+      height,
+      count,
+      sample.rotation / 90,
+      sample.flip ? 1 : 0,
+    ];
     for (const plane of kind ? layout : []) {
       fields.push(plane.offset, plane.stride);
     }
