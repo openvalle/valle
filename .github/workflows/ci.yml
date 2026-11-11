@@ -169,6 +169,7 @@ jobs:
           path: |
             web/apps/studio/dist
             web/packages/engine/dist
+            web/packages/engine/LICENSE
           if-no-files-found: error
 
   package:

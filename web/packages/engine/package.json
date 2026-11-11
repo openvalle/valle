@@ -10,9 +10,18 @@
   },
   "type": "module",
   "exports": {
-    ".": "./dist/index.js",
-    "./element": "./dist/element.js",
-    "./export": "./dist/export.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./element": {
+      "types": "./dist/element.d.ts",
+      "default": "./dist/element.js"
+    },
+    "./export": {
+      "types": "./dist/export.d.ts",
+      "default": "./dist/export.js"
+    }
   },
   "files": [
     "dist"

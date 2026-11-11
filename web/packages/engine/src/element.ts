@@ -1,7 +1,7 @@
 // `<valle-player>`: a player in a page's markup, registered by importing this module. It shows
 // the canvas and nothing else; controls are the page's own, on `element.player`.
 //
-//   <script type="module">import "valle-engine/element";</script>
+//   <script type="module">import "@openvalle/engine/element";</script>
 //   <valle-player src="/works/card/card.motion.tsx" runtime="/valle/" loop autoplay muted></valle-player>
 //
 // It says `ready` once `player` has what `src` names open, and `error` with the error in its

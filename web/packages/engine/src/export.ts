@@ -1,7 +1,7 @@
 // Exporting in the browser: what a player has open, as it is bound now, rendered again by a
 // worker of its own into an MP4, so playing, seeking and the volume do not touch it.
 //
-//   import { exportBrowserVideo } from "valle-engine/export";
+//   import { exportBrowserVideo } from "@openvalle/engine/export";
 //   const { blob } = await exportBrowserVideo(player, { width: 1280, height: 720 });
 
 import { Connection, PlayerError, spawns } from "./connection.ts";

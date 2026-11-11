@@ -297,9 +297,19 @@ fn build_web() -> Result<(), String> {
             ),
         "bun build",
     )?;
+    // The entries' declarations, from the same sources: their types for TypeScript.
+    let tsconfig = package.join("tsconfig.json");
+    run(
+        Command::new("bun").args(["x", "tsc", "-p"]).arg(&tsconfig),
+        "tsc",
+    )?;
     let from = package.join("src/wasm/valle_web_bg.wasm");
     std::fs::copy(&from, dist.join("valle_web_bg.wasm"))
         .map_err(|e| format!("{}: {e}", from.display()))?;
+    // npm ships a package's license only from its own directory.
+    let license = root().join("LICENSE");
+    std::fs::copy(&license, package.join("LICENSE"))
+        .map_err(|e| format!("{}: {e}", license.display()))?;
     println!("built {}", dist.display());
     // Studio, which the local service serves beside the SDK's runtime.
     let studio = root().join("web/apps/studio");
