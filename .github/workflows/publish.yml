@@ -1,0 +1,38 @@
+name: Publish
+
+# Publishing a drafted release puts its browser engine on npm: the package in the draft, read
+# there before publishing, not a new build.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  npm:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # The provenance that links the package to this repository.
+      id-token: write
+    steps:
+      - name: Download the package from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'openvalle-engine-*.tgz' --pattern SHA256SUMS
+          grep ' openvalle-engine-' SHA256SUMS | sha256sum -c -
+          package=$(ls openvalle-engine-*.tgz)
+          test "$package" = "openvalle-engine-${TAG#v}.tgz"
+          echo "PACKAGE=$package" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish "$PACKAGE" --provenance --access public
