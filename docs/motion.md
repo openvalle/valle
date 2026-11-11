@@ -135,7 +135,7 @@ gives `width`, `height`, `fps`, `duration` and `clipDuration`.
 | `Echo` | `count`, `delay`, `decay`: copies of its children at earlier times |
 | `Shutter` | `samples`, `angle`: motion blur from several sub-frame samples |
 | `World` | `camera={{ center, zoom, rotation }}`: a 2D camera over its children |
-| `ShaderLayer` | Your own WGSL shader over its children: `code` or `source`, `uniforms`, `inputs` |
+| `ShaderLayer` | Your own WGSL shader: `code` or `source`, `uniforms`, `inputs`, `outset`; see below |
 | `Transition` | Goes between two children over the scene's time |
 | `svg` | Inline SVG: `path`, `circle`, `rect`, `line`, `polyline`, `polygon`, `g`, gradients, `text` |
 
@@ -159,7 +159,8 @@ Supported, among others:
   with `perspective`.
 - Filters: `filter` and `backdropFilter`: `blur`, `brightness`, `contrast`, `grayscale`,
   `hue-rotate`, `invert`, `saturate`, `sepia`, `drop-shadow`, `opacity`, plus Valle's
-  `bloom(…)` and `displacement(…)`.
+  `bloom`, `displacement`, `film-grain`, `chromatic-aberration`, `lens-distortion` and
+  `radial-blur`, documented below.
 - Text: `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `lineHeight`, `letterSpacing`,
   `textAlign`, `textTransform`, `textDecoration`, `textShadow`, `WebkitTextStroke`,
   `fontVariationSettings`, `whiteSpace`.
@@ -168,6 +169,140 @@ Supported, among others:
 Not supported: CSS variables (use JavaScript constants), `@keyframes` and CSS transitions
 (animate with values over time), `position: fixed`/`sticky`, hover and other states. An
 unsupported property or class is an error that says so.
+
+## Valle filters
+
+Use these in `style.filter` for the element and its children, or `style.backdropFilter`
+for the picture behind its box. Functions run from left to right; separate functions and
+their arguments with spaces, not commas. These six functions are Valle extensions, not
+browser CSS.
+
+Lengths below take `px`, such as `2px`, not `2`, `2em` or `20%`. A unitless `0` is accepted
+where the range includes zero. Lengths are layout pixels and scale with the output size.
+Numbers have no unit. Square brackets mark optional arguments; do not write the brackets.
+
+| Function | Parameters | Effect |
+| --- | --- | --- |
+| `bloom(radius intensity threshold [knee])` | `radius`: 0–128px; `intensity`: 0–4; `threshold`: 0–1; `knee`: 0–1, default 0.1 | Adds a blurred glow from bright areas. `threshold` selects the brightness; `knee` softens that cutoff. |
+| `displacement(seed fx fy scale [octaves [mode]])` | `fx`, `fy`: 0–1 cycles per layout pixel; `scale`: −256–256px; `octaves`: integer 1–4, default 2; `mode`: `fractal` (default) or `turbulence` | Warps the picture with seeded noise. Higher frequencies make smaller ripples; more octaves add detail. Supply `octaves` before `mode`. |
+| `film-grain(seed amount size)` | `amount`: 0–1; `size`: 1–64px | Adds seeded grain to colors, preserving alpha. `size` is the noise cell size. |
+| `chromatic-aberration(offset)` | `offset`: −256–256px | Moves red and blue in opposite horizontal directions, each by half the offset; green stays put. |
+| `lens-distortion(k1 k2)` | `k1`, `k2`: each −0.5–0.5 | Warps around the box center, with quadratic and quartic radial coefficients. Zero leaves the picture unchanged. |
+| `radial-blur(x y amount)` | `x`, `y`: −1000000–1000000px from the border box's top left; `amount`: 0–128px | Blurs along rays from `(x, y)`, by up to `amount` in each direction. |
+
+Both `seed` parameters are integers from 0 to 4294967295. A fixed seed gives a fixed pattern;
+the noise does not animate by itself. All parameters are required unless marked optional.
+
+```tsx scene filters.motion.tsx
+export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
+
+const effects = [
+  "bloom(12px 1 0.6)",
+  "displacement(7 0.03 0.03 12px 2 turbulence)",
+  "film-grain(3 0.4 2px)",
+  "chromatic-aberration(4px)",
+  "lens-distortion(0.2 0)",
+  "radial-blur(90px 70px 8px)",
+];
+
+export default function Filters() {
+  return (
+    <View style={{
+      display: "flex", width: 640, height: 360, padding: 24, gap: 24,
+      flexDirection: "row", flexWrap: "wrap", background: "#182030",
+    }}>
+      {effects.map((filter) => (
+        <View key={filter} style={{
+          display: "flex", width: 180, height: 140,
+          alignItems: "center", justifyContent: "center",
+          background: "linear-gradient(135deg, #245080, #b04070)", filter,
+        }}>
+          <Text style={{ fontSize: 48, fontWeight: 700, color: "white" }}>Valle</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+```
+
+To combine effects, write `filter: "bloom(12px 1 0.6) film-grain(3 0.2 2px)"`. Animate
+parameters with template strings, for example ``filter: `bloom(${radius}px 1 0.6)` ``.
+
+## Custom WGSL shaders
+
+`ShaderLayer` draws a box with your WGSL function. It can read its children as a texture,
+the backdrop, or supplied images; a procedural shader can also draw without children.
+Give it a size through `style` or layout. This complete scene gradually inverts its children:
+
+```tsx scene shader.motion.tsx
+export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
+
+const code = `
+struct Params { amount: f32 }
+@group(2) @binding(0) var<uniform> params: Params;
+@group(2) @binding(1) var content: texture_2d<f32>;
+@group(2) @binding(2) var sampling: sampler;
+
+fn shade(input: ShaderInput) -> vec4f {
+  let color = textureSampleLevel(content, sampling, input.uv, 0.0);
+  let inverted = mix(color.rgb, vec3f(1.0) - color.rgb, params.amount);
+  return vec4f(inverted, color.a);
+}`;
+
+export default function Shader() {
+  const { seconds } = useCurrentTime();
+  const amount = interpolate(seconds, [0, 2], [0, 1]);
+  return (
+    <ShaderLayer code={code} uniforms={{ amount }} style={{ width: 640, height: 360 }}>
+      <View style={{
+        display: "flex", width: "100%", height: "100%",
+        alignItems: "center", justifyContent: "center",
+        background: "linear-gradient(135deg, #245080, #b04070)",
+      }}>
+        <Text style={{ fontSize: 80, fontWeight: 700, color: "white" }}>WGSL</Text>
+      </View>
+    </ShaderLayer>
+  );
+}
+```
+
+The entry is `fn shade(input: ShaderInput) -> vec4f`. Valle supplies `ShaderInput` and the
+fragment entry: do not redeclare the struct or add `@fragment`, `@vertex` or `@compute`.
+Return sRGB-encoded RGB and straight (unpremultiplied) alpha. Valle clamps the four channels
+to 0–1, applies edge coverage and premultiplies for compositing; do not multiply RGB by
+alpha yourself. Input textures also contain sRGB colors with straight alpha.
+
+| `ShaderInput` field | Type | Meaning |
+| --- | --- | --- |
+| `uv` | `vec2f` | Normalized local coordinates, `(0, 0)` at the bottom left and `(1, 1)` at the top right. Input textures use the same orientation. |
+| `size` | `vec2f` | The box's width and height in layout pixels, before transforms and output scaling. |
+| `pixel` | `vec2f` | `uv` multiplied by the box's raster dimensions, which account for rendering scale. A local pixel coordinate, not a pixel size or a position on the whole canvas. |
+
+Use `input.uv * input.size` for positions in layout pixels; `input.pixel` is useful for
+patterns in raster pixels. With `outset`, coordinates outside the original box can go
+below 0 or above 1; the UV range is not stretched to include the extra area.
+
+| Prop | Meaning |
+| --- | --- |
+| `code` | A fixed WGSL string, as above. |
+| `source` | A shader resource such as `"resource://wave"`, instead of `code`. Declare it with `resource({ kind: "shader", default: "./wave.wgsl" })` in `controls.resources`. |
+| `uniforms` | Values by uniform **field** name, such as `{ amount: seconds }`, not by the struct or variable name. Values can animate; code and bindings stay fixed. Omitted fields are zero. |
+| `inputs` | Textures by WGSL variable name, such as `{ picture: "resource://photo" }` for `var picture: texture_2d<f32>`. Declare the image resource in `controls.resources`; Timeline roles can also use `"input://source"`, `"input://from"` or `"input://to"` where available. |
+| `outset` | A fixed nonnegative number of layout pixels to paint past each side of the box, default 0. It does not change layout or enlarge the captured input textures; ancestor clipping still applies. |
+
+Author bindings use `@group(2)`; groups 0 and 1 belong to Valle. Binding numbers must be
+unique but need not be consecutive. You may declare one uniform struct, `texture_2d<f32>`
+images and filtering samplers. Uniform fields support `f32`, `i32`, `u32`, vectors,
+matrices and fixed arrays. Pass vectors, matrices and arrays as flat JavaScript arrays
+(matrices column by column); Valle handles WGSL padding. Color strings can fill `vec3f`
+or `vec4f` fields. Use a `u32` field for a JavaScript boolean, not WGSL `bool`.
+
+Texture variable names select what to read: `content` is the layer's content, including its
+children; `backdrop` is the picture behind the layer, captured over its box. Declare either
+only when needed, without adding it to `inputs`. Other texture names must match `inputs`
+keys. Use `textureDimensions(texture)` when you need a supplied image's dimensions: they
+can differ from the layer's size. Time is not an implicit shader global; pass `seconds`
+through `uniforms` when needed.
 
 ## Animation
 

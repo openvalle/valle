@@ -2540,8 +2540,8 @@ mod tests {
                 "chromatic-aberration(300px)",
                 "the offset 300px is not within -256px and 256px",
             ),
-            ("chromatic-aberration(1em)", "the offset 1em is not px"),
-            ("chromatic-aberration(4)", "the offset 4 is not px"),
+            ("chromatic-aberration(1em)", "the offset 1em must use px"),
+            ("chromatic-aberration(4)", "the offset 4 needs a unit: 4px"),
             ("chromatic-aberration()", "takes the offset"),
             ("chromatic-aberration(1px 2px)", "takes the offset"),
             (
@@ -2556,7 +2556,7 @@ mod tests {
             ),
             ("film-grain(-1 0.5 2px)", "the seed -1 is not within"),
             ("radial-blur(10px 10px)", "takes x, y, the amount"),
-            ("radial-blur(50% 10px 4px)", "x 50% is not px"),
+            ("radial-blur(50% 10px 4px)", "x 50% must use px"),
             (
                 "radial-blur(1px 1px 129px)",
                 "the amount 129px is not within 0px and 128px",
@@ -2565,7 +2565,7 @@ mod tests {
                 "displacement(7 0.1 0.1)",
                 "takes the seed, fx, fy and the scale",
             ),
-            ("displacement(7 0.1 0.1 4)", "the scale 4 is not px"),
+            ("displacement(7 0.1 0.1 4)", "the scale 4 needs a unit: 4px"),
             (
                 "displacement(7 0.1 1.5 4px)",
                 "fy 1.5 is not within 0 and 1",
@@ -2586,7 +2586,7 @@ mod tests {
                 "bloom(12px 1)",
                 "takes the radius, the intensity and the threshold",
             ),
-            ("bloom(12 1 0.5)", "the radius 12 is not px"),
+            ("bloom(12 1 0.5)", "the radius 12 needs a unit: 12px"),
             ("bloom(12px 5 0.5)", "the intensity 5 is not within 0 and 4"),
             ("bloom(12px 1 0.5 2)", "the knee 2 is not within 0 and 1"),
             (

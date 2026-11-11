@@ -168,18 +168,26 @@ fn function(w: &str) -> Result<Function<Len, Option<Rgba>>, String> {
         }
         (args.iter().zip(takes))
             .map(|(a, &(what, px, [low, high]))| {
-                let n = css::num(a).filter(|n| match px {
-                    true => n.unit == "px" || (n.unit.is_empty() && n.value == 0.0),
-                    false => n.unit.is_empty(),
-                });
+                let n = css::num(a).ok_or_else(|| {
+                    let kind = if px { "a length" } else { "a number" };
+                    named(format!("{what} {a} is not {kind}"))
+                })?;
+                if px {
+                    match n.unit {
+                        "px" => {}
+                        "" if n.value == 0.0 => {}
+                        "" => return Err(named(format!("{what} {a} needs a unit: {a}px"))),
+                        _ => return Err(named(format!("{what} {a} must use px"))),
+                    }
+                } else if !n.unit.is_empty() {
+                    return Err(named(format!("{what} {a} is not a number")));
+                }
                 let unit = if px { "px" } else { "" };
-                match n {
-                    Some(n) if (low..=high).contains(&n.value) => Ok(n.value),
-                    Some(_) => Err(named(format!(
+                match (low..=high).contains(&n.value) {
+                    true => Ok(n.value),
+                    false => Err(named(format!(
                         "{what} {a} is not within {low}{unit} and {high}{unit}"
                     ))),
-                    None if px => Err(named(format!("{what} {a} is not px"))),
-                    None => Err(named(format!("{what} {a} is not a number"))),
                 }
             })
             .collect()
@@ -381,6 +389,47 @@ mod tests {
             "drop-shadow(1px 2px 3px 4px)",
         ] {
             assert!(filter(s).is_err(), "{s}");
+        }
+    }
+
+    #[test]
+    fn custom_filter_lengths_distinguish_missing_units_from_invalid_values() {
+        for (source, expected) in [
+            ("blur(4)", "blur(): 4 needs a unit: 4px"),
+            (
+                "film-grain(3 0.2 2)",
+                "film-grain(): the size 2 needs a unit: 2px",
+            ),
+            (
+                "chromatic-aberration(-2.5)",
+                "chromatic-aberration(): the offset -2.5 needs a unit: -2.5px",
+            ),
+            (
+                "radial-blur(0 4 2px)",
+                "radial-blur(): y 4 needs a unit: 4px",
+            ),
+            (
+                "radial-blur(0 0 2)",
+                "radial-blur(): the amount 2 needs a unit: 2px",
+            ),
+            (
+                "film-grain(3 0.2 2em)",
+                "film-grain(): the size 2em must use px",
+            ),
+            (
+                "film-grain(3 0.2 20%)",
+                "film-grain(): the size 20% must use px",
+            ),
+            (
+                "film-grain(3 0.2 abc)",
+                "film-grain(): the size abc is not a length",
+            ),
+            (
+                "film-grain(3 0.2 0)",
+                "film-grain(): the size 0 is not within 1px and 64px",
+            ),
+        ] {
+            assert_eq!(filter(source).unwrap_err(), expected, "{source}");
         }
     }
 }
