@@ -168,6 +168,7 @@ pub fn mix(path: &str, doc: &Document) -> Result<(Mix, Vec<Source>), Error> {
     let silent =
         |t: &Track| matches!(&t.sound.gain, Some(Animated::Constant(v)) if v.as_f64() == Some(0.0));
     let tracks: Vec<&Track> = (doc.tracks.iter())
+        .filter(|t| t.enabled)
         .filter(|t| match t.kind {
             valle_timeline::Kind::Audio => true,
             valle_timeline::Kind::Visual => !silent(t) && t.clips.iter().any(sounds),

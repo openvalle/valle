@@ -5,11 +5,11 @@
 //
 //   bun web/tests/studio.ts <valle binary>
 
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { evaluate as evaluatePage, launch, root } from "./browser.ts";
+import { cache, evaluate as evaluatePage, launch, root } from "./browser.ts";
 
 const valle = process.argv[2];
 if (!valle) {
@@ -80,6 +80,18 @@ export default function Scene() {
     join(project, "empty.timeline.json"),
     JSON.stringify({ canvas: CUT.canvas, tracks: {} }),
   );
+  await Bun.write(
+    join(project, "unnamed.timeline.json"),
+    JSON.stringify({
+      canvas: CUT.canvas,
+      tracks: {
+        visual: [
+          { clips: [{ kind: "solid", color: "red", start: 0, duration: 2 }] },
+          { clips: [] },
+        ],
+      },
+    }),
+  );
   const linked = join(project, "linked.timeline.json");
   await Bun.write(
     linked,
@@ -113,9 +125,16 @@ export default function Scene() {
   );
   run(["timeline", "render", cut, "--frame", "20", "-o", join(dir, "native.png")]);
 
+  // The projects opened here are remembered beside the cache: this run's own place, with the
+  // real cache linked in, keeps them out of the user's recent projects.
+  await mkdir(cache, { recursive: true });
+  await mkdir(join(dir, "state"));
+  await symlink(cache, join(dir, "state/cache"));
+  const env = { ...process.env, VALLE_CACHE_DIR: join(dir, "state/cache") };
   const service = Bun.spawn([valle, "project", "studio", project, "--port", "0", "--events"], {
     stdout: "pipe",
     stderr: "inherit",
+    env,
   });
   const browser = await launch().catch(async (error) => {
     service.kill();
@@ -195,11 +214,10 @@ export default function Scene() {
     expect(rate > 0 && rate <= 31, `the 30 fps video's measured rate is ${rate} fps`);
     expect(
       await evaluate(`
-        const head = studio.shadowRoot.querySelector('.preview-head').getBoundingClientRect();
-        const fps = studio.shadowRoot.querySelector('[data-metric="fps"]').getBoundingClientRect();
-        return Math.abs(fps.x + fps.width / 2 - head.x - head.width / 2) < 1
+        return !!studio.shadowRoot.querySelector('.transport [data-metric="fps"]')
+          && !studio.shadowRoot.querySelector('.preview-head')
           && !studio.shadowRoot.querySelector('[data-metric="dropped"], [data-metric="frame-time"]');`),
-      "only live FPS is shown, centered above the preview",
+      "only live FPS is shown, beside the playback controls",
     );
     await page.getByRole("button", { name: "Pause", exact: true }).click();
     await evaluate("studio.player.loop = false;");
@@ -265,6 +283,57 @@ export default function Scene() {
     expect(Math.abs((await clipWidth()) - fitWidth * 2) < 1, "timeline zoom expands the clips");
     await page.getByRole("button", { name: "Fit", exact: true }).click();
     await until("fit timeline", async () => Math.abs((await clipWidth()) - fitWidth) < 1);
+
+    // Tracks are numbered by kind; the ruler scrubs by dragging; arrows step a frame; a click
+    // on empty track lets the selection go.
+    const view = 'studio.shadowRoot.querySelector("timeline-view").shadowRoot';
+    expect(
+      (await evaluate(
+        `return [...${view}.querySelectorAll(".label small")].map((e) => e.textContent).join();`,
+      )) === "V1,V2",
+      "tracks are labelled by their kind and place",
+    );
+    const ruler = await evaluate(
+      `const r = ${view}.querySelector(".ruler").getBoundingClientRect(); const c = ${view}.querySelector(".clip").getBoundingClientRect(); return { x: r.x, y: r.y + r.height / 2, perSecond: c.width };`,
+    );
+    await page.mouse.move(ruler.x + ruler.perSecond * 0.2, ruler.y);
+    await page.mouse.down();
+    await page.mouse.move(ruler.x + ruler.perSecond * 1.5, ruler.y, { steps: 5 });
+    await page.mouse.up();
+    await until("the ruler's scrub", () => evaluate("return studio.player.currentFrame === 45;"));
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("Shift+ArrowLeft");
+    await until("frame steps", () => evaluate("return studio.player.currentFrame === 16;"));
+    await page.keyboard.press("Home");
+    await until("the first frame", () => evaluate("return studio.player.currentFrame === 0;"));
+    await page.locator('.clip[data-at="tracks.visual[1].clips[0]"]').click();
+    expect(
+      (await page.getByRole("textbox", { name: "Clip name" }).count()) === 1,
+      "a click selects a clip",
+    );
+    await evaluate('window.lockedText = studio.text("cut.timeline.json");');
+    await page.getByRole("button", { name: "Lock V2", exact: true }).click();
+    await page.keyboard.press("Delete");
+    await until("locked delete refused", () =>
+      evaluate('return studio.shadowRoot.textContent.includes("is locked");'),
+    );
+    expect(
+      await evaluate('return studio.text("cut.timeline.json") === window.lockedText;'),
+      "locking a selected track prevents keyboard deletion",
+    );
+    await page.getByRole("textbox", { name: "Clip name" }).fill("Must not change");
+    await page.getByRole("textbox", { name: "Clip name" }).press("Tab");
+    await evaluate("await studio.save();");
+    expect(
+      await evaluate('return studio.text("cut.timeline.json") === window.lockedText;'),
+      "locking a track also prevents inspector edits",
+    );
+    await page.getByRole("button", { name: "Lock V2", exact: true }).click();
+    await page.mouse.click(ruler.x + ruler.perSecond * 1.8, ruler.y + 60);
+    expect(
+      (await page.getByRole("textbox", { name: "Clip name" }).count()) === 0,
+      "a click on an empty track clears the selection",
+    );
 
     // A placed clip dragged 0.5 s later on the timeline.
     const box = await evaluate(`
@@ -630,6 +699,13 @@ export default function Scene() {
       ),
       "a duplicate id keeps the document and player unchanged",
     );
+    await page.getByRole("button", { name: "Lock C1", exact: true }).click();
+    await evaluate('await studio.edit({op:"delete",clip:"hero"});');
+    expect(
+      await evaluate('return studio.text("linked.timeline.json") === window.linkedText;'),
+      "a locked caption track also blocks cascading deletion from an unlocked video track",
+    );
+    await page.getByRole("button", { name: "Lock C1", exact: true }).click();
     await page.locator('.clip[data-at="tracks.visual[0].items[2]"]').click();
     await page.keyboard.press("Delete");
     await until("linked deletion", () =>
@@ -693,6 +769,106 @@ export default function Scene() {
       "a video linked outside the project decodes and draws in Studio",
     );
 
+    await openFile("unnamed.timeline.json", 320);
+    const cross = await evaluate(`
+      const v = studio.shadowRoot.querySelector("timeline-view").shadowRoot;
+      const a = v.querySelector(".clip").getBoundingClientRect();
+      const b = v.querySelector('[data-track="tracks.visual[1]"]').getBoundingClientRect();
+      return {x:a.x+a.width/2, y:a.y+a.height/2, to:b.y+b.height/2};`);
+    await page.mouse.move(cross.x, cross.y);
+    await page.mouse.down();
+    await page.mouse.move(cross.x, cross.to, { steps: 5 });
+    await page.mouse.up();
+    await until("cross-track move", () =>
+      evaluate("return studio.layout.tracks[1].clips.length === 1;"),
+    );
+    expect(
+      (await page.getByRole("textbox", { name: "Clip name" }).getAttribute("placeholder")) ===
+        "visual0.0",
+      "an unnamed clip dragged between tracks retains its identity and selection",
+    );
+
+    // Replace with the same byte length: neither the service nor browser may use length as
+    // the media's identity. A valid MP4 free atom pads the shorter export.
+    const originals = await Promise.all(
+      ["other", "cut"].map(async (name) =>
+        Buffer.from(await Bun.file(join(project, `renders/${name}.mp4`)).arrayBuffer()),
+      ),
+    );
+    const length = Math.max(...originals.map((bytes) => bytes.length)) + 8;
+    const videos = originals.map((bytes) => {
+      const free = Buffer.alloc(length - bytes.length);
+      free.writeUInt32BE(free.length);
+      free.write("free", 4);
+      return Buffer.concat([bytes, free]);
+    });
+    await Bun.write(join(project, "sample.mp4"), videos[0]);
+    const sound = (amplitude: number) => {
+      const rate = 8000,
+        samples = rate * 2;
+      const wav = Buffer.alloc(44 + samples * 2);
+      wav.write("RIFF", 0);
+      wav.writeUInt32LE(wav.length - 8, 4);
+      wav.write("WAVEfmt ", 8);
+      wav.writeUInt32LE(16, 16);
+      wav.writeUInt16LE(1, 20);
+      wav.writeUInt16LE(1, 22);
+      wav.writeUInt32LE(rate, 24);
+      wav.writeUInt32LE(rate * 2, 28);
+      wav.writeUInt16LE(2, 32);
+      wav.writeUInt16LE(16, 34);
+      wav.write("data", 36);
+      wav.writeUInt32LE(samples * 2, 40);
+      for (let i = 0; i < samples; i++)
+        wav.writeInt16LE(
+          Math.round(Math.sin((i * 2 * Math.PI * 440) / rate) * amplitude * 32767),
+          44 + i * 2,
+        );
+      return wav;
+    };
+    await Bun.write(join(project, "sample.wav"), sound(0.2));
+    await Bun.write(
+      join(project, "sound.timeline.json"),
+      JSON.stringify({
+        canvas: CUT.canvas,
+        resources: { sound: "sample.wav" },
+        tracks: { audio: [{ clips: [{ id: "sound", src: "sound", start: 0, duration: 2 }] }] },
+      }),
+    );
+    await page.reload();
+    await until("project with media", () => evaluate("return !!studio.player;"));
+    await openFile("sound.timeline.json", 320);
+    await until("audio track", () =>
+      evaluate('return studio.layout?.tracks[0]?.kind === "audio";'),
+    );
+    await page.getByRole("tab", { name: "Media", exact: true }).click();
+    const thumbnail = page.locator('.asset[title="sample.mp4"] .thumbnail img');
+    await thumbnail.waitFor({ timeout: 15000 });
+    const oldThumbnail = await thumbnail.getAttribute("src");
+    await Bun.write(join(project, "sample.mp4"), videos[1]);
+    await until(
+      "replaced video's thumbnail",
+      async () =>
+        (await thumbnail.count()) && (await thumbnail.getAttribute("src")) !== oldThumbnail,
+    );
+    expect(true, "replacing a video invalidates its cached thumbnail");
+    const waveform = page.locator("timeline-view .strip.wave path");
+    const mediaWave = page.locator('.asset[title="sample.wav"] .wave path');
+    await waveform.waitFor({ timeout: 15000 });
+    await mediaWave.waitFor({ timeout: 15000 });
+    const oldWave = await waveform.getAttribute("d"),
+      oldMediaWave = await mediaWave.getAttribute("d");
+    await Bun.write(join(project, "sample.wav"), sound(0.8));
+    await until(
+      "replaced sound's waveforms",
+      async () =>
+        (await waveform.count()) &&
+        (await mediaWave.count()) &&
+        (await waveform.getAttribute("d")) !== oldWave &&
+        (await mediaWave.getAttribute("d")) !== oldMediaWave,
+    );
+    expect(true, "replacing a sound refreshes both the timeline and media browser waveforms");
+
     // Standalone Studio does not have the renders/ directory created with a project.
     for (const kind of ["motion", "timeline"] as const) {
       const folder = join(dir, kind);
@@ -707,10 +883,7 @@ export default function Scene() {
       );
       const standalone = Bun.spawn(
         [valle, kind, "studio", join(folder, entry), "--port", "0", "--events"],
-        {
-          stdout: "pipe",
-          stderr: "inherit",
-        },
+        { stdout: "pipe", stderr: "inherit", env },
       );
       try {
         const { value } = await standalone.stdout.getReader().read();

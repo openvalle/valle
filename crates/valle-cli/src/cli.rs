@@ -170,7 +170,10 @@ Editing conventions:
   clip / track             an id or JSON path, as query returns in path / trackAt
   move.index               the destination array index from 0; out of range is an error;
                            transitions are removed when their neighbors separate
+  move.track               another track of the clip's kind: the end of a sequence, or among
+                           placed clips at start, else where the clip was
   set id                   updates every anchor that names the clip
+  set track                with track in place of clip: a track's own field, such as enabled
   delete                   also removes adjacent transitions and clips anchored to it
   add                      appends to a track; tracks.<kind>[n] makes a track when n is the
                            number of tracks of that kind (0 for the first)

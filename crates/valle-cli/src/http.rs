@@ -1,7 +1,9 @@
 //! The little of HTTP/1.1 Studio's local service speaks: one request a connection, read whole,
-//! and its response written whole, or streamed as server-sent events.
+//! and its response written from bytes, streamed from a file, or sent as server-sent events.
 
-use std::io::{self, BufRead, Write};
+use std::fs::File;
+use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
+use std::path::Path;
 
 /// The most a request's headers and its body may take.
 const HEAD: usize = 64 << 10;
@@ -86,6 +88,7 @@ pub struct Response {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+    file: Option<(File, u64)>,
 }
 
 impl Response {
@@ -94,7 +97,20 @@ impl Response {
             status,
             headers: vec![("content-type".into(), kind.into())],
             body: body.into(),
+            file: None,
         }
+    }
+
+    /// Keeps an open file, copied to the connection in bounded chunks when written.
+    pub fn file(path: &Path, kind: &str) -> io::Result<Response> {
+        let file = File::open(path)?;
+        let meta = file.metadata()?;
+        if !meta.is_file() {
+            return Err(io::Error::other("not a file"));
+        }
+        let mut response = Self::new(200, kind, Vec::new());
+        response.file = Some((file, meta.len()));
+        Ok(response)
     }
 
     pub fn json(status: u16, value: &serde_json::Value) -> Response {
@@ -106,6 +122,51 @@ impl Response {
         self
     }
 
+    /// The part of a found body that `range` asks for, a `Range` header of one span of bytes,
+    /// which a browser needs to seek in a video or a sound; all of it without one.
+    pub fn ranged(mut self, range: Option<&str>) -> Response {
+        if self.status != 200 {
+            return self;
+        }
+        self = self.header("accept-ranges", "bytes");
+        let total = self
+            .file
+            .as_ref()
+            .map_or(self.body.len() as u64, |(_, n)| *n);
+        let Some(span) = range.and_then(|r| r.strip_prefix("bytes=")) else {
+            return self;
+        };
+        let bounds = span.split_once('-').and_then(|(from, to)| {
+            let last = total.checked_sub(1)?;
+            Some(
+                match (from.trim().parse::<u64>(), to.trim().parse::<u64>()) {
+                    (Ok(from), Ok(to)) => (from, to.min(last)),
+                    (Ok(from), Err(_)) if to.trim().is_empty() => (from, last),
+                    // The last `to` bytes.
+                    (Err(_), Ok(to)) if from.trim().is_empty() => (total.saturating_sub(to), last),
+                    _ => return None,
+                },
+            )
+        });
+        let Some((from, to)) = bounds.filter(|(from, to)| from <= to) else {
+            self.status = 416;
+            self.body.clear();
+            self.file = None;
+            return self.header("content-range", format!("bytes */{total}"));
+        };
+        self.status = 206;
+        if let Some((file, length)) = &mut self.file {
+            if let Err(e) = file.seek(SeekFrom::Start(from)) {
+                return Self::new(500, "text/plain", e.to_string());
+            }
+            *length = to - from + 1;
+        } else {
+            self.body.truncate(to as usize + 1);
+            self.body.drain(..from as usize);
+        }
+        self.header("content-range", format!("bytes {from}-{to}/{total}"))
+    }
+
     /// The status line and headers, and the body unless the response is a stream, whose
     /// length is not known.
     pub fn write(&self, out: &mut impl Write, stream: bool) -> io::Result<()> {
@@ -114,12 +175,20 @@ impl Response {
             head.push_str(&format!("{k}: {v}\r\n"));
         }
         if !stream {
-            head.push_str(&format!("content-length: {}\r\n", self.body.len()));
+            let length = self
+                .file
+                .as_ref()
+                .map_or(self.body.len() as u64, |(_, n)| *n);
+            head.push_str(&format!("content-length: {length}\r\n"));
         }
         head.push_str("connection: close\r\n\r\n");
         out.write_all(head.as_bytes())?;
         if !stream {
-            out.write_all(&self.body)?;
+            if let Some((file, length)) = &self.file {
+                io::copy(&mut file.take(*length), out)?;
+            } else {
+                out.write_all(&self.body)?;
+            }
         }
         out.flush()
     }
@@ -128,12 +197,14 @@ impl Response {
 fn reason(status: u16) -> &'static str {
     match status {
         200 => "OK",
+        206 => "Partial Content",
         400 => "Bad Request",
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
         406 => "Not Acceptable",
         409 => "Conflict",
+        416 => "Range Not Satisfiable",
         428 => "Precondition Required",
         500 => "Internal Server Error",
         502 => "Bad Gateway",
@@ -208,5 +279,55 @@ mod tests {
     fn bad_escapes_are_refused() {
         assert_eq!(decode("%zz"), None);
         assert_eq!(decode("%e4%b8%ad"), Some("中".into()));
+    }
+
+    #[test]
+    fn file_ranges_stream_only_the_requested_bytes() {
+        let path = std::env::temp_dir().join(format!("valle-http-ranges-{}", std::process::id()));
+        std::fs::write(&path, b"0123456789").unwrap();
+        for (range, status, body) in [
+            (None, 200, "0123456789"),
+            (Some("bytes=2-4"), 206, "234"),
+            (Some("bytes=7-"), 206, "789"),
+            (Some("bytes=-3"), 206, "789"),
+            (Some("bytes=8-99"), 206, "89"),
+            (Some("bytes=10-"), 416, ""),
+            (Some("bytes=4-2"), 416, ""),
+            (Some("bytes=-0"), 416, ""),
+        ] {
+            let response = Response::file(&path, "video/mp4").unwrap().ranged(range);
+            assert_eq!(response.status, status, "{range:?}");
+            assert!(
+                response.body.is_empty(),
+                "files stay out of the in-memory body"
+            );
+            let mut wire = Vec::new();
+            response.write(&mut wire, false).unwrap();
+            let split = wire.windows(4).position(|p| p == b"\r\n\r\n").unwrap();
+            assert_eq!(&wire[split + 4..], body.as_bytes(), "{range:?}");
+        }
+        // A large sparse file must remain cheap to seek, regardless of its total length.
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(1 << 30)
+            .unwrap();
+        let response = Response::file(&path, "video/mp4")
+            .unwrap()
+            .ranged(Some("bytes=2-4"));
+        assert!(response.body.is_empty());
+        let mut wire = Vec::new();
+        response.write(&mut wire, false).unwrap();
+        assert!(wire.ends_with(b"\r\n\r\n234"));
+        std::fs::write(&path, b"").unwrap();
+        assert_eq!(
+            Response::file(&path, "video/mp4")
+                .unwrap()
+                .ranged(Some("bytes=0-"))
+                .status,
+            416
+        );
+        std::fs::remove_file(path).unwrap();
     }
 }

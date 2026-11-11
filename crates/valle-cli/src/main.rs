@@ -115,6 +115,10 @@ fn main() -> ExitCode {
         println!("{}", studio::save_file(name));
         return ExitCode::SUCCESS;
     }
+    if words == ["--studio-pick-folder"] {
+        println!("{}", studio::pick_folder());
+        return ExitCode::SUCCESS;
+    }
     let cli = match Cli::try_parse_from(std::iter::once("valle".to_string()).chain(words.clone())) {
         Ok(cli) => cli,
         Err(e) => return parse_failed(&e, &words),

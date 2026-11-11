@@ -227,8 +227,37 @@ fn the_service_reads_writes_and_runs_for_its_page_only() {
     let sha = timeline.header("x-valle-sha256").expect("its SHA-256");
     assert_eq!(studio.get("/api/files/../outside.txt").status, 403);
     assert_eq!(studio.get("/api/files/missing.txt").status, 404);
+    // A span of a file, as a browser asks for one to seek in media.
+    let span = [("Range", "bytes=1-3")];
+    let part = studio.send("GET", "/api/files/main.timeline.json", &span, &[]);
+    assert_eq!(part.status, 206);
+    assert_eq!(part.body, timeline.body[1..=3]);
+    let total = timeline.body.len();
+    assert_eq!(
+        part.header("content-range"),
+        Some(format!("bytes 1-3/{total}"))
+    );
+    let past = [("Range", "bytes=999999-")];
+    let none = studio.send("GET", "/api/files/main.timeline.json", &past, &[]);
+    assert_eq!(none.status, 416);
 
     let events = events(&studio);
+    // Reading and seeking media does not hash the whole file. Its replacements still emit a
+    // change, including replacement with the same length.
+    let media = project.join("clip.mp4");
+    std::fs::write(&media, b"first").unwrap();
+    let part = studio.send("GET", "/api/files/clip.mp4", &[("Range", "bytes=1-3")], &[]);
+    assert_eq!(part.body, b"irs");
+    assert_eq!(part.header("x-valle-sha256"), None);
+    let whole = studio.get("/api/files/clip.mp4");
+    assert_eq!(whole.body, b"first");
+    assert_eq!(whole.header("x-valle-sha256"), None);
+    std::fs::write(&media, b"other").unwrap();
+    let changed = next(&events, |e| {
+        e["event"] == "change" && e["path"] == "clip.mp4"
+    });
+    assert!(changed["sha256"].is_null());
+    assert_eq!(studio.get("/api/files/clip.mp4").body, b"other");
     // A new file, once; a file written over what was seen, and not over what was not.
     let new = [("X-Valle-Base", "none")];
     assert_eq!(

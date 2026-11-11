@@ -7,6 +7,7 @@ import { html, LitElement, nothing } from "lit";
 import { styles } from "./styles.ts";
 import { icon } from "./icons.ts";
 import { addMedia, find, selection } from "./edit.ts";
+import { frame, invalidate, PEAKS, peaks, wave } from "./media.ts";
 import { createPlayer, type Player, type Stats } from "../../../packages/engine/src/index.ts";
 
 import {
@@ -14,12 +15,12 @@ import {
   fetching,
   type Layout,
   address,
+  mediaUrl,
   type Listed,
   type Session,
   service,
 } from "./service.ts";
-import "./timeline-view.ts";
-import type { TimelineView } from "./timeline-view.ts";
+import { type TimelineView, title, ZOOM } from "./timeline-view.ts";
 
 /** Files the source panel edits as text. */
 const TEXT = /\.(tsx?|json|css|txt|md|srt|vtt|lrc|csv|wgsl)$/;
@@ -29,6 +30,15 @@ type Step = { path: string; before: string; after: string };
 
 /** A render the service runs: how far it is, and what it made. */
 type Job = { id: number; done: number; frames: number; result?: Record<string, any> };
+
+/** A question asked in a dialog: a snapshot's message, a restore, a new project's place. */
+type Ask =
+  { kind: "snapshot" } | { kind: "restore"; snapshot: number } | { kind: "create"; folder: string };
+
+const BLENDS =
+  "normal multiply screen overlay darken lighten color-dodge color-burn hard-light soft-light difference exclusion hue saturation color luminosity plus-lighter".split(
+    " ",
+  );
 
 export class ValleStudio extends LitElement {
   static styles = styles;
@@ -75,6 +85,12 @@ export class ValleStudio extends LitElement {
   #exporting = false;
   #exportJob: number | undefined;
   #events: EventSource | undefined;
+  /** Whether dragged edges snap to the playhead, markers and other clips. */
+  #snap = true;
+  /** A refusal said over the workspace until it fades. */
+  #toast = "";
+  #fading: ReturnType<typeof setTimeout> | undefined;
+  #ask: Ask | undefined;
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -96,6 +112,7 @@ export class ValleStudio extends LitElement {
     this.#events?.close();
     clearTimeout(this.#reload);
     this.#opening++;
+    invalidate();
     void this.player?.close();
   }
 
@@ -285,9 +302,28 @@ export class ValleStudio extends LitElement {
           this.requestUpdate();
         }
       } catch (error) {
-        this.#status = (error as Error).message;
-        this.requestUpdate();
+        this.#refuse(this.#explain((error as Error).message));
       }
+    });
+  }
+
+  /** Says why an edit was not made: in the status bar, and over the workspace for a while. */
+  #refuse(message: string): void {
+    this.#status = this.#toast = message;
+    clearTimeout(this.#fading);
+    this.#fading = setTimeout(() => {
+      this.#toast = "";
+      this.requestUpdate();
+    }, 6000);
+    this.requestUpdate();
+  }
+
+  /** The service's message with clips called by their names, not their paths. */
+  #explain(message: string): string {
+    const clips = this.layout?.tracks.flatMap((t) => t.clips) ?? [];
+    return message.replace(/tracks\.\w+\[\d+\]\.(?:items|clips)\[\d+\]/g, (at) => {
+      const clip = clips.find((c) => c.at === at);
+      return clip ? `“${title(clip)}”` : at;
     });
   }
 
@@ -304,6 +340,20 @@ export class ValleStudio extends LitElement {
 
   /** Keep the last valid preview and reject an edit that cannot be played. */
   async #accept(step: Step, layout: Layout, selected?: string): Promise<void> {
+    const view = this.renderRoot.querySelector<TimelineView>("timeline-view");
+    const before = JSON.parse(step.before),
+      after = JSON.parse(step.after);
+    for (const track of this.layout?.tracks ?? []) {
+      if (!view?.locked(track.id)) continue;
+      const next = layout.tracks.find((t) => t.id === track.id);
+      if (
+        JSON.stringify(find(before, track.at)) !== JSON.stringify(next && find(after, next.at)) ||
+        JSON.stringify(track.clips) !== JSON.stringify(next?.clips)
+      ) {
+        this.#refuse(`Track “${track.id}” is locked. Unlock it before editing.`);
+        return;
+      }
+    }
     const previous = { layout: this.layout, selected: this.#selected };
     this.#change(step);
     this.layout = layout;
@@ -315,7 +365,7 @@ export class ValleStudio extends LitElement {
       this.#change({ path: step.path, after: step.before });
       this.layout = previous.layout;
       this.#selected = previous.selected;
-      this.#status = `Edit not applied: ${this.#error}`;
+      this.#refuse(`Edit not applied: ${this.#explain(this.#error)}`);
       this.#error = "";
     }
     this.requestUpdate();
@@ -395,6 +445,7 @@ export class ValleStudio extends LitElement {
     if (this.#editing) await this.#editing;
     if (event.event === "change") {
       const path = event.path as string;
+      invalidate(mediaUrl("", path));
       if (this.#drafts.has(path)) {
         this.#conflicts.add(path);
       } else if (this.#files.has(path)) {
@@ -490,15 +541,67 @@ export class ValleStudio extends LitElement {
       } else {
         this.player?.play();
       }
+    } else if (
+      !typing &&
+      !mod &&
+      !event.altKey &&
+      !(target instanceof HTMLElement && target.closest("[role=separator]"))
+    ) {
+      this.#transportKey(event);
     }
   };
+
+  /** ← → and J step a frame, a second with Shift; Home and End go to the ends; K pauses and L
+   * plays; Escape lets the selection go. */
+  #transportKey(event: KeyboardEvent): void {
+    const player = this.player;
+    const last = (player?.info.frames ?? 1) - 1;
+    const step = (frames: number) => {
+      player?.pause();
+      player?.seekFrame(Math.min(last, Math.max(0, player.currentFrame + frames)));
+    };
+    const by = event.shiftKey ? Math.round(this.#rate) : 1;
+    const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+    if (key === "Escape" && this.#selected) {
+      this.#selected = undefined;
+      this.requestUpdate();
+      return;
+    }
+    if (!player) return;
+    if (key === "ArrowLeft" || key === "j") step(-by);
+    else if (key === "ArrowRight") step(by);
+    else if (key === "Home") step(-last);
+    else if (key === "End") step(last);
+    else if (key === "k") player.pause();
+    else if (key === "l") player.play();
+    else return;
+    event.preventDefault();
+  }
+
+  /** Frames a second, as a number. */
+  get #rate(): number {
+    const [n, d = 1] = (this.player?.info.fps ?? "30").split("/").map(Number);
+    return n / d;
+  }
 
   updated(): void {
     this.toggleAttribute("focused", this.#focused);
     this.toggleAttribute("inspector-hidden", !this.#inspectorVisible);
     this.toggleAttribute("collapsed", this.timeline && this.#collapsed);
     const view = this.renderRoot.querySelector<TimelineView>("timeline-view");
-    view?.set(this.layout, this.#selected, this.#time, this.#zoom);
+    view?.set({
+      layout: this.layout,
+      selected: this.#selected,
+      // The frame a scrub asks for, before the player has drawn it.
+      time: this.#scrub ? this.#scrub.frame / this.#rate : this.#time,
+      zoom: this.#zoom,
+      entry: this.#entry,
+      scope: `${this.session?.root ?? ""}/${this.#entry}`,
+      playing: !!this.player?.playing && !this.#scrub,
+      snap: this.#snap,
+    });
+    const ask = this.renderRoot.querySelector<HTMLDialogElement>("#ask");
+    if (ask && !ask.open) ask.showModal();
   }
 
   async #run(action: () => Promise<unknown>): Promise<void> {
@@ -597,14 +700,6 @@ export class ValleStudio extends LitElement {
       <main class="workspace">
         ${this.#left()} ${this.#separator("left")}
         <section class="stage panel" aria-label="Preview">
-          <div class="panel-head preview-head">
-            <strong>Preview</strong>
-            ${this.#playbackRate()}
-            <span class="preview-meta">
-              <small>${info ? `${info.width} × ${info.height}` : ""}</small>
-              <span class="badge">Fit</span>
-            </span>
-          </div>
           <div class="canvas"></div>
           ${this.layout?.duration === 0 ? html`<div class="empty">Choose a file in Media, then add it to the timeline.</div>` : nothing}
           ${
@@ -623,10 +718,19 @@ export class ValleStudio extends LitElement {
       <section class="bottom panel" aria-label="Timeline" ?hidden=${!this.timeline}>
         <div class="panel-head timeline-tools">
           <strong>Timeline</strong>
-          <small class="hint"
-            >${this.layout?.tracks.length ?? 0} tracks · Drag to move, edges to trim</small
-          >
           <span class="spacer"></span>
+          <button
+            class="icon quiet"
+            title="Snap to the playhead, markers and clips (hold Alt to drag freely)"
+            aria-label="Snapping"
+            aria-pressed=${this.#snap}
+            @click=${() => {
+              this.#snap = !this.#snap;
+              this.requestUpdate();
+            }}
+          >
+            ${icon("magnet")}
+          </button>
           <button
             class="quiet"
             @click=${() => {
@@ -640,7 +744,7 @@ export class ValleStudio extends LitElement {
             type="range"
             aria-label="Timeline zoom"
             min="1"
-            max="10"
+            max=${ZOOM}
             step="0.25"
             .value=${String(this.#zoom)}
             @input=${(e: Event) => {
@@ -663,22 +767,33 @@ export class ValleStudio extends LitElement {
           ?hidden=${this.#collapsed}
           @select=${(e: CustomEvent) => {
             this.#selected = e.detail;
-            this.#asset = undefined;
-            this.#rightTab = "properties";
-            this.#inspectorVisible = true;
+            if (e.detail) {
+              this.#asset = undefined;
+              this.#rightTab = "properties";
+              // A narrow window keeps its room for the preview unless the inspector is asked for.
+              if (innerWidth > 850) this.#inspectorVisible = true;
+            }
             this.requestUpdate();
           }}
           @op=${(e: CustomEvent) => this.#run(() => this.edit(e.detail))}
-          @seek=${(e: CustomEvent) => this.player?.seek(e.detail)}
+          @refuse=${(e: CustomEvent) => this.#refuse(e.detail)}
+          @zoom=${(e: CustomEvent) => {
+            this.#zoom = e.detail;
+            this.requestUpdate();
+          }}
+          @seek=${(e: CustomEvent) => this.#seekTimeline(e.detail.time, e.detail.phase !== "end")}
         ></timeline-view>
       </section>
       <footer class="statusbar" role="status">
         <span class="message" title=${this.#status}
           >${this.#status || (this.#busy ? "Updating preview…" : "Ready")}</span
-        ><span class="spacer"></span><span>${info ? `${info.frames} frames` : ""}</span
-        ><span>Local workspace</span>
+        ><span class="spacer"></span
+        ><span
+          >${info ? `${info.width} × ${info.height} · ${info.fps} fps · ${info.frames} frames` : ""}</span
+        >
       </footer>
-      ${this.#exportDialog()}
+      ${this.#toast ? html`<div class="toast" role="alert">${this.#toast}</div>` : nothing}
+      ${this.#exportDialog()}${this.#askDialog()}
     `;
   }
 
@@ -765,14 +880,16 @@ export class ValleStudio extends LitElement {
                 ${icon("panel")}
               </button>
               <button
-                class="primary"
+                class="icon quiet"
+                title="Export video"
+                aria-label="Export"
                 ?disabled=${this.#busy || !this.player || !!this.#error}
                 @click=${async () => {
                   await this.updateComplete;
                   this.renderRoot.querySelector<HTMLDialogElement>("#export-dialog")?.showModal();
                 }}
               >
-                ${icon("export")}Export
+                ${icon("export")}
               </button>
             `
           : html`<span class="spacer"></span
@@ -804,6 +921,20 @@ export class ValleStudio extends LitElement {
     this.requestUpdate();
   }
 
+  /** The timeline's ruler dragged to `seconds`; `dragging` until it is let go. */
+  #seekTimeline(seconds: number, dragging: boolean): void {
+    const player = this.player;
+    if (!player) return;
+    const frame = Math.min(player.info.frames - 1, Math.round(seconds * this.#rate));
+    this.#scrub ??= { frame, dragging, resume: player.playing };
+    this.#scrub.frame = frame;
+    this.#scrub.dragging = dragging;
+    player.pause();
+    player.seekFrame(frame);
+    this.#finishScrub();
+    this.requestUpdate();
+  }
+
   #finishScrub(): void {
     const scrub = this.#scrub;
     if (!scrub || scrub.dragging || scrub.frame !== this.#shownFrame) return;
@@ -816,7 +947,7 @@ export class ValleStudio extends LitElement {
     const info = player?.info;
     const frame = this.#scrub?.frame ?? this.#shownFrame;
     const [n, d = 1] = (info?.fps ?? "30").split("/").map(Number);
-    const seconds = this.#scrub ? (frame * d) / n : this.#time;
+    const rate = n / d;
     const progress = info && info.frames > 1 ? frame / (info.frames - 1) : 0;
     const release = () => {
       if (this.#scrub) this.#scrub.dragging = false;
@@ -838,7 +969,7 @@ export class ValleStudio extends LitElement {
           class="scrub"
           type="range"
           aria-label="Preview frame"
-          aria-valuetext=${`${clock(seconds)}, frame ${frame}`}
+          aria-valuetext=${`${timecode(frame, rate)}, frame ${frame}`}
           min="0"
           max=${info ? info.frames - 1 : 0}
           step="1"
@@ -858,13 +989,14 @@ export class ValleStudio extends LitElement {
           @lostpointercapture=${release}
         />
       </div>
-      <span class="time"
-        >${clock(seconds)} <span class="muted">/ ${clock(info?.duration ?? 0)}</span></span
+      <span class="time" title="Hours : minutes : seconds : frames"
+        >${timecode(frame, rate)} <span class="muted">/ ${timecode(info?.frames ?? 0, rate)}</span
+        ><span class="frame">${frame} f</span></span
       >
       <span class="playback" role="group" aria-label="Playback controls">
         <button
           class="icon quiet"
-          title="Previous frame"
+          title="Previous frame (←)"
           aria-label="Previous frame"
           ?disabled=${!player}
           @click=${() => player?.seekFrame(player.currentFrame - 1)}
@@ -882,7 +1014,7 @@ export class ValleStudio extends LitElement {
         </button>
         <button
           class="icon quiet"
-          title="Next frame"
+          title="Next frame (→)"
           aria-label="Next frame"
           ?disabled=${!player}
           @click=${() => player?.seekFrame(player.currentFrame + 1)}
@@ -891,6 +1023,8 @@ export class ValleStudio extends LitElement {
         </button>
       </span>
       <span class="toggle-group">
+        ${this.#playbackRate()}
+        <small class="canvas-size">${info ? `${info.width} × ${info.height}` : ""}</small>
         <button
           class="icon quiet"
           title="Loop"
@@ -980,7 +1114,7 @@ export class ValleStudio extends LitElement {
                                   ${entries.map(
                                     (f) =>
                                       html`<button
-                                        class="file ${f.path === this.#open ? "open" : ""}"
+                                        class="file ${f.path === (this.#asset?.path ?? this.#open) ? "open" : ""}"
                                         title=${f.path}
                                         @click=${() => this.#openFile(f)}
                                       >
@@ -1004,12 +1138,12 @@ export class ValleStudio extends LitElement {
                               ${media.map(
                                 (f) =>
                                   html`<button
-                                    class="asset"
+                                    class="asset ${f.path === this.#asset?.path ? "selected" : ""}"
                                     title=${f.path}
+                                    aria-pressed=${f.path === this.#asset?.path}
                                     @click=${() => this.#openFile(f)}
                                   >
-                                    <span class="thumbnail"
-                                      >${mediaKind(f.path) === "image" ? html`<img loading="lazy" src=${address(f.path)} alt="" />` : icon(mediaKind(f.path))}</span
+                                    <span class="thumbnail">${this.#thumbnail(f)}</span
                                     ><span>${f.path.split("/").pop()}</span>
                                   </button>`,
                               )}
@@ -1026,14 +1160,23 @@ export class ValleStudio extends LitElement {
             ? html`<div class="scroll">
                 ${
                   this.session?.kind === "project"
-                    ? html`<button @click=${() => this.#run(() => this.#snapshot())}>
+                    ? html`<button
+                          class="file"
+                          @click=${() => {
+                            this.#ask = { kind: "snapshot" };
+                            this.requestUpdate();
+                          }}
+                        >
                           ${icon("history")}Save a snapshot
                         </button>
                         ${this.#history.map(
                           (s) =>
                             html`<button
                               class="file"
-                              @click=${() => this.#run(() => this.#restore(s.snapshot))}
+                              @click=${() => {
+                                this.#ask = { kind: "restore", snapshot: s.snapshot };
+                                this.requestUpdate();
+                              }}
                             >
                               ${icon("history")}<span class="filename"
                                 >#${s.snapshot} ${s.message || "Snapshot"}<br /><small
@@ -1056,6 +1199,24 @@ export class ValleStudio extends LitElement {
               </div>`
       }
     </aside>`;
+  }
+
+  /** A media file's picture: the image, a video's frame, a sound's shape. */
+  #thumbnail(file: Listed) {
+    const kind = mediaKind(file.path);
+    const url = address(file.path);
+    const redraw = () => this.requestUpdate();
+    if (kind === "image") return html`<img loading="lazy" src=${url} alt="" />`;
+    const picture = kind === "film" ? frame(url, 1, redraw) : undefined;
+    if (picture) return html`<img src=${picture} alt="" />`;
+    const sound = kind === "music" ? peaks(url, redraw) : undefined;
+    if (sound) {
+      const shape = wave(sound, 0, sound.length / PEAKS);
+      return html`<svg class="wave" viewBox="0 0 ${shape.columns} 2" preserveAspectRatio="none">
+        <path d=${shape.d}></path>
+      </svg>`;
+    }
+    return icon(kind);
   }
 
   #openFile(file: Listed): void {
@@ -1166,7 +1327,7 @@ ${Array.from({ length: source.split("\n").length }, (_, i) => i + 1).join("\n")}
           ? html`<div class="field">Canvas<span>${info.width} × ${info.height}</span></div>
               <div class="field">Frame rate<span>${info.fps} fps</span></div>
               <div class="field">
-                Duration<span>${clock(info.duration)} · ${info.frames} frames</span>
+                Duration<span>${timecode(info.frames, this.#rate)} · ${info.frames} frames</span>
               </div>`
           : html`<p class="muted">
               ${this.#busy ? "Loading composition…" : "Preview unavailable"}
@@ -1182,12 +1343,138 @@ ${Array.from({ length: source.split("\n").length }, (_, i) => i + 1).join("\n")}
     const kind = mediaKind(file.path);
     return html`<section class="section">
       <h3>Media</h3>
-      ${kind === "image" ? html`<img class="media-preview" src=${url} alt=${file.path} />` : kind === "film" ? html`<video class="media-preview" src=${url} controls preload="metadata"></video>` : kind === "music" ? html`<audio class="media-preview" src=${url} controls preload="metadata"></audio>` : nothing}
+      ${kind === "image" ? html`<img class="media-preview" src=${url} alt=${file.path} />` : kind === "file" ? nothing : this.#mediaPlayer(url, kind)}
       <p style="overflow-wrap:anywhere">${file.path}</p>
       <div class="field">Size<span>${size(file.size)}</span></div>
-      <a href=${url} target="_blank" rel="noopener">Open file ↗</a>
-      ${this.timeline && kind !== "file" ? html`<p><button class="primary" ?disabled=${this.#busy} @click=${() => this.#run(() => this.#addMedia(file))}>Add to timeline</button></p>` : nothing}
+      <div class="actions">
+        ${this.timeline && kind !== "file" ? html`<button ?disabled=${this.#busy} @click=${() => this.#run(() => this.#addMedia(file))}>${icon("plus", 14)}Add to timeline</button>` : nothing}
+        <a class="button" href=${url} target="_blank" rel="noopener">Open file ↗</a>
+      </div>
     </section>`;
+  }
+
+  /** A video or a sound played in the inspector, with Studio's own controls: a sound is its
+   * shape, clicked to go to a time. */
+  #mediaPlayer(url: string, kind: "film" | "music") {
+    const find = () =>
+      this.renderRoot.querySelector<HTMLMediaElement>(":is(video, audio).media-preview");
+    // The element as it was drawn last; its events ask for the next drawing.
+    const media = find();
+    const loaded = media?.getAttribute("src") === url;
+    const duration = loaded && Number.isFinite(media!.duration) ? media!.duration : 0;
+    const time = loaded ? media!.currentTime : 0;
+    const playing = loaded && !media!.paused && !media!.ended;
+    const progress = duration ? Math.min(1, time / duration) : 0;
+    const redraw = () => this.requestUpdate();
+    const follow = (e: Event) => {
+      const playing = e.target as HTMLMediaElement;
+      const tick = () => {
+        this.requestUpdate();
+        if (!playing.paused && !playing.ended && playing.isConnected) requestAnimationFrame(tick);
+      };
+      tick();
+    };
+    const toggle = () => {
+      const media = find();
+      if (media?.paused) void media.play();
+      else media?.pause();
+    };
+    const seek = (seconds: number) => {
+      const media = find();
+      if (media) media.currentTime = seconds;
+      this.requestUpdate();
+    };
+    const sound = kind === "music" ? peaks(url, redraw) : undefined;
+    const shape = sound && wave(sound, 0, sound.length / PEAKS);
+    const drawn = (played: boolean) =>
+      html`<svg
+        class=${played ? "played" : ""}
+        style=${played ? `clip-path: inset(0 ${100 - progress * 100}% 0 0)` : ""}
+        viewBox="0 0 ${shape!.columns} 2"
+        preserveAspectRatio="none"
+      >
+        <path d=${shape!.d}></path>
+      </svg>`;
+    return html`<div class="media-player">
+      ${
+        kind === "film"
+          ? html`<video
+              class="media-preview"
+              src=${url}
+              preload="metadata"
+              playsinline
+              @click=${toggle}
+              @play=${follow}
+              @pause=${redraw}
+              @ended=${redraw}
+              @seeked=${redraw}
+              @emptied=${redraw}
+              @loadedmetadata=${redraw}
+              @volumechange=${redraw}
+            ></video>`
+          : html`<audio
+                class="media-preview"
+                src=${url}
+                preload="metadata"
+                @play=${follow}
+                @pause=${redraw}
+                @ended=${redraw}
+                @seeked=${redraw}
+                @emptied=${redraw}
+                @loadedmetadata=${redraw}
+                @volumechange=${redraw}
+              ></audio>
+              <div
+                class="media-wave"
+                @click=${(e: MouseEvent) => {
+                  const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  seek(((e.clientX - box.left) / box.width) * duration);
+                }}
+              >
+                ${shape ? html`${drawn(false)}${drawn(true)}` : icon("music", 24)}
+              </div>`
+      }
+      <div class="media-controls">
+        <button
+          class="icon"
+          title=${playing ? "Pause" : "Play"}
+          aria-label=${playing ? "Pause media" : "Play media"}
+          @click=${toggle}
+        >
+          ${icon(playing ? "pause" : "play")}
+        </button>
+        <div class="scrubber" style=${`--scrub-progress: ${progress}`}>
+          <div class="scrub-rail" aria-hidden="true">
+            <div class="scrub-fill"></div>
+            <div class="scrub-thumb"></div>
+          </div>
+          <input
+            class="scrub"
+            type="range"
+            aria-label="Media position"
+            min="0"
+            max=${duration}
+            step="0.01"
+            .value=${String(time)}
+            ?disabled=${!duration}
+            @input=${(e: Event) => seek(Number((e.target as HTMLInputElement).value))}
+          />
+        </div>
+        <span class="time">${span(time)} <span class="muted">/ ${span(duration)}</span></span>
+        <button
+          class="icon quiet"
+          title="Mute"
+          aria-label="Mute media"
+          aria-pressed=${loaded && media!.muted}
+          @click=${() => {
+            const media = find();
+            if (media) media.muted = !media.muted;
+          }}
+        >
+          ${icon(loaded && media!.muted ? "muted" : "volume")}
+        </button>
+      </div>
+    </div>`;
   }
 
   async #addMedia(file: Listed): Promise<void> {
@@ -1246,45 +1533,190 @@ ${Array.from({ length: source.split("\n").length }, (_, i) => i + 1).join("\n")}
       return nothing;
     }
     if (!clip) return nothing;
-    const placed = this.layout?.tracks.flatMap((t) => t.clips).find((c) => c.at === at);
+    const track = this.layout?.tracks.find((t) => t.clips.some((c) => c.at === at));
+    const placed = track?.clips.find((c) => c.at === at);
+    const kind = placed?.kind ?? "";
     const set = (field: string, value: unknown) =>
       this.#run(() => this.edit({ op: "set", clip: at, field, value }));
+    // Keyframes are edited as JSON; a field shows that it has them.
+    const keyed = (value: unknown) =>
+      typeof value === "object" && value !== null && !Array.isArray(value);
+    const number = (label: string, field: string, unset: number, step: number, range = "") => {
+      const [min, max] = range.split(" ");
+      return html`<label class="field"
+        >${label}${
+          keyed(clip[field])
+            ? html`<span>Keyframes</span>`
+            : html`<input
+                type="number"
+                aria-label=${label}
+                step=${step}
+                min=${min || nothing}
+                max=${max || nothing}
+                .value=${String(clip[field] ?? "")}
+                placeholder=${String(unset)}
+                @change=${(e: Event) => {
+                  const text = (e.target as HTMLInputElement).value;
+                  void set(field, text === "" ? null : Number(text));
+                }}
+              />`
+        }</label
+      >`;
+    };
+    const pair = (label: string, field: string, unset: [number, number], step: number) => {
+      const value = clip[field];
+      if (keyed(value)) return html`<div class="field">${label}<span>Keyframes</span></div>`;
+      const change = (e: Event) => {
+        const inputs = (e.target as HTMLElement).parentElement!.querySelectorAll("input");
+        const texts = [...inputs].map((input) => input.value);
+        const both = texts.map((text, i) => (text === "" ? unset[i] : Number(text)));
+        void set(field, texts.every((text) => text === "") ? null : both);
+      };
+      return html`<div class="field">
+        ${label}<span class="pair"
+          >${[0, 1].map(
+            (i) =>
+              html`<input
+                type="number"
+                aria-label=${`${label} ${"XY"[i]}`}
+                step=${step}
+                .value=${String(value?.[i] ?? "")}
+                placeholder=${String(unset[i])}
+                @change=${change}
+              />`,
+          )}</span
+        >
+      </div>`;
+    };
+    // The first of `values` is what the field is without being written.
+    const choice = (label: string, field: string, values: string[]) =>
+      html`<label class="field"
+        >${label}<select
+          aria-label=${label}
+          @change=${(e: Event) => {
+            const select = e.target as HTMLSelectElement;
+            void set(field, select.selectedIndex === 0 ? null : select.value);
+          }}
+        >
+          ${values.map((v) => html`<option ?selected=${(clip[field] ?? values[0]) === v}>${v}</option>`)}
+        </select></label
+      >`;
+    const [width, height] = [this.layout?.width ?? 0, this.layout?.height ?? 0];
+    const sourced = ["video", "audio", "timeline", "motion"].includes(kind) && !clip.timeMap;
+    const props = kind === "motion" && keyed(clip.props) ? Object.entries(clip.props) : [];
+    const prop = (name: string, value: unknown) => {
+      const give = (next: unknown) => void set("props", { ...clip.props, [name]: next });
+      const input = (type: string, read: (e: HTMLInputElement) => unknown) =>
+        html`<input
+          type=${type}
+          aria-label=${name}
+          step="any"
+          .value=${String(value)}
+          .checked=${value === true}
+          @change=${(e: Event) => give(read(e.target as HTMLInputElement))}
+        />`;
+      const field =
+        typeof value === "number"
+          ? input("number", (e) => Number(e.value))
+          : typeof value === "boolean"
+            ? input("checkbox", (e) => e.checked)
+            : typeof value === "string"
+              ? input("text", (e) => e.value)
+              : html`<span
+                  >${keyed(value) && "keyframes" in (value as object) ? "Keyframes" : "JSON"}</span
+                >`;
+      return html`<label class="field">${name} ${field}</label>`;
+    };
     return html`<section class="section">
-      <h3>Selected clip · ${clip.kind ?? placed?.kind ?? ""}</h3>
-      <label class="field"
-        >Name<input
-          aria-label="Clip name"
-          .value=${String(clip.name ?? "")}
-          placeholder=${placed?.id ?? "Clip"}
-          @change=${(e: Event) => set("name", (e.target as HTMLInputElement).value)}
-      /></label>
-      ${at.includes(".clips[") ? html`<label class="field">Start (s)<input type="number" min="0" step="0.01" .value=${String(placed?.start ?? 0)} @change=${(e: Event) => this.#run(() => this.edit({ op: "move", clip: at, start: Number((e.target as HTMLInputElement).value) }))} /></label>` : nothing}
-      <label class="field"
-        >Duration (s)<input
-          type="number"
-          min="0.01"
-          step="0.01"
-          .value=${String(placed?.duration ?? 0)}
-          @change=${(e: Event) => this.#run(() => this.edit({ op: "trim", clip: at, duration: Number((e.target as HTMLInputElement).value) }))}
-      /></label>
-      <label class="field"
-        >Enabled<input
-          type="checkbox"
-          .checked=${clip.enabled !== false}
-          @change=${(e: Event) => set("enabled", (e.target as HTMLInputElement).checked)}
-      /></label>
-      ${clip.kind === "solid" ? html`<label class="field">Color<input aria-label="Clip color" .value=${String(clip.color ?? "")} @change=${(e: Event) => set("color", (e.target as HTMLInputElement).value)} /></label>` : nothing}
-      <details>
-        <summary>Advanced · clip JSON</summary>
-        <textarea
-          aria-label="Clip JSON"
-          spellcheck="false"
-          wrap="off"
-          .value=${JSON.stringify(clip, null, 2)}
-          @change=${(e: Event) => this.#run(() => this.#apply(at, clip!, (e.target as HTMLTextAreaElement).value))}
-        ></textarea>
-      </details>
-    </section>`;
+        <h3>Selected clip · ${clip.kind ?? kind}</h3>
+        <label class="field"
+          >Name<input
+            aria-label="Clip name"
+            .value=${String(clip.name ?? "")}
+            placeholder=${placed?.id ?? "Clip"}
+            @change=${(e: Event) => set("name", (e.target as HTMLInputElement).value)}
+        /></label>
+        ${at.includes(".clips[") ? html`<label class="field">Start (s)<input type="number" min="0" step="0.01" .value=${String(placed?.start ?? 0)} @change=${(e: Event) => this.#run(() => this.edit({ op: "move", clip: at, start: Number((e.target as HTMLInputElement).value) }))} /></label>` : nothing}
+        <label class="field"
+          >Duration (s)<input
+            type="number"
+            min="0.01"
+            step="0.01"
+            .value=${String(placed?.duration ?? 0)}
+            @change=${(e: Event) => this.#run(() => this.edit({ op: "trim", clip: at, duration: Number((e.target as HTMLInputElement).value) }))}
+        /></label>
+        <label class="field"
+          >Enabled<input
+            type="checkbox"
+            .checked=${clip.enabled !== false}
+            @change=${(e: Event) => set("enabled", (e.target as HTMLInputElement).checked)}
+        /></label>
+        ${kind === "solid" ? html`<label class="field">Color<input aria-label="Clip color" .value=${String(clip.color ?? "")} @change=${(e: Event) => set("color", (e.target as HTMLInputElement).value)} /></label>` : nothing}
+        ${
+          kind === "caption" && typeof clip.text === "string"
+            ? html`<label class="field stacked"
+                >Text<textarea
+                  aria-label="Caption text"
+                  rows="3"
+                  .value=${clip.text}
+                  @change=${(e: Event) => set("text", (e.target as HTMLTextAreaElement).value)}
+                ></textarea>
+              </label>`
+            : nothing
+        }
+        ${kind === "grade" ? number("Temperature", "temperature", 0, 0.05, "-1 1") : nothing}
+      </section>
+      ${
+        track?.kind === "visual"
+          ? html`<section class="section">
+              <h3>Transform</h3>
+              ${pair("Position", "position", [width / 2, height / 2], 1)}
+              ${pair("Size", "size", [width, height], 1)} ${pair("Scale", "scale", [1, 1], 0.01)}
+              ${number("Rotation (°)", "rotation", 0, 1)}
+              ${number("Opacity", "opacity", 1, 0.05, "0 1")}
+              ${choice("Fit", "fit", ["contain", "cover", "fill", "none"])}
+              ${choice("Blend", "blend", BLENDS)}
+            </section>`
+          : nothing
+      }
+      ${
+        sourced
+          ? html`<section class="section">
+              <h3>Source</h3>
+              ${number("Trim start (s)", "trimStart", 0, 0.01, "0")}
+              ${number("Speed", "rate", 1, 0.05, "0.01")}
+              ${choice("Past its end", "end", ["error", "hold", "loop"])}
+            </section>`
+          : nothing
+      }
+      ${
+        ["video", "audio", "timeline"].includes(kind)
+          ? html`<section class="section">
+              <h3>Sound</h3>
+              ${number("Volume", "gain", 1, 0.05, "0")} ${number("Pan", "pan", 0, 0.05, "-1 1")}
+            </section>`
+          : nothing
+      }
+      ${
+        props.length
+          ? html`<section class="section">
+              <h3>Scene properties</h3>
+              ${props.map(([name, value]) => prop(name, value))}
+            </section>`
+          : nothing
+      }
+      <section class="section">
+        <details>
+          <summary>Advanced · clip JSON</summary>
+          <textarea
+            aria-label="Clip JSON"
+            spellcheck="false"
+            wrap="off"
+            .value=${JSON.stringify(clip, null, 2)}
+            @change=${(e: Event) => this.#run(() => this.#apply(at, clip!, (e.target as HTMLTextAreaElement).value))}
+          ></textarea>
+        </details>
+      </section>`;
   }
 
   #renderJob(job: Job) {
@@ -1517,76 +1949,200 @@ ${Array.from({ length: source.split("\n").length }, (_, i) => i + 1).join("\n")}
     this.requestUpdate();
   }
 
-  async #snapshot(): Promise<void> {
-    const message = prompt("What changed?") ?? "";
-    await this.save();
-    const done = await service.project(message ? ["save", "-m", message] : ["save"]);
-    this.#status = done.summary ?? "";
-    await this.#refresh();
+  /** The dialog `#ask` is asked in; what it is answered with is done. */
+  #askDialog() {
+    const ask = this.#ask;
+    if (!ask) return nothing;
+    const close = () => {
+      this.#ask = undefined;
+      this.requestUpdate();
+    };
+    const [heading, action] = {
+      snapshot: ["Save a snapshot", "Save snapshot"],
+      restore: ["Restore a snapshot", "Restore"],
+      create: ["New project", "Create project"],
+    }[ask.kind];
+    return html`<dialog id="ask" aria-labelledby="ask-heading" @close=${close}>
+      <form
+        @submit=${(e: Event) => {
+          e.preventDefault();
+          const answer = new FormData(e.target as HTMLFormElement);
+          close();
+          void this.#run(() => this.#answer(ask, answer));
+        }}
+      >
+        <div class="dialog-body">
+          <h2 id="ask-heading">${heading}</h2>
+          ${
+            ask.kind === "snapshot"
+              ? html`<p>
+                    Keeps the project's sources as they are now. Unsaved changes are saved first.
+                  </p>
+                  <label class="field stacked"
+                    >What changed?<input name="message" placeholder="Optional" autofocus
+                  /></label>`
+              : ask.kind === "restore"
+                ? html`<p>
+                    Puts snapshot #${ask.snapshot}'s sources back. What they replace is saved as a
+                    snapshot first, and unsaved changes here are dropped.
+                  </p>`
+                : html`<p>A folder with a project.json, a first timeline and its media folders.</p>
+                    <label class="field stacked"
+                      >Name<input name="name" value="my-film" required autofocus
+                    /></label>
+                    <label class="field stacked"
+                      >Location
+                      <span class="actions"
+                        ><input
+                          name="folder"
+                          placeholder="/path/to/folder"
+                          required
+                          .value=${ask.folder}
+                          @input=${(e: Event) => (ask.folder = (e.target as HTMLInputElement).value)}
+                        /><button
+                          type="button"
+                          @click=${() =>
+                            this.#run(async () => {
+                              ask.folder = (await service.chooseFolder()) ?? ask.folder;
+                            })}
+                        >
+                          Choose…
+                        </button></span
+                      ></label
+                    >`
+          }
+        </div>
+        <div class="dialog-foot">
+          <button type="button" @click=${close}>Cancel</button
+          ><button class="primary" type="submit">${action}</button>
+        </div>
+      </form>
+    </dialog>`;
   }
 
-  async #restore(n: number): Promise<void> {
-    if (!confirm(`Put snapshot ${n}'s sources back? What they replace is saved first.`)) {
-      return;
+  async #answer(ask: Ask, answer: FormData): Promise<void> {
+    if (ask.kind === "snapshot") {
+      const message = String(answer.get("message") ?? "").trim();
+      await this.save();
+      const done = await service.project(message ? ["save", "-m", message] : ["save"]);
+      this.#status = done.summary ?? "";
+      await this.#refresh();
+    } else if (ask.kind === "restore") {
+      const done = await service.project(["restore", String(ask.snapshot)]);
+      this.#status = done.summary ?? done.message ?? "";
+      this.#files.clear();
+      this.#drafts.clear();
+      invalidate();
+      await this.#load(this.#entry);
+    } else {
+      const folder = String(answer.get("folder")).replace(/[\\/]+$/, "");
+      const done = await service.project(["create", `${folder}/${answer.get("name")}`]);
+      if (done.status !== "ok") throw new Error(done.message);
+      await this.#openProject(done.root ?? `${folder}/${answer.get("name")}`);
     }
-    const done = await service.project(["restore", String(n)]);
-    this.#status = done.summary ?? done.message ?? "";
+  }
+
+  async #openProject(folder: string): Promise<void> {
+    this.session = await service.open(folder);
+    invalidate();
     this.#files.clear();
     this.#drafts.clear();
-    await this.#load(this.#entry);
+    this.#conflicts.clear();
+    this.#undo = [];
+    this.#redo = [];
+    this.#entry = "";
+    this.#status = "";
+    await this.#load(this.session.entry!);
   }
 
   #home(session: Session) {
-    const open = async (folder: string) => {
-      try {
-        this.session = await service.open(folder);
-        await this.#load(this.session.entry!);
-      } catch (error) {
-        this.#status = (error as Error).message;
-      }
-      this.requestUpdate();
-    };
-    const create = async () => {
-      const folder = prompt("Where? A folder to create the project in") ?? "";
-      if (folder) {
-        const done = await service.project(["create", folder]);
-        if (done.status !== "ok") {
-          this.#status = done.message;
-          this.requestUpdate();
-          return;
-        }
-        await open(done.root ?? folder);
-      }
-    };
+    const recent = session.recent ?? [];
     return html`${this.#header()}
       <div class="home">
-        <h1>Make something move.</h1>
-        <p>Open a project to bring your scenes, media and timeline together.</p>
-        <p role="status">${this.#status}</p>
-        <h3>Projects opened last</h3>
-        ${(session.recent ?? []).map(
-          (p) => html`<button class="file" @click=${() => void open(p.path)}>${p.path}</button>`,
-        )}
-        <h3>Open a folder</h3>
-        <form
-          @submit=${(e: Event) => {
-            e.preventDefault();
-            const input = (e.target as HTMLFormElement).elements.namedItem("folder");
-            void open((input as HTMLInputElement).value);
-          }}
-        >
-          <input name="folder" placeholder="/path/to/project" size="40" />
-          <button>Open</button>
-        </form>
-        <h3>New</h3>
-        <button @click=${() => void create()}>Create a project…</button>
-      </div>`;
+        <div class="hero">
+          <img src="/brand/valle-mark.svg" alt="" />
+          <div>
+            <h1>Make something move.</h1>
+            <p>Open a project to bring your scenes, media and timeline together.</p>
+          </div>
+        </div>
+        <div class="home-actions">
+          <button
+            class="primary"
+            @click=${() => {
+              this.#ask = { kind: "create", folder: "" };
+              this.requestUpdate();
+            }}
+          >
+            ${icon("plus")}New project</button
+          ><button
+            @click=${() =>
+              this.#run(async () => {
+                const folder = await service.chooseFolder();
+                if (folder) await this.#openProject(folder);
+              })}
+          >
+            ${icon("folder")}Open folder…
+          </button>
+        </div>
+        ${this.#status ? html`<p class="notice" role="status">${this.#status}</p>` : nothing}
+        <h3>Recent projects</h3>
+        ${
+          recent.length
+            ? html`<div class="projects">
+                ${recent.map(
+                  (p) =>
+                    html`<button
+                      class="project"
+                      title=${p.path}
+                      @click=${() => this.#run(() => this.#openProject(p.path))}
+                    >
+                      <span class="project-mark">${icon("film", 20)}</span
+                      ><span class="project-text"
+                        ><strong>${p.name}</strong><small>${p.path}</small></span
+                      ><small>${ago(p.opened)}</small>
+                    </button>`,
+                )}
+              </div>`
+            : html`<div class="empty">
+                ${icon("folder")}<strong>No projects yet</strong>Create one, or open a folder that
+                has a project.json.
+              </div>`
+        }
+        <details class="by-path">
+          <summary>Open by path</summary>
+          <form
+            @submit=${(e: Event) => {
+              e.preventDefault();
+              const input = (e.target as HTMLFormElement).elements.namedItem("folder");
+              void this.#run(() => this.#openProject((input as HTMLInputElement).value));
+            }}
+          >
+            <input name="folder" aria-label="Project folder" placeholder="/path/to/project" />
+            <button>Open</button>
+          </form>
+        </details>
+      </div>
+      ${this.#askDialog()}`;
   }
 }
 
-function clock(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  return `${String(m).padStart(2, "0")}:${(seconds % 60).toFixed(2).padStart(5, "0")}`;
+/** `frame` as a timecode, hours:minutes:seconds:frames, at `fps` frames a second. */
+function timecode(frame: number, fps: number): string {
+  const base = Math.max(1, Math.round(fps));
+  const seconds = Math.floor(frame / base);
+  const parts = [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60];
+  return [...parts, frame % base].map((n) => String(n).padStart(2, "0")).join(":");
+}
+
+/** How long ago `opened`, seconds since 1970, was. */
+function ago(opened: number): string {
+  const minutes = Math.floor((Date.now() / 1000 - opened) / 60);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 60 * 24) return `${Math.floor(minutes / 60)} h ago`;
+  if (minutes < 60 * 24 * 30) return `${Math.floor(minutes / 60 / 24)} d ago`;
+  return new Date(opened * 1000).toLocaleDateString();
 }
 
 function mediaKind(path: string): "image" | "film" | "music" | "file" {
@@ -1594,6 +2150,12 @@ function mediaKind(path: string): "image" | "film" | "music" | "file" {
   if (/\.(mp4|mov|webm|mkv)$/i.test(path)) return "film";
   if (/\.(wav|mp3|m4a|aac|ogg|flac)$/i.test(path)) return "music";
   return "file";
+}
+
+/** A length of media as minutes:seconds, with tenths: 1:05.3. */
+function span(seconds: number): string {
+  const rest = (seconds % 60).toFixed(1).padStart(4, "0");
+  return `${Math.floor(seconds / 60)}:${rest}`;
 }
 
 function size(bytes: number): string {

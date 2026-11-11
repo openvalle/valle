@@ -162,7 +162,7 @@ impl Lowering<'_> {
         let fill =
             format!("{{ position: \"absolute\", left: 0, top: 0, width: {w}, height: {h} }}");
         let mut body = String::new();
-        for track in &doc.tracks {
+        for track in doc.tracks.iter().filter(|t| t.enabled) {
             match track.kind {
                 valle_timeline::Kind::Visual => body.push_str(&self.track(track, &fill)?),
                 // Sound is the mix's.
@@ -172,7 +172,7 @@ impl Lowering<'_> {
                 valle_timeline::Kind::Caption => {}
             }
         }
-        for track in &doc.tracks {
+        for track in doc.tracks.iter().filter(|t| t.enabled) {
             if track.kind == valle_timeline::Kind::Caption {
                 body.push_str(&self.captions(track, &fill)?);
             }

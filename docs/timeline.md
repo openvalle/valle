@@ -115,6 +115,9 @@ A track's `id` is `visual0`, `audio1` and so on unless given. Track fields:
 | caption | `id`, `clips`, `style` or `presenter` |
 | adjustment | `id`, `clips` |
 
+Every track also takes `enabled`: `false` keeps the track and its clips but does not show or
+play them, as hiding or muting a track in an editor does.
+
 ## Clips
 
 Every clip has:
@@ -348,12 +351,14 @@ valle timeline edit edit.timeline.json --op '{"op":"move","clip":"shot","start":
 valle timeline edit edit.timeline.json --op '{"op":"trim","clip":"shot","duration":4}'
 valle timeline edit edit.timeline.json --op '{"op":"set","clip":"shot","field":"opacity","value":0.8}'
 valle timeline edit edit.timeline.json --op '{"op":"delete","clip":"shot"}'
+valle timeline edit edit.timeline.json --op '{"op":"move","clip":"shot","track":"tracks.visual[1]"}'
+valle timeline edit edit.timeline.json --op '{"op":"set","track":"music","field":"enabled","value":false}'
 valle timeline edit --help    # every op and its rules
 ```
 
 The result lists changed clips with their start and end times in seconds, plus removed
 transitions and clips deleted through anchors. With `--json`, `changes` contains `kind`
-(`clip` or `transition`), `action` (`added`, `updated`, `removed`), and `before`/`after`
+(`clip`, `transition` or `track`), `action` (`added`, `updated`, `removed`), and `before`/`after`
 summaries (`null` for the absent side). Clip summaries include `id`, `path`, `start`, `end`, `kind` and
 `anchor`; transitions name their `path`, `from`, `to` and `transition`. Changes to a clip's
 fields are reported even when its time span stays the same. Studio uses the same result.

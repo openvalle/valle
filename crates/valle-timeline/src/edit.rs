@@ -6,10 +6,13 @@
 //! All indices start at 0 and refer to the written arrays, including gaps and transitions.
 //!
 //! - `{ "op": "set", "clip", "field", "value" }`: a field of the clip; `null` removes it.
-//!   Changing an id updates anchors that name it.
+//!   Changing an id updates anchors that name it. `{ "op": "set", "track", "field", "value" }`:
+//!   a track's own field, such as `enabled`.
 //! - `{ "op": "move", "clip", "start" }`: to start at `start` seconds: a placed clip's `start`,
 //!   or an anchored one's offset. `{ "op": "move", "clip", "index" }`: a sequence's item to
 //!   another place in it. Transitions whose original neighbors separate are removed.
+//!   `{ "op": "move", "clip", "track", "start"? }`: to another track of its kind: at the end of
+//!   a sequence, or among placed clips at `start`, else where it was.
 //! - `{ "op": "trim", "clip", "head"?, "duration"? }`: `head` seconds off its start (a placed
 //!   clip starts later, its source further in), then its length set to `duration`.
 //! - `{ "op": "delete", "clip" }`: a sequence closes up behind it; adjacent transitions and
@@ -17,7 +20,8 @@
 //! - `{ "op": "add", "track", "clip" }`: a clip at the end of a track's sequence, or among its
 //!   placed clips.
 //!
-//! The text written back is indented JSON, its keys in order.
+//! The text written back is indented JSON, its keys in the order they were written; a value
+//! that fits its line stays on one.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -43,40 +47,7 @@ pub fn apply(text: &str, op: &Value) -> Result<String, Error> {
         let named = op["track"]
             .as_str()
             .ok_or("add needs track: an id or path such as tracks.visual[0]")?;
-        let at = doc
-            .tracks
-            .iter()
-            .find(|t| t.id == named)
-            .map_or(named, |t| t.at.as_str());
-        // A new project's first track, or a new track appended to those already there.
-        let (tracks, index) = split(at).map_err(|_| {
-            format!("no track {named:?}: use a track id or tracks.<kind>[n], with n from 0")
-        })?;
-        let kind = tracks
-            .strip_prefix("tracks.")
-            .ok_or("track: an id or tracks.<kind>[n]")?;
-        if !["visual", "audio", "caption", "adjustment"].contains(&kind) {
-            return Err(format!("no track kind {kind}"));
-        }
-        let list = root["tracks"]
-            .as_object_mut()
-            .ok_or("tracks: an object")?
-            .entry(kind)
-            .or_insert_with(|| Value::Array(Vec::new()));
-        let list = list.as_array_mut().ok_or("tracks: a list")?;
-        if index > list.len() {
-            return Err(format!(
-                "{at}: track index is from 0 to {} (the last creates a track)",
-                list.len()
-            ));
-        }
-        if index == list.len() {
-            let sequence = ["visual", "audio"].contains(&kind) && op["clip"].get("start").is_none();
-            list.push(match sequence {
-                true => serde_json::json!({ "items": [] }),
-                false => serde_json::json!({ "clips": [] }),
-            });
-        }
+        let at = &track_at(&mut root, &doc, named, op["clip"].get("start").is_some())?;
         let clip = op["clip"].clone();
         let track = object(find(&mut root, at)?, at)?;
         let list = match track.contains_key("items") {
@@ -89,6 +60,31 @@ pub fn apply(text: &str, op: &Value) -> Result<String, Error> {
         list.as_array_mut()
             .ok_or("the track's list is not an array")?
             .push(clip);
+        return checked(root);
+    }
+    if name == "set" && op.get("clip").is_none() && op.get("track").is_some() {
+        let named = op["track"].as_str().ok_or("track: an id or path")?;
+        let track = (doc.tracks.iter())
+            .find(|t| t.id == named || t.at == named)
+            .ok_or_else(|| format!("no track {named}"))?;
+        let field = op["field"].as_str().ok_or("set needs field")?;
+        if ["items", "clips"].contains(&field) {
+            return Err(format!("{}.{field}: edit its clips one by one", track.at));
+        }
+        // A generated clip id includes the track id. Preserve it before renaming the track,
+        // so anchors and the editor's selection keep referring to the same clip.
+        if field == "id" {
+            for clip in &track.clips {
+                if !clip.named {
+                    find(&mut root, &clip.at)?["id"] = clip.id.clone().into();
+                }
+            }
+        }
+        let o = object(find(&mut root, &track.at)?, &track.at)?;
+        match &op["value"] {
+            Value::Null => o.shift_remove(field),
+            v => o.insert(field.to_string(), v.clone()),
+        };
         return checked(root);
     }
     let named = op["clip"].as_str().ok_or_else(|| {
@@ -105,7 +101,7 @@ pub fn apply(text: &str, op: &Value) -> Result<String, Error> {
             let field = op["field"].as_str().ok_or("set needs field")?;
             let o = object(find(&mut root, &at)?, &at)?;
             match &op["value"] {
-                Value::Null => o.remove(field),
+                Value::Null => o.shift_remove(field),
                 v => o.insert(field.to_string(), v.clone()),
             };
             if field == "id" {
@@ -126,6 +122,79 @@ pub fn apply(text: &str, op: &Value) -> Result<String, Error> {
             }
         }
         "delete" => delete(&mut root, &doc, &clip.id)?,
+        "move" if op.get("track").is_some() => {
+            let to = op["track"].as_str().ok_or("track: an id or path")?;
+            let from = (doc.tracks.iter())
+                .find(|t| t.clips.iter().any(|c| c.at == at))
+                .unwrap();
+            let target = track_at(
+                &mut root,
+                &doc,
+                to,
+                !in_sequence || op.get("start").is_some(),
+            )?;
+            if target == from.at {
+                return Err(format!("{at} is on {to} already"));
+            }
+            if target.split('[').next() != from.at.split('[').next() {
+                return Err(format!(
+                    "{at} is a {} clip: it moves to another {} track",
+                    from.kind.name(),
+                    from.kind.name()
+                ));
+            }
+            // Generated ids depend on the track and the index: keep the moved clip's id as
+            // well as its former neighbors', for anchors and the editor's selection.
+            for c in &from.clips {
+                if !c.named {
+                    find(&mut root, &c.at)?["id"] = c.id.clone().into();
+                }
+            }
+            let mut indices = BTreeSet::from([index]);
+            for t in &from.transitions {
+                if from.clips[t.from].at == at || from.clips[t.to].at == at {
+                    indices.insert(split(&t.at)?.1);
+                }
+            }
+            let source = find(&mut root, &list)?.as_array_mut().ok_or("not a list")?;
+            let mut moved = Value::Null;
+            for i in indices.into_iter().rev() {
+                let item = source.remove(i);
+                if i == index {
+                    moved = item;
+                }
+            }
+            let o = object(&mut moved, &at)?;
+            let track = object(find(&mut root, &target)?, &target)?;
+            let sequence = track.contains_key("items");
+            if sequence {
+                o.shift_remove("start");
+                if !o.contains_key("id") {
+                    o.insert("id".into(), clip.id.clone().into());
+                }
+            } else if op.get("start").is_some() {
+                let start = snap(number("start")?.max(0.0));
+                let base = (clip.anchor.as_ref())
+                    .and_then(|(id, _)| doc.clip(id))
+                    .map(|a| a.start.seconds());
+                match (base, o.get_mut("start")) {
+                    (Some(from), Some(Value::Object(anchor))) => {
+                        anchor.insert("offset".into(), seconds(snap(start - from)));
+                    }
+                    _ => {
+                        o.insert("start".into(), seconds(start));
+                    }
+                }
+            } else if !o.contains_key("start") {
+                o.insert("start".into(), seconds(clip.start.seconds()));
+            }
+            let list = if sequence { "items" } else { "clips" };
+            (track.entry(list))
+                .or_insert_with(|| Value::Array(Vec::new()))
+                .as_array_mut()
+                .ok_or("the track's list is not an array")?
+                .push(moved);
+        }
         "move" if op.get("index").is_some() => {
             if !in_sequence {
                 return Err(format!("{at} is placed by start: move it with start"));
@@ -230,7 +299,13 @@ impl Edited {
                 &change["after"]
             };
             let action = change["action"].as_str().unwrap_or_default();
-            lines.push(if change["kind"] == "clip" {
+            lines.push(if change["kind"] == "track" {
+                format!(
+                    "{action} track {} at {}",
+                    item["id"].as_str().unwrap_or_default(),
+                    item["path"].as_str().unwrap_or_default()
+                )
+            } else if change["kind"] == "clip" {
                 format!(
                     "{action} {} at {}: {}–{} s",
                     item["id"].as_str().unwrap_or_default(),
@@ -288,7 +363,7 @@ pub fn report(text: &str, op: &Value) -> Result<Edited, Error> {
     let mut changes = Vec::new();
     for (mut key, before, raw) in old {
         if let Some((from, to)) = rename {
-            // Clip key: [kind, id]; transition key: [kind, track, from, to].
+            // Clip key: [kind, id]; transition key: [kind, track, from, to]; track: [kind, at].
             let start = if key[0] == "clip" { 1 } else { 2 };
             for id in &mut key[start..] {
                 if id == from {
@@ -321,10 +396,16 @@ pub fn report(text: &str, op: &Value) -> Result<Edited, Error> {
 fn records(doc: &Document, root: &mut Value) -> Result<Vec<(Vec<String>, Value, Value)>, Error> {
     let mut out = Vec::new();
     for t in &doc.tracks {
+        let mut raw = find(root, &t.at)?.clone();
+        for list in ["items", "clips"] {
+            raw.as_object_mut().unwrap().shift_remove(list);
+        }
+        let summary = serde_json::json!({ "id": t.id, "path": t.at, "enabled": t.enabled });
+        out.push((vec!["track".into(), t.at.clone()], summary, raw));
         for c in &t.clips {
             let mut raw = find(root, &c.at)?.clone();
             // Making a generated id explicit preserves identity; it is not an authored edit.
-            raw.as_object_mut().unwrap().remove("id");
+            raw.as_object_mut().unwrap().shift_remove("id");
             let summary = serde_json::json!({
                 "id":c.id,"path":c.at,"start":c.start.seconds(),"end":c.end().seconds(),
                 "kind":kind(&c.content),"anchor":c.anchor.as_ref().map(|(id, _)| id),
@@ -399,9 +480,111 @@ fn delete(root: &mut Value, doc: &Document, id: &str) -> Result<(), Error> {
 /// The text of `root`, if it is a valid document.
 fn checked(root: Value) -> Result<String, Error> {
     Document::read_edit(&root)?;
-    let mut text = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
+    let mut text = String::new();
+    print(&root, 0, 0, true, &mut text);
     text.push('\n');
     Ok(text)
+}
+
+/// The longest line a value is kept on.
+const WIDTH: usize = 100;
+
+/// `v` as it is written by hand: on its line at `column` where it fits, else one item a line,
+/// indented by two spaces. The document itself is always broken.
+fn print(v: &Value, indent: usize, column: usize, broken: bool, out: &mut String) {
+    let flat = inline(v);
+    let nested = matches!(v, Value::Object(o) if !o.is_empty())
+        || matches!(v, Value::Array(a) if !a.is_empty());
+    if !nested || (!broken && column + flat.chars().count() <= WIDTH) {
+        out.push_str(&flat);
+        return;
+    }
+    let pad = " ".repeat(indent + 2);
+    let item = |out: &mut String, key: Option<&String>, value: &Value, last: bool| {
+        out.push_str(&pad);
+        let mut column = pad.len();
+        if let Some(key) = key {
+            let key = format!("{}: ", Value::from(key.as_str()));
+            column += key.chars().count();
+            out.push_str(&key);
+        }
+        print(value, indent + 2, column, false, out);
+        out.push_str(if last { "\n" } else { ",\n" });
+    };
+    match v {
+        Value::Object(o) => {
+            out.push_str("{\n");
+            for (i, (key, value)) in o.iter().enumerate() {
+                item(out, Some(key), value, i + 1 == o.len());
+            }
+            out.push_str(&" ".repeat(indent));
+            out.push('}');
+        }
+        Value::Array(a) => {
+            out.push_str("[\n");
+            for (i, value) in a.iter().enumerate() {
+                item(out, None, value, i + 1 == a.len());
+            }
+            out.push_str(&" ".repeat(indent));
+            out.push(']');
+        }
+        _ => unreachable!("a scalar fits its line"),
+    }
+}
+
+/// `v` on one line: `{ "a": 1, "b": [1, 2] }`.
+fn inline(v: &Value) -> String {
+    match v {
+        Value::Object(o) if !o.is_empty() => {
+            let fields: Vec<String> = (o.iter())
+                .map(|(k, v)| format!("{}: {}", Value::from(k.as_str()), inline(v)))
+                .collect();
+            format!("{{ {} }}", fields.join(", "))
+        }
+        Value::Array(a) if !a.is_empty() => {
+            let items: Vec<String> = a.iter().map(inline).collect();
+            format!("[{}]", items.join(", "))
+        }
+        v => v.to_string(),
+    }
+}
+
+/// The path of the track `named`, an id or `tracks.<kind>[n]`. One past the last of its kind
+/// is made: a sequence, or with `placed` a track of clips placed by start.
+fn track_at(root: &mut Value, doc: &Document, named: &str, placed: bool) -> Result<String, Error> {
+    let at = (doc.tracks.iter())
+        .find(|t| t.id == named)
+        .map_or(named, |t| t.at.as_str());
+    // A new project's first track, or a new track appended to those already there.
+    let (tracks, index) = split(at).map_err(|_| {
+        format!("no track {named:?}: use a track id or tracks.<kind>[n], with n from 0")
+    })?;
+    let kind = tracks
+        .strip_prefix("tracks.")
+        .ok_or("track: an id or tracks.<kind>[n]")?;
+    if !["visual", "audio", "caption", "adjustment"].contains(&kind) {
+        return Err(format!("no track kind {kind}"));
+    }
+    let list = root["tracks"]
+        .as_object_mut()
+        .ok_or("tracks: an object")?
+        .entry(kind)
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let list = list.as_array_mut().ok_or("tracks: a list")?;
+    if index > list.len() {
+        return Err(format!(
+            "{at}: track index is from 0 to {} (the last creates a track)",
+            list.len()
+        ));
+    }
+    if index == list.len() {
+        let sequence = ["visual", "audio"].contains(&kind) && !placed;
+        list.push(match sequence {
+            true => serde_json::json!({ "items": [] }),
+            false => serde_json::json!({ "clips": [] }),
+        });
+    }
+    Ok(at.to_string())
 }
 
 /// Seconds as JSON, rounded off past a millionth of a frame's worth of float noise.
@@ -449,10 +632,11 @@ fn object<'a>(v: &'a mut Value, at: &str) -> Result<&'a mut Map<String, Value>, 
         .ok_or_else(|| format!("{at}: not an object"))
 }
 
-/// Where each clip is, for an editor to draw: the document's length and rate, and each track's
-/// clips with their places, starts and lengths in seconds, kinds, names and anchors.
+/// Where each clip is, for an editor to draw: the document's length, rate and markers, and each
+/// track's clips with their places, starts and lengths in seconds, kinds, names and anchors,
+/// and its transitions with the clips they go between and when they play.
 pub fn layout(text: &str) -> Result<Value, Error> {
-    let root = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
+    let root: Value = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
     let doc = Document::read_edit(&root)?;
     let tracks: Vec<Value> = (doc.tracks.iter())
         .map(|t| {
@@ -468,10 +652,38 @@ pub fn layout(text: &str) -> Result<Value, Error> {
                         "enabled": c.enabled,
                         "anchor": c.anchor.as_ref().map(|(id, _)| id),
                         "kind": kind(&c.content),
+                        "text": match &c.content {
+                            crate::Content::Caption { text, .. } => Some(text),
+                            _ => None,
+                        },
+                        "media": media(&doc, c),
                     })
                 })
                 .collect();
-            serde_json::json!({ "id": t.id, "kind": t.kind.name(), "at": t.at, "clips": clips })
+            let transitions: Vec<Value> = (t.transitions.iter())
+                .map(|x| {
+                    let (start, end) = x.span(t);
+                    serde_json::json!({
+                        "at": x.at,
+                        "kind": x.kind,
+                        "from": t.clips[x.from].id,
+                        "to": t.clips[x.to].id,
+                        "start": start.seconds(),
+                        "end": end.seconds(),
+                    })
+                })
+                .collect();
+            let written = (root.pointer(&format!("/tracks/{}", t.kind.name())))
+                .and_then(|list| list.get(split(&t.at).ok()?.1));
+            serde_json::json!({
+                "id": t.id,
+                "kind": t.kind.name(),
+                "at": t.at,
+                "enabled": t.enabled,
+                "sequence": written.is_some_and(|w| w.get("items").is_some()),
+                "clips": clips,
+                "transitions": transitions,
+            })
         })
         .collect();
     Ok(serde_json::json!({
@@ -479,8 +691,23 @@ pub fn layout(text: &str) -> Result<Value, Error> {
         "fps": doc.canvas.fps.as_f64(),
         "width": doc.canvas.width,
         "height": doc.canvas.height,
+        "markers": doc.markers,
         "tracks": tracks,
     }))
+}
+
+/// The file a clip plays and where in it the clip begins, for an editor's pictures of it.
+fn media(doc: &Document, clip: &crate::Clip) -> Value {
+    use crate::Content::*;
+    let (Image { src } | Video { src } | Audio { src }) = &clip.content else {
+        return Value::Null;
+    };
+    let (trim, rate) = match &clip.source.time {
+        crate::SourceTime::Linear { trim, rate } => (trim.seconds(), rate.as_f64()),
+        crate::SourceTime::Map(points) => (points.first().map_or(0.0, |p| p.1.seconds()), 1.0),
+    };
+    let file = doc.resources.get(src).and_then(|r| r.files.first());
+    serde_json::json!({ "file": file, "trim": trim, "rate": rate })
 }
 
 fn kind(content: &crate::Content) -> &'static str {
@@ -669,6 +896,58 @@ mod tests {
         assert_eq!(doc["tracks"]["visual"][0]["items"][2]["id"], "d");
         let laid = layout(&serde_json::to_string(&doc).expect("text")).expect("laid out");
         assert_eq!(laid["tracks"][0]["clips"][2]["start"], json!(3.0));
+    }
+
+    #[test]
+    fn clips_change_tracks_and_tracks_are_switched_off() {
+        // From a sequence to placed clips: where it was, its transition gone.
+        let text = apply(
+            LINKED,
+            &json!({"op":"move","clip":"b","track":"tracks.visual[1]","start":1}),
+        );
+        let doc = crate::parse(&text.unwrap()).unwrap();
+        assert_eq!(doc.tracks.len(), 5);
+        assert_eq!(doc.clip("b").unwrap().at, "tracks.visual[1].clips[0]");
+        assert_eq!(doc.clip("b").unwrap().start.seconds(), 1.0);
+        assert!(doc.tracks[0].transitions.is_empty());
+        assert_eq!(doc.clip("title").unwrap().start.seconds(), 1.1);
+        // Between placed tracks, at a time; an unnamed clip others follow keeps its id.
+        let doc = edited(json!({"op":"move","clip":"c","track":"tracks.visual[2]","start":2}));
+        assert_eq!(doc["tracks"]["visual"][1]["clips"], json!([]));
+        assert_eq!(doc["tracks"]["visual"][2]["clips"][1]["start"], json!(2));
+        // Into a sequence: at its end, without a start.
+        let doc = edited(json!({"op":"move","clip":"c","track":"tracks.visual[0]"}));
+        assert_eq!(doc["tracks"]["visual"][0]["items"][2]["id"], "c");
+        assert!(
+            doc["tracks"]["visual"][0]["items"][2]
+                .get("start")
+                .is_none()
+        );
+        let other = json!({"op":"move","clip":"title","track":"tracks.visual[0]"});
+        assert!(apply(LINKED, &other).unwrap_err().contains("caption"));
+
+        let op = json!({"op":"set","track":"story","field":"enabled","value":false});
+        let off = report(LINKED, &op).unwrap();
+        assert!(!crate::parse(&off.text).unwrap().tracks[0].enabled);
+        assert_eq!(off.summary(), "updated track story at tracks.visual[0]");
+        assert_eq!(layout(&off.text).unwrap()["tracks"][0]["enabled"], false);
+    }
+
+    #[test]
+    fn the_layout_has_transitions_and_markers_and_the_text_keeps_its_shape() {
+        let laid = layout(LINKED).unwrap();
+        let fade = &laid["tracks"][0]["transitions"][0];
+        assert_eq!(fade["kind"], "fade");
+        assert_eq!((&fade["from"], &fade["to"]), (&json!("a"), &json!("b")));
+        assert_eq!((&fade["start"], &fade["end"]), (&json!(0.9), &json!(1.1)));
+        assert_eq!(laid["tracks"][0]["sequence"], true);
+        let text = "{\n  \"name\": \"Cut\",\n  \"canvas\": { \"width\": 64, \"height\": 36, \"fps\": 30 },\n  \"markers\": [{ \"at\": 1, \"name\": \"beat\" }],\n  \"tracks\": {\n    \"visual\": [\n      {\n        \"clips\": [\n          { \"id\": \"a\", \"kind\": \"solid\", \"color\": \"red\", \"start\": 0, \"duration\": 1 },\n          { \"id\": \"b\", \"kind\": \"solid\", \"color\": \"blue\", \"start\": 1, \"duration\": 1 }\n        ]\n      },\n      { \"clips\": [] }\n    ]\n  }\n}\n";
+        assert_eq!(layout(text).unwrap()["markers"][0]["name"], "beat");
+        // An edit that changes nothing writes the text as it was: order and lines kept.
+        let same = apply(text, &json!({"op":"move","clip":"b","start":1})).unwrap();
+        assert_eq!(same, text);
+        let moved = apply(text, &json!({"op":"move","clip":"b","start":2})).unwrap();
+        assert_eq!(moved, text.replace("\"start\": 1,", "\"start\": 2,"));
     }
 
     #[test]
@@ -881,5 +1160,47 @@ mod tests {
         }
         let duplicate = r#"{"canvas":{"width":64,"height":36,"fps":30},"tracks":{"visual":[{"id":"same"},{"id":"same"}]}}"#;
         assert!(layout(duplicate).unwrap_err().contains("another track"));
+    }
+
+    #[test]
+    fn renaming_a_track_preserves_generated_ids_and_anchors() {
+        let text = json!({"canvas":{"width":64,"height":36,"fps":30},"tracks":{
+            "visual":[{"clips":[{"kind":"solid","color":"red","start":1,"duration":2}]}],
+            "caption":[{"clips":[{"id":"title","text":"Hi","start":{"clip":"visual0.0"},"duration":1}]}]
+        }}).to_string();
+        let renamed = apply(
+            &text,
+            &json!({"op":"set","track":"visual0","field":"id","value":"story"}),
+        )
+        .unwrap();
+        let doc = crate::parse(&renamed).unwrap();
+        assert_eq!(doc.tracks[0].id, "story");
+        assert!(doc.clip("visual0.0").unwrap().named);
+        assert_eq!(doc.clip("title").unwrap().start.seconds(), 1.0);
+        let reset = apply(
+            &renamed,
+            &json!({"op":"set","track":"story","field":"id","value":null}),
+        )
+        .unwrap();
+        let doc = crate::parse(&reset).unwrap();
+        assert_eq!(doc.tracks[0].id, "visual0");
+        assert_eq!(doc.clip("title").unwrap().start.seconds(), 1.0);
+    }
+
+    #[test]
+    fn moving_an_unreferenced_clip_between_tracks_keeps_its_id() {
+        let text = json!({"canvas":{"width":64,"height":36,"fps":30},"tracks":{
+            "visual":[{"clips":[{"kind":"solid","color":"red","start":0,"duration":2}]},{"clips":[]}]
+        }}).to_string();
+        let moved = apply(
+            &text,
+            &json!({"op":"move","clip":"visual0.0","track":"tracks.visual[1]","start":1}),
+        )
+        .unwrap();
+        let doc = crate::parse(&moved).unwrap();
+        let clip = doc.clip("visual0.0").unwrap();
+        assert_eq!(clip.at, "tracks.visual[1].clips[0]");
+        assert_eq!(clip.start.seconds(), 1.0);
+        assert!(clip.named);
     }
 }

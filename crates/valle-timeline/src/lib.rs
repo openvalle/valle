@@ -88,6 +88,8 @@ pub struct Track {
     pub style: Option<Map<String, Value>>,
     /// A caption track's own component, a `captionPresenter()`.
     pub presenter: Option<Component>,
+    /// Whether it is shown and heard; its clips keep their places either way.
+    pub enabled: bool,
 }
 
 /// A track's or a clip's sound: its fader and pan, and a track's effects, sends and bus.
@@ -472,15 +474,20 @@ impl Document {
         let o = object(t, &at)?;
         let allowed: &[&str] = match kind {
             Kind::Visual => &[
-                "id", "items", "clips", "gain", "pan", "effects", "sends", "output",
+                "id", "enabled", "items", "clips", "gain", "pan", "effects", "sends", "output",
             ],
             Kind::Audio => &[
-                "id", "items", "clips", "gain", "pan", "effects", "sends", "output",
+                "id", "enabled", "items", "clips", "gain", "pan", "effects", "sends", "output",
             ],
-            Kind::Caption => &["id", "clips", "style", "presenter"],
-            Kind::Adjustment => &["id", "clips"],
+            Kind::Caption => &["id", "enabled", "clips", "style", "presenter"],
+            Kind::Adjustment => &["id", "enabled", "clips"],
         };
         only(o, &at, allowed)?;
+        let enabled = match o.get("enabled") {
+            None => true,
+            Some(Value::Bool(b)) => *b,
+            Some(_) => return Err(format!("{at}.enabled: true or false")),
+        };
         let id = match o.get("id") {
             None => format!("{}{n}", kind.name()),
             Some(v) => alias(v, &format!("{at}.id"))?,
@@ -536,6 +543,7 @@ impl Document {
             sound,
             style,
             presenter,
+            enabled,
         };
         match (o.get("items"), o.get("clips")) {
             (Some(_), Some(_)) => {

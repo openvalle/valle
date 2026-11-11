@@ -25,8 +25,22 @@ const paths = {
   check: "m4 12 5 5L20 6",
   save: "M4 3h14l3 3v15H3V3Zm3 0v6h10V3M7 21v-8h10v8",
   code: "m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18",
+  eye: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
+  eyeOff:
+    "m3 3 18 18M10.6 5.1Q11.3 5 12 5c6 0 10 7 10 7a17 17 0 0 1-3.2 3.9M6.5 6.6C3.7 8.5 2 12 2 12s4 7 10 7a9.7 9.7 0 0 0 4.4-1.1M9.9 9.9a3 3 0 0 0 4.2 4.2",
+  lock: "M6 11h12v10H6Zm2 0V7a4 4 0 0 1 8 0v4",
+  unlock: "M6 11h12v10H6Zm2 0V7a4 4 0 0 1 7.5-2",
+  text: "M5 7V4h14v3M12 4v16m-3 0h6",
+  sliders: "M4 6h10m4 0h2M4 12h4m4 0h8M4 18h10m4 0h2M14 4v4M8 10v4m6 2v4",
+  layers: "m12 3 9 5-9 5-9-5Zm-9 9 9 5 9-5m-18 4 9 5 9-5",
+  square: "M5 5h14v14H5Z",
+  spark: "m12 3 2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2Z",
+  plus: "M12 5v14M5 12h14",
+  magnet: "M5 4h4v8a3 3 0 0 0 6 0V4h4v8a7 7 0 0 1-14 0Zm0 4h4m6 0h4",
 } as const;
 
-export function icon(name: keyof typeof paths) {
-  return svg`<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d=${paths[name]} /></svg>`;
+export type IconName = keyof typeof paths;
+
+export function icon(name: IconName, size = 16) {
+  return svg`<svg viewBox="0 0 24 24" width=${size} height=${size} fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d=${paths[name]} /></svg>`;
 }

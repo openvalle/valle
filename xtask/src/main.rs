@@ -307,9 +307,16 @@ fn build_web() -> Result<(), String> {
     let _ = std::fs::remove_dir_all(&dist);
     run(
         Command::new("bun")
+            // Packages' production builds: Lit's development one warns on every page.
             .args([
-                "build", "--target", "browser", "--format", "esm", "--outdir",
+                "build",
+                "--production",
+                "--target",
+                "browser",
+                "--format",
+                "esm",
             ])
+            .arg("--outdir")
             .arg(&dist)
             .arg(studio.join("src/main.ts")),
         "bun build",

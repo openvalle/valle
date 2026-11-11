@@ -47,6 +47,7 @@ struct Seen {
     len: u64,
     modified: Option<SystemTime>,
     sha256: Option<String>,
+    hashed: bool,
 }
 
 /// The event streams open, which renders' threads say to as well.
@@ -133,6 +134,14 @@ pub fn save_file(name: &str) -> Value {
     json!({ "status": "ok", "path": path })
 }
 
+/// The folder panel of the same helper; cancellation returns null.
+pub fn pick_folder() -> Value {
+    let path = rfd::FileDialog::new()
+        .set_title("Choose a folder")
+        .pick_folder();
+    json!({ "status": "ok", "path": path })
+}
+
 /// What `valle <group> studio <file>` opens.
 fn open(group: &str, file: Option<&Path>) -> Result<Session, Failure> {
     let missing = |p: &Path| Failure::new("usage", format!("{}: no such file", p.display()));
@@ -202,11 +211,17 @@ fn recent_file() -> Option<PathBuf> {
     Some(cache.parent()?.join("recent-projects.json"))
 }
 
-/// The projects opened last, newest first.
+/// The projects opened last that are still there, newest first, each with its name.
 fn recent() -> Vec<Value> {
     let read = recent_file().and_then(|f| std::fs::read(f).ok());
     let list: Option<Vec<Value>> = read.and_then(|b| serde_json::from_slice(&b).ok());
-    list.unwrap_or_default()
+    (list.unwrap_or_default().into_iter())
+        .filter_map(|mut p| {
+            let project = Project::open(Path::new(p["path"].as_str()?)).ok()?;
+            p["name"] = project.name.into();
+            Some(p)
+        })
+        .collect()
 }
 
 /// Puts `root` first among the projects opened last.
@@ -245,7 +260,10 @@ impl Service {
             self.stream(&stream);
             return;
         }
-        let response = self.handle(&request);
+        let mut response = self.handle(&request);
+        if request.method == "GET" && request.path.starts_with("/api/") {
+            response = response.ranged(request.header("range"));
+        }
         let _ = self.finish(response).write(&mut &stream, false);
     }
 
@@ -289,12 +307,15 @@ impl Service {
             ("POST", "/api/project") => self.command(&request.body),
             ("POST", "/api/render") => self.render(&request.body),
             ("POST", "/api/save-file") => self.choose_output(&request.body),
+            ("POST", "/api/choose-folder") => self.panel(&["--studio-pick-folder"]),
             ("POST", "/api/edit") => edit(&request.body),
             ("GET", "/api/list") => self.list(),
             ("GET", "/api/url") => return url(request.query("u")),
             ("GET", "/api/linked") => return self.linked(request.query("file")),
             ("GET", p) if p.starts_with("/api/fonts/") => return font(&p["/api/fonts/".len()..]),
-            ("GET", p) if p.starts_with("/api/files/") => return self.read(&p[11..]),
+            ("GET", p) if p.starts_with("/api/files/") => {
+                return self.read(&p[11..], request.header("range").is_some());
+            }
             ("GET", p) if p.starts_with("/api/renders/") => return self.output(&p[13..]),
             ("PUT", p) if p.starts_with("/api/files/") => return self.write(&p[11..], request),
             ("GET", p) if !p.starts_with("/api/") => {
@@ -394,17 +415,39 @@ impl Service {
                 format!("{file}: not a resource of the open project"),
             );
         }
-        match std::fs::read(&full) {
-            Ok(bytes) => Response::new(200, http::kind(file), bytes),
-            Err(e) => Response::new(404, "text/plain", format!("{file}: {e}")),
-        }
+        self.streamed(&full, file)
+    }
+
+    /// Media is watched by metadata; seeking never reads it all just to calculate a hash.
+    fn streamed(&self, full: &Path, path: &str) -> Response {
+        let response = match Response::file(full, http::kind(path)) {
+            Ok(response) => response,
+            Err(e) => return Response::new(404, "text/plain", e.to_string()),
+        };
+        let meta = std::fs::metadata(full).ok();
+        self.watched
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(full.to_path_buf())
+            .or_insert_with(|| Seen {
+                path: path.to_string(),
+                len: meta.as_ref().map_or(0, |m| m.len()),
+                modified: meta.and_then(|m| m.modified().ok()),
+                sha256: None,
+                hashed: false,
+            });
+        response
     }
 
     /// The file at `path` in the folder, whose changes are said from now on.
-    fn read(&self, path: &str) -> Response {
+    fn read(&self, path: &str, ranged: bool) -> Response {
         let Some((full, path)) = self.place(path) else {
             return Response::new(403, "text/plain", "not in the folder Studio has open");
         };
+        let kind = http::kind(&path);
+        if ranged || kind.starts_with("video/") || kind.starts_with("audio/") {
+            return self.streamed(&full, &path);
+        }
         let Ok(bytes) = std::fs::read(&full) else {
             return Response::new(404, "text/plain", "not found");
         };
@@ -418,6 +461,7 @@ impl Service {
                 len: meta.as_ref().map_or(0, |m| m.len()),
                 modified: meta.and_then(|m| m.modified().ok()),
                 sha256: Some(sha256.clone()),
+                hashed: true,
             },
         );
         Response::new(200, http::kind(&path), bytes).header("x-valle-sha256", sha256)
@@ -456,6 +500,7 @@ impl Service {
                 len: meta.as_ref().map_or(0, |m| m.len()),
                 modified: meta.and_then(|m| m.modified().ok()),
                 sha256: Some(sha256.clone()),
+                hashed: true,
             },
         );
         Response::json(200, &json!({ "status": "ok", "sha256": sha256 }))
@@ -510,21 +555,26 @@ impl Service {
         if name.contains(['/', '\\']) || !name.to_lowercase().ends_with(".mp4") {
             return Err("choose an MP4 file name, without a directory".into());
         }
+        self.panel(&["--studio-save-file", name])
+    }
+
+    /// A system panel of the helper command, one at a time: what it chose.
+    fn panel(&self, args: &[&str]) -> Result<Value, String> {
         let _picking = self
             .picking
             .try_lock()
-            .map_err(|_| "the save dialog is already open")?;
+            .map_err(|_| "a system dialog is already open")?;
         let done = Command::new(&self.exe)
-            .args(["--studio-save-file", name])
+            .args(args)
             .output()
             .map_err(|e| e.to_string())?;
         if !done.status.success() {
             return Err(format!(
-                "could not open the system save dialog: {}",
+                "could not open the system dialog: {}",
                 String::from_utf8_lossy(&done.stderr).trim()
             ));
         }
-        serde_json::from_slice(&done.stdout).map_err(|e| format!("save dialog: {e}"))
+        serde_json::from_slice(&done.stdout).map_err(|e| format!("system dialog: {e}"))
     }
 
     /// Only files produced by this service can be read through an export link.
@@ -539,10 +589,8 @@ impl Service {
         let Some(path) = path else {
             return Response::new(404, "text/plain", "no completed export");
         };
-        match std::fs::read(&path) {
-            Ok(bytes) => Response::new(200, http::kind(&path.to_string_lossy()), bytes),
-            Err(e) => Response::new(404, "text/plain", e.to_string()),
-        }
+        Response::file(&path, http::kind(&path.to_string_lossy()))
+            .unwrap_or_else(|e| Response::new(404, "text/plain", e.to_string()))
     }
 
     /// Runs `valle project <args> --json` on the project open, as the CLI does.
@@ -672,8 +720,8 @@ impl Service {
         }
     }
 
-    /// Looks at the files Studio read, and says each that changed: `change` with its path and
-    /// SHA-256, null once it is gone.
+    /// Says which files changed. Editable files carry a SHA-256 (null once gone); streamed
+    /// media is watched by metadata and carries no hash.
     fn watch(&self) {
         loop {
             std::thread::sleep(POLL);
@@ -684,12 +732,12 @@ impl Service {
                     let meta = std::fs::metadata(full).ok();
                     let len = meta.as_ref().map_or(0, |m| m.len());
                     let modified = meta.as_ref().and_then(|m| m.modified().ok());
-                    if meta.is_some() && len == seen.len && modified == seen.modified {
+                    if len == seen.len && modified == seen.modified {
                         continue;
                     }
-                    let sha256 = meta.and_then(|_| digest(full).ok());
+                    let sha256 = meta.filter(|_| seen.hashed).and_then(|_| digest(full).ok());
                     (seen.len, seen.modified) = (len, modified);
-                    if sha256 != seen.sha256 {
+                    if !seen.hashed || sha256 != seen.sha256 {
                         seen.sha256 = sha256.clone();
                         changed.push(
                             json!({ "event": "change", "path": seen.path, "sha256": sha256 }),
@@ -762,8 +810,11 @@ fn url(url: Option<&str>) -> Response {
         return Response::new(400, "text/plain", "u=<an http or https URL>");
     };
     let fetched = UrlCache::global().and_then(|c| c.fetch(url));
-    match fetched.and_then(|p| std::fs::read(&p).map_err(|e| e.to_string())) {
-        Ok(bytes) => Response::new(200, http::kind(url.split('?').next().unwrap_or(url)), bytes),
+    match fetched.and_then(|p| {
+        Response::file(&p, http::kind(url.split('?').next().unwrap_or(url)))
+            .map_err(|e| e.to_string())
+    }) {
+        Ok(response) => response,
         Err(e) => Response::new(502, "text/plain", e),
     }
 }

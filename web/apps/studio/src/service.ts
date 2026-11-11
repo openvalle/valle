@@ -7,7 +7,7 @@ export type Session = {
   root: string | null;
   name: string | null;
   timelines?: string[];
-  recent?: { path: string; opened: number }[];
+  recent?: { path: string; name: string; opened: number }[];
 };
 
 /** A file in the folder open. */
@@ -19,8 +19,33 @@ export type Layout = {
   fps: number;
   width: number;
   height: number;
-  tracks: { id: string; kind: string; at: string; clips: Clip[] }[];
+  markers: Marker[];
+  tracks: Track[];
 };
+
+export type Track = {
+  id: string;
+  kind: "visual" | "audio" | "caption" | "adjustment";
+  at: string;
+  /** Whether it is shown and heard. */
+  enabled: boolean;
+  /** Whether its clips follow one another, not placed by their own starts. */
+  sequence: boolean;
+  clips: Clip[];
+  transitions: Transition[];
+};
+
+/** A transition between two clips of a track, by their ids, and when it plays. */
+export type Transition = {
+  at: string;
+  kind: string;
+  from: string;
+  to: string;
+  start: number;
+  end: number;
+};
+
+export type Marker = { at: number; duration?: number; name?: string; color?: string };
 
 export type Clip = {
   id: string;
@@ -32,6 +57,11 @@ export type Clip = {
   enabled: boolean;
   anchor: string | null;
   kind: string;
+  /** A caption's text. */
+  text: string | null;
+  /** The file a video, image or audio clip plays, as its resource names it, and where in it
+   * the clip begins. */
+  media: { file: string | null; trim: number; rate: number } | null;
 };
 
 /** A file as read: its text, and its SHA-256, which a write says it replaces. */
@@ -65,12 +95,27 @@ export function address(path: string): string {
   return `/api/files/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
+/** The address of a resource's file, written relative to the timeline `entry` that names it. */
+export function mediaUrl(entry: string, file: string): string {
+  if (/^https?:\/\//.test(file)) return `/api/url?u=${encodeURIComponent(file)}`;
+  if (file.startsWith("/") || /^[a-z]:[\\/]/i.test(file))
+    return `/api/linked?file=${encodeURIComponent(file)}`;
+  const parts = entry.split("/").slice(0, -1);
+  for (const part of file.split("/")) {
+    if (part === "..") parts.pop();
+    else if (part !== ".") parts.push(part);
+  }
+  return address(parts.join("/"));
+}
+
 export const service = {
   session: () => json<Session>("/api/session"),
   open: (folder: string) => post<Session>("/api/open", { folder }),
   list: async () => (await json<{ files: Listed[] }>("/api/list")).files,
   saveFile: async (name: string) =>
     (await post<{ path: string | null }>("/api/save-file", { name })).path,
+  /** A folder chosen in the system's panel, or none. */
+  chooseFolder: async () => (await post<{ path: string | null }>("/api/choose-folder", {})).path,
 
   async read(path: string): Promise<Read | undefined> {
     const response = await fetch(address(path));
