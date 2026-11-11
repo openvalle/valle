@@ -91,7 +91,8 @@ the sources first.
   it does: `valle <command> --help` lists them.
 - `gpu`: Valle draws on the GPU, or on the CPU driver it carries where there is none. Report
   the message rather than retrying.
-- `video`: video needs FFmpeg 7, 8 or 9 installed; the message says what is missing.
+- `video`: video needs FFmpeg 7, 8 or 9 as shared libraries; the message says what is missing and
+  how to point Valle at them (`valle docs cli --section ffmpeg`). Report it rather than retrying.
 
 ## What to report
 

@@ -4,7 +4,7 @@
 #![allow(clippy::duplicate_mod)]
 
 use std::ffi::c_void;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use valle_ffmpeg::Version;
 
@@ -174,14 +174,41 @@ pub trait Write {
     fn send(&mut self, surface: Surface) -> Result<(), String>;
 }
 
-/// The FFmpeg version loaded, loading it the first time.
+/// Where FFmpeg's shared libraries are, if the command line gave it: before settings and
+/// `VALLE_FFMPEG_DIR`, which `settings.json` and the loader come to after.
+static DIRECTORY: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+pub fn set_directory(directory: PathBuf) {
+    let _ = DIRECTORY.set(directory);
+}
+
+/// The FFmpeg version loaded, loading it the first time: from the folder `--ffmpeg-dir`, else
+/// `VALLE_FFMPEG_DIR`, else `ffmpegDir` of `settings.json` names, else where it is usually
+/// installed.
 pub fn version() -> Result<Version, String> {
+    let given = DIRECTORY.get().cloned();
+    let chosen = match given {
+        Some(directory) => Some(directory),
+        None if std::env::var_os("VALLE_FFMPEG_DIR").is_some() => None,
+        None => crate::settings::Settings::load()?.ffmpeg_dir,
+    };
+    if let Some(directory) = chosen {
+        // Set at the first load only: an error says FFmpeg is already there.
+        let _ = valle_ffmpeg::set_directory(directory);
+    }
     // Errors only: encoders report what they do on every run.
     valle_ffmpeg::set_log_level(16);
     valle_ffmpeg::init().map(|r| r.version).map_err(|e| {
+        // The loader's own advice repeats this; the folders it tried are what is left of it.
+        let tried = e.to_string();
+        let tried = tried.split_once('\n').map_or("", |(_, tried)| tried);
         format!(
-            "FFmpeg 7, 8 or 9 is needed for video ({e}); on macOS `brew install ffmpeg`, on Linux \
-             the distribution's ffmpeg package"
+            "FFmpeg 7, 8 or 9 is needed for video: its shared libraries (not only the ffmpeg \
+             program), a GPL build for H.264 and HEVC\n\
+             Install it, then tell Valle where it is with `--ffmpeg-dir FOLDER`, \
+             `VALLE_FFMPEG_DIR`, or `\"ffmpegDir\"` in {}\n{tried}",
+            crate::settings::path()
+                .map_or("~/.valle/settings.json".into(), |p| p.display().to_string())
         )
     })
 }

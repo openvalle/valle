@@ -87,11 +87,41 @@ Valle draws on the GPU. On Linux and Windows without one, it draws on lavapipe, 
 driver built into the executable, with the same pixels on every machine; `adapter` then says
 `(bundled lavapipe)`. CPU rendering is slower: render a few frames first.
 
+## FFmpeg
+
+Video needs FFmpeg 7, 8 or 9 as shared libraries (`libavcodec`, `libavformat`, `libavutil`,
+`libswscale`, `libswresample`); the `ffmpeg` program alone is not enough. H.264 and HEVC are
+encoded by libx264 and libx265, which only a GPL build has; on macOS the hardware encoder is
+used first. Valle looks for the libraries in the first of these:
+
+1. `--ffmpeg-dir FOLDER`, an option of every command
+2. `VALLE_FFMPEG_DIR`
+3. `ffmpegDir` in `~/.valle/settings.json`
+4. Where each system usually has them: Homebrew and MacPorts on macOS; `/usr/lib` and the
+   system's library path on Linux; the folders of `PATH` on Windows
+
+A folder is the one with the libraries, or an installation whose `lib` or `bin` has them.
+
+## Settings
+
+`~/.valle/settings.json` sets what you want for every command. A field it does not know is an
+error that names it, and a command that needs none of it does not read the file. `VALLE_HOME`
+names another folder for it.
+
+```json
+{ "ffmpegDir": "/opt/ffmpeg/lib" }
+```
+
+| Field | What it does |
+| --- | --- |
+| `ffmpegDir` | The folder of FFmpeg's shared libraries; `--ffmpeg-dir` and `VALLE_FFMPEG_DIR` come first |
+
 ## Environment
 
 | Variable | What it does |
 | --- | --- |
 | `VALLE_CACHE_DIR` | The cache of downloads and built-in fonts; `~/.valle/cache` unless set |
-| `VALLE_FFMPEG_DIR` | The folder of FFmpeg's shared libraries, where it is not found |
+| `VALLE_FFMPEG_DIR` | The folder of FFmpeg's shared libraries; see FFmpeg |
+| `VALLE_HOME` | The folder of `settings.json`, `~/.valle` unless set |
 | `WGPU_BACKEND`, `WGPU_ADAPTER_NAME` | Choose another GPU backend or adapter |
 | `VALLE_LAVAPIPE` | A lavapipe driver to use instead of the built-in one |

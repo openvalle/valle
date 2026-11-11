@@ -29,6 +29,9 @@ pub struct Cli {
     /// Print what it does as it goes, a line of JSON each, then the result as JSON
     #[arg(long, global = true)]
     pub events: bool,
+    /// The folder of FFmpeg's shared libraries, in place of `VALLE_FFMPEG_DIR` and settings.json
+    #[arg(long, global = true, value_name = "FOLDER")]
+    pub ffmpeg_dir: Option<std::path::PathBuf>,
     #[command(subcommand)]
     pub command: Command,
 }

@@ -125,6 +125,9 @@ fn main() -> ExitCode {
     };
     let json = cli.json || cli.events;
     EVENTS.store(cli.events, Ordering::Relaxed);
+    if let Some(directory) = cli.ffmpeg_dir.clone() {
+        valle_native::media::set_directory(directory);
+    }
     let thread = std::thread::Builder::new()
         .stack_size(STACK)
         .spawn(move || run(cli));

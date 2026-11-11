@@ -4,4 +4,5 @@ pub mod gpu;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub mod lavapipe;
 pub mod media;
+pub mod settings;
 pub mod urls;

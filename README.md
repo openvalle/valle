@@ -87,9 +87,25 @@ Download the executable for your platform from
 Linux (x86_64 and arm64, glibc 2.28 or later) and Windows (x86_64 and arm64). It is one file;
 put it on your `PATH`.
 
-Video needs FFmpeg 7, 8 or 9 installed (`brew install ffmpeg`, `apt install ffmpeg`, or
-[a shared build](https://ffmpeg.org/download.html) on Windows); graphics alone do not. The
-built-in fonts download on first use.
+Video needs FFmpeg 7, 8 or 9 as **shared libraries**, a GPL build for H.264 and HEVC; the
+`ffmpeg` program alone is not enough. Graphics alone do not need it, and the built-in fonts
+download on first use.
+
+| Platform | Install |
+| --- | --- |
+| macOS | `brew install ffmpeg`; Valle finds it |
+| Debian 13, Fedora, Arch | The distribution's `ffmpeg` package; Valle finds it |
+| Ubuntu, older Debian | Their `ffmpeg` is older than 7: use a `gpl-shared` build from [BtbN's FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases), `linux64` or `linuxarm64`, and point Valle at its `lib` folder |
+| Windows | A `gpl-shared` build from the same page, `win64` or `winarm64`; add its `bin` folder to `PATH`, or point Valle at it |
+
+Where Valle does not find it, say where it is, once, in `~/.valle/settings.json`:
+
+```json
+{ "ffmpegDir": "/opt/ffmpeg/lib" }
+```
+
+or per command with `--ffmpeg-dir FOLDER`, or with `VALLE_FFMPEG_DIR`; the option comes first,
+then the variable, then the file. [The CLI guide](docs/cli.md) has the details.
 
 ```sh
 valle docs start                                  # read this first
