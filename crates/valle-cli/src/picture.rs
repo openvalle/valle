@@ -125,7 +125,11 @@ pub fn page_path(out: &Path, page: usize, pages: usize) -> PathBuf {
     }
     let stem = out.file_stem().unwrap_or_default().to_string_lossy();
     let ext = out.extension().unwrap_or_default().to_string_lossy();
-    out.with_file_name(format!("{stem}-{:03}.{ext}", page + 1))
+    let name = format!("{stem}-{:03}.{ext}", page + 1);
+    // The folder as it was written: `with_file_name` would join it by `\` on Windows.
+    let full = out.to_string_lossy();
+    let folder = &full[..full.len() - out.file_name().map_or(0, |n| n.len())];
+    PathBuf::from(format!("{folder}{name}"))
 }
 
 impl Storyboard {
@@ -369,5 +373,9 @@ mod tests {
             page_path(path, 1, 2),
             Path::new("renders/片段.test-002.PNG")
         );
+        // The folder's separator stays the one it was written with, on Windows too.
+        let named = |p: &str| page_path(Path::new(p), 1, 2).to_string_lossy().into_owned();
+        assert_eq!(named("a/b/c.png"), "a/b/c-002.png");
+        assert_eq!(named("c.png"), "c-002.png");
     }
 }
