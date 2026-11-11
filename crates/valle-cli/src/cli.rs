@@ -16,7 +16,8 @@ use crate::args::{self, Args, Frames};
 #[command(
     name = "valle",
     version,
-    about = "Motion graphics and video edits, written as TSX and timeline JSON, drawn on the GPU",
+    about = "The video engine for AI agents: Motion graphics written in TSX and edits of footage, \
+             sound and captions written in JSON, checked, rendered and previewed on your machine",
     arg_required_else_help = true,
     after_help = "New here? Read `valle docs start`. Run `valle <command> --help` for a \
                   command's options."
