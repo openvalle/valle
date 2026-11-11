@@ -17,7 +17,7 @@ export const composition = { width: 1920, height: 1080, fps: 30, duration: 3 };
 
 export default function Title() {
   const { seconds } = useCurrentTime();
-  const reveal = interpolate(seconds, [0, 0.8], [0, 1], { easing: "ease-out" });
+  const reveal = interpolate(seconds, [0, 0.8], [0, 1], { easing: "easeOutCubic" });
   return (
     <View className="flex h-full w-full items-center justify-center bg-slate-900">
       <Text
@@ -316,8 +316,8 @@ const pop = spring(seconds - 0.5, { preset: "bouncy" });
 ```
 
 - `interpolate(t, inputs, outputs, options)` maps rising `inputs` to `outputs`: numbers,
-  colors, lengths (`"24px"`) or angles (`"90deg"`). Options: `easing` (any CSS easing,
-  `cubic-bezier(…)`, `steps(…)`), `colorSpace`, `hue`, `extrapolateLeft` and
+  colors, lengths (`"24px"`) or angles (`"90deg"`). Options: `easing` (CSS easing or a named
+  preset below), `colorSpace`, `hue`, `extrapolateLeft` and
   `extrapolateRight` (`clamp`, the default, or `extend`).
 - `spring(t, options)` goes from 0 to 1 like a spring: `preset`, or `duration` and
   `bounce`, or `mass`, `stiffness`, `damping`; `springVelocity` gives its speed.
@@ -333,6 +333,38 @@ const pop = spring(seconds - 0.5, { preset: "bouncy" });
 
 For movement, animate `transform` or `translate`, and keep the layout still: animating
 `left`, `top` or margins moves the layout itself, which is slower and can step.
+
+### Easing presets
+
+`easing` accepts CSS keywords such as `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`,
+`step-start` and `step-end`, as well as `cubic-bezier(…)`, `steps(…)` and `linear(…)`.
+It also accepts these 33 case-sensitive preset names:
+
+- `easeIn`, `easeOut`, `easeInOut`: aliases for `ease-in`, `ease-out`, `ease-in-out`.
+- `easeIn` / `easeOut` / `easeInOut` followed by any family below, such as `easeOutCubic`
+  or `easeInOutElastic`. `In` eases into movement, `Out` eases into the end, and `InOut`
+  eases both ends.
+
+| Family | Motion |
+| --- | --- |
+| `Sine` | Gentle acceleration and deceleration |
+| `Quad`, `Cubic`, `Quart`, `Quint` | Progressively stronger acceleration and deceleration |
+| `Expo` | An abrupt start or finish to the change in speed |
+| `Circ` | Circular-arc-style acceleration and deceleration |
+| `Back` | Pulls back before starting, or overshoots before settling |
+| `Elastic` | Oscillates around the endpoint |
+| `Bounce` | Bounces toward the endpoint |
+
+```tsx
+const x = interpolate(seconds, [0, 1], [0, 400], { easing: "easeOutCubic" });
+```
+
+`easeOutCubic` is the same preset as `cubic-bezier(0.33, 1, 0.68, 1)`. These names select
+fixed approximations, not exact evaluations of the named mathematical functions: the
+first eight families use cubic Béziers, and `Elastic`/`Bounce` use `linear()` curves with
+41 evenly spaced samples rounded to three decimal places. Back and Elastic can go below
+0 or above 1. Presets are resolved when parsed, not looked up each frame. Timeline keyframes
+accept the same names, including audio gain and pan automation.
 
 ## Text and fonts
 

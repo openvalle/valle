@@ -1730,6 +1730,54 @@ mod tests {
     }
 
     #[test]
+    fn motion_prop_keyframes_accept_named_easings() {
+        run(|| {
+            let motion = indoc::indoc! {r#"
+                export const composition = { width: 320, height: 180, fps: 30, duration: 3 };
+                export const controls = { props: { size: number({ default: 20 }) } };
+                export default function Scene({ size }) {
+                    return <View key="box" style={{ width: size, height: 10 }} />;
+                }
+            "#};
+            let doc = json!({
+                "canvas": { "width": 320, "height": 180, "fps": 30 },
+                "resources": { "scene": "scene.motion.tsx" },
+                "tracks": { "visual": [{ "items": [{
+                    "id": "a", "kind": "motion", "component": "scene", "duration": 3,
+                    "props": { "size": { "keyframes": [
+                        [0, 20, "easeOutCubic"], [1, 120, "easeOutBounce"], [2, 20]
+                    ] } }
+                }] }] }
+            });
+            let read = |path: &str| (path == "scene.motion.tsx").then(|| motion.to_string());
+            let mut s = scene("edit.timeline.json", &doc, &read);
+            let cubic = crate::ease::Easing::parse("cubic-bezier(0.33, 1, 0.68, 1)").unwrap();
+            for (time, expected) in [
+                (0.0, 20.0),
+                (0.5, 20.0 + 100.0 * cubic.at(0.5)),
+                (1.0, 120.0),
+                (1.25, 72.7),
+                (1.5, 43.4),
+                (2.0, 20.0),
+                (0.5, 20.0 + 100.0 * cubic.at(0.5)),
+            ] {
+                let f = frame(&mut s, time);
+                let target = f
+                    .template
+                    .nodes
+                    .iter()
+                    .position(|n| n.path.as_deref().is_some_and(|p| p.ends_with("/box")))
+                    .unwrap();
+                let width = f64::from(f.layout.boxes[target].border.width);
+                assert!(
+                    (width - expected).abs() < 0.02,
+                    "at {time}: {width} != {expected}"
+                );
+            }
+        });
+    }
+
+    #[test]
     fn a_motion_clip_draws_inside_its_box() {
         run(|| {
             let motion = r#"

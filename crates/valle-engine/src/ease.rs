@@ -1,6 +1,6 @@
 //! Easing curves as CSS writes them: `linear`, `ease` and its kin, `cubic-bezier()`, `steps()` and
 //! `linear()` (CSS Easing 2), where Chrome is the reference for what the specification leaves
-//! open. easings.net's names are refused, with the CSS that draws the same curve.
+//! open. Named presets expand to these same curves when parsed.
 
 use std::f64::consts::PI;
 
@@ -40,8 +40,8 @@ const EASE_IN_OUT: [f64; 4] = [0.42, 0.0, 0.58, 1.0];
 impl Easing {
     pub fn parse(text: &str) -> Result<Easing, String> {
         let trimmed = text.trim();
-        if let Some(css) = instead(trimmed) {
-            return Err(format!("easing {trimmed} is not CSS; write {css}"));
+        if let Some(css) = preset(trimmed) {
+            return Self::parse(&css);
         }
         let s = trimmed.to_ascii_lowercase();
         Ok(match s.as_str() {
@@ -68,7 +68,7 @@ impl Easing {
                         return Err(format!(
                             "{trimmed} is not an easing: linear, ease, ease-in, ease-out, \
                              ease-in-out, step-start, step-end, cubic-bezier(), steps() or \
-                             linear()"
+                             linear(), or a named preset such as easeOutCubic or easeOutBounce"
                         ));
                     }
                 }
@@ -267,8 +267,9 @@ fn bezier_at([x1, y1, x2, y2]: [f64; 4], x: f64) -> f64 {
     curve(y1, y2, s)
 }
 
-/// The CSS that draws what an easings.net or camelCase name means, if `name` is one.
-fn instead(name: &str) -> Option<String> {
+/// Fixed CSS presets for easings.net and camelCase names. Béziers approximate the named
+/// mathematical curves; elastic and bounce use 41 evenly spaced, rounded samples.
+fn preset(name: &str) -> Option<String> {
     const BEZIERS: [(&str, &str); 27] = [
         ("easeIn", "ease-in"),
         ("easeOut", "ease-out"),
@@ -369,26 +370,55 @@ mod tests {
     }
 
     #[test]
-    fn names_that_are_not_css_say_what_is() {
-        assert_eq!(
-            Easing::parse("easeOutCubic"),
-            Err("easing easeOutCubic is not CSS; write cubic-bezier(0.33, 1, 0.68, 1)".into())
-        );
-        assert_eq!(
-            Easing::parse("easeIn"),
-            Err("easing easeIn is not CSS; write ease-in".into())
-        );
-        let bounce = Easing::parse("easeOutBounce").unwrap_err();
-        let css = bounce
-            .strip_prefix("easing easeOutBounce is not CSS; write ")
-            .unwrap();
-        assert!((Easing::parse(css).unwrap().at(0.5) - out_bounce(0.5)).abs() < 2e-2);
+    fn named_presets_keep_their_css_curves() {
+        for (name, css) in [
+            ("easeIn", "ease-in"),
+            ("easeOut", "ease-out"),
+            ("easeInOut", "ease-in-out"),
+            (" easeOutCubic ", "cubic-bezier(0.33, 1, 0.68, 1)"),
+            ("easeInOutSine", "cubic-bezier(0.37, 0, 0.63, 1)"),
+            ("easeOutBack", "cubic-bezier(0.34, 1.56, 0.64, 1)"),
+        ] {
+            assert_eq!(Easing::parse(name).unwrap(), Easing::parse(css).unwrap());
+        }
+        assert!(at("easeOutBack", 0.75) > 1.0);
+    }
+
+    #[test]
+    fn every_named_family_has_all_three_directions() {
+        for family in [
+            "Sine", "Quad", "Cubic", "Quart", "Quint", "Expo", "Circ", "Back", "Elastic", "Bounce",
+        ] {
+            for direction in ["In", "Out", "InOut"] {
+                let name = format!("ease{direction}{family}");
+                let easing = Easing::parse(&name).unwrap();
+                assert!(easing.at(0.0).abs() < 1e-12, "{name}");
+                assert!((easing.at(1.0) - 1.0).abs() < 1e-12, "{name}");
+                for t in [-0.25, 0.13, 0.5, 0.87, 1.25] {
+                    assert!(easing.at(t).is_finite(), "{name} at {t}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sampled_presets_keep_bounces_and_overshoot() {
+        for t in [0.1, 0.25, 0.5, 0.75, 0.9] {
+            assert!((at("easeOutBounce", t) - out_bounce(t)).abs() <= 0.00051);
+            assert!((at("easeOutElastic", t) - out_elastic(t)).abs() <= 0.00051);
+            assert!((at("easeInOutElastic", t) - in_out_elastic(t)).abs() <= 0.00051);
+        }
+        assert!(at("easeOutElastic", 0.1) > 1.0);
+        assert!(at("easeInElastic", 0.9) < 0.0);
     }
 
     #[test]
     fn what_is_no_easing_is_an_error() {
         for bad in [
             "wobbly",
+            "easeOutCubik",
+            "easeoutcubic",
+            "easeOutCubic()",
             "cubic-bezier(1, 2, 3)",
             "cubic-bezier(2, 0, 0, 1)",
             "steps(0)",

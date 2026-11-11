@@ -637,6 +637,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn audio_keyframes_accept_named_easings() {
+        let value = serde_json::json!({ "keyframes": [[0, 0, "easeOutBounce"], [1, 1]] });
+        let gain = gain(&value, "tracks.audio[0].gain").unwrap();
+        for (time, expected) in [(0.0, 0.0), (0.25, 0.473), (0.5, 0.766), (1.0, 1.0)] {
+            assert!((gain.at(time) - expected).abs() < 1e-12, "at {time}");
+        }
+    }
+
+    #[test]
     fn checking_nested_sound_rejects_cycles_without_decoding() {
         let text = r#"{
             "canvas":{"width":64,"height":36,"fps":30},

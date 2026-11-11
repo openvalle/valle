@@ -937,6 +937,37 @@ mod tests {
     }
 
     #[test]
+    fn named_easings_work_in_traced_and_constant_interpolation() {
+        big_stack(|| {
+            let mut f = scene(indoc! {r#"
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  return <View style={{
+                    width: interpolate(seconds, [0, 1], [0, 100], { easing: "easeOutCubic" }),
+                    height: interpolate(seconds, [0, 1], [0, 100], { easing: "easeOutBounce" }),
+                    left: interpolate(0.5, [0, 1], [0, 100], { easing: "easeOutCubic" }),
+                  }} />;
+                }
+            "#});
+            let cubic = crate::ease::Easing::parse("cubic-bezier(0.33, 1, 0.68, 1)").unwrap();
+            for (seconds, bounce) in [
+                ("0", 0.0),
+                ("0.25", 0.473),
+                ("0.5", 0.766),
+                ("1", 1.0),
+                ("0.25", 0.473),
+            ] {
+                let frame = at(&mut f, seconds);
+                let t = seconds.parse().unwrap();
+                assert_eq!(style(&frame, 0, "width"), V::Num(100.0 * cubic.at(t)));
+                assert_eq!(style(&frame, 0, "height"), V::Num(100.0 * bounce));
+                assert_eq!(style(&frame, 0, "left"), V::Num(100.0 * cubic.at(0.5)));
+            }
+            assert_eq!(f.traces(), 1);
+        });
+    }
+
+    #[test]
     fn time_flows_through_expressions() {
         big_stack(|| {
             let mut f = scene(indoc! {"

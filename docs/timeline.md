@@ -209,14 +209,15 @@ A picture in picture, a quarter of the canvas, in the top right:
 and a Motion clip's `props` take keyframes instead of a value:
 
 ```json
-"opacity": { "keyframes": [[0, 0, "ease-out"], [0.5, 1], [4.5, 1, "ease-in"], [5, 0]] }
+"opacity": { "keyframes": [[0, 0, "easeOutCubic"], [0.5, 1], [4.5, 1, "easeInCubic"], [5, 0]] }
 ```
 
 - Each keyframe is `[time, value]` or `[time, value, easing]`. Times are seconds from the
   clip's start and rise strictly.
-- The easing shapes the stretch leaving that keyframe, so the last one has none. It is a CSS
-  easing: `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `cubic-bezier(…)`,
-  `steps(…)`.
+- The easing shapes the stretch leaving that keyframe, so the last one has none. It accepts
+  CSS easing (`linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `cubic-bezier(…)`,
+  `steps(…)`, `linear(…)`) or the same [named presets as Motion](motion.md#easing-presets),
+  such as `easeOutCubic` and `easeOutBounce`. This also applies to audio keyframes.
 - `"interpolation": "step"` holds each value until the next keyframe.
 
 ## Transitions
