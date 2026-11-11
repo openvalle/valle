@@ -148,8 +148,13 @@ impl Writer {
             }
             s.index()
         };
+        // The movie's clock is the video's, as FFmpeg 9's is: at FFmpeg 7 and 8's 1000 a second,
+        // the edit list rounds a fractional rate's length to a millisecond, which FFmpeg 8 then
+        // reads as the video's length.
+        let mut header = Dictionary::new();
+        header.set("movie_timescale", &o.fps[0].to_string());
         output
-            .write_header()
+            .write_header_with(header)
             .map_err(|e| format!("{}: {e}", path.display()))?;
         let flags = software::scaling::Flags::BILINEAR | software::scaling::Flags::ACCURATE_RND;
         // Unused with surfaces, whose frames the GPU draws.
