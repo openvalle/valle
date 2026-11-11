@@ -14,8 +14,9 @@ on:
 permissions:
   contents: read
 
+# A run started by hand has a group of its own, so it does not cancel the push it builds on.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 # Tests' backtraces keep their lines, and the Rust caches, a gigabyte a job with full debug
@@ -347,7 +348,8 @@ jobs:
           done
           cat notary.json
           jq -e '.status == "Accepted"' notary.json
-          spctl --assess --type execute --verbose dist/valle || true
+          # As Gatekeeper sees a downloaded command-line tool: `execute` is for app bundles.
+          spctl --assess --type open --context context:primary-signature --verbose dist/valle
           dist/valle --version
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
