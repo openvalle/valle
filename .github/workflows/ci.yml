@@ -11,6 +11,11 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# Tests' backtraces keep their lines, and the Rust caches, a gigabyte a job with full debug
+# information, fit the repository's 10 GB together.
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
 jobs:
   check:
     runs-on: ubuntu-24.04
@@ -156,6 +161,17 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ hashFiles('bun.lock') }}
+      # wasm-bindgen's CLI, which xtask installs at the version it pins: a minute and a half to
+      # build, and in target/tools, which the Rust cache does not keep.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/tools
+          key: wasm-bindgen-${{ runner.os }}-${{ hashFiles('xtask/src/main.rs') }}
+          restore-keys: wasm-bindgen-${{ runner.os }}-
       # QuickJS is C, built for wasm32 by the runner's LLVM; Ubuntu names its tools by version.
       - name: Choose the wasm32 C tools
         run: |
