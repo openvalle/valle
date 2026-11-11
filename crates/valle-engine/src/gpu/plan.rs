@@ -109,8 +109,82 @@ impl Reach {
     }
 }
 
+/// The standard deviation a smaller copy is blurred by at the least, in its own px: under it the
+/// copy's px would show in the blur.
+const LEAST: f32 = 6.0;
+
+/// The most of a layer's px that a px of a smaller copy is across.
+const MOST: u32 = 16;
+
+/// A smaller copy of a layer that a large blur goes through: where its first px starts on the
+/// layer, how many of the layer's px each of its px is across and down, its width and height in
+/// px, and the standard deviations it is blurred by along x and y, in its px.
+struct Smaller {
+    origin: [f32; 2],
+    block: [f32; 2],
+    extent: [f32; 2],
+    sigma: [f32; 2],
+}
+
+impl Smaller {
+    /// The copy for a blur of `sigma` px drawn within `clip` on a target of `size`, if the blur
+    /// is large enough for one. Within `bounds`, its px divide them evenly, so that it mirrors
+    /// at their edges as they do. Otherwise it has the blocks the pixels in `clip` are drawn
+    /// back from, and those its blur reaches from them: a block past the target's edge is its
+    /// edge px, as every block after it is, so the copy ends there.
+    fn of(sigma: f32, clip: [f32; 4], bounds: Option<[f32; 4]>, size: [u32; 2]) -> Option<Smaller> {
+        // Averaging blocks `b` px across and drawing them back linearly blur by
+        // (3 b² − 1) / 12 px² between them; the copy's own blur is the rest, in its px.
+        let within =
+            |b: f32| (sigma * sigma - (3.0 * b * b - 1.0).max(0.0) / 12.0).max(0.0) / (b * b);
+        let mut by = 1;
+        while by < MOST && within((2 * by) as f32) >= LEAST * LEAST {
+            by *= 2;
+        }
+        if by == 1 {
+            return None;
+        }
+        let by = by as f32;
+        if let Some([x, y, w, h]) = bounds {
+            let along = |length: f32, size: u32| {
+                let count = (length / by).ceil();
+                (count >= 1.0 && count <= size as f32).then(|| (length / count, count))
+            };
+            let (across, width) = along(w, size[0])?;
+            let (down, height) = along(h, size[1])?;
+            return Some(Smaller {
+                origin: [x, y],
+                block: [across, down],
+                extent: [width, height],
+                sigma: [within(across).sqrt(), within(down).sqrt()],
+            });
+        }
+        let inner = within(by).sqrt();
+        let spread = (3.0 * inner).ceil();
+        let [x, y, w, h] = Reach(Some(clip)).pixels(size)?.map(|v| v as f32);
+        let along = |from: f32, to: f32, size: u32| {
+            let size = size as f32;
+            let first = ((from + 0.5) / by - 0.5).floor() - spread;
+            let last = ((to - 0.5) / by - 0.5).floor() + 1.0 + spread;
+            let first = first.max(-1.0);
+            let extent = last.min((size / by).ceil()) - first + 1.0;
+            (extent <= size).then_some((first * by, extent))
+        };
+        let (left, width) = along(x, x + w, size[0])?;
+        let (top, height) = along(y, y + h, size[1])?;
+        Some(Smaller {
+            origin: [left, top],
+            block: [by, by],
+            extent: [width, height],
+            sigma: [inner, inner],
+        })
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Plan {
+    /// The targets' width and height, px.
+    pub(super) size: [u32; 2],
     pub(super) transforms: Vec<u32>,
     pub(super) rects: Vec<u32>,
     pub(super) gradients: Vec<u32>,
@@ -184,7 +258,8 @@ impl Plan {
     /// A new layer of `layer` blurred by a Gaussian of `sigma` px: along x, then along y. Within
     /// `bounds` (x, y, width and height, whole px) if they are given, which it reads as if
     /// mirrored at their edges; otherwise `reach`, where the layer has anything, grows by the
-    /// blur's three standard deviations.
+    /// blur's three standard deviations. A large blur goes through a smaller copy of the layer,
+    /// which costs as much whatever its size.
     pub(super) fn blurred(
         &mut self,
         mut layer: usize,
@@ -203,21 +278,50 @@ impl Plan {
             let Some(clip) = clip.0 else {
                 return layer;
             };
-            for [x, y] in [[1.0, 0.0], [0.0, 1.0]] {
-                let words = [sigma, x, y, 0.0].into_iter();
-                let words = words.chain(bounds.unwrap_or([0.0; 4])).chain([0.0; 12]);
-                let at = self.words(words);
-                let target = self.layer();
-                self.steps.push(Step::Blur {
-                    target,
-                    layer,
-                    at,
-                    clip,
-                });
-                layer = target;
+            let Some(smaller) = Smaller::of(sigma, clip, bounds, self.size) else {
+                for [x, y] in [[1.0, 0.0], [0.0, 1.0]] {
+                    let words = [sigma, x, y, 0.0].into_iter();
+                    let words = words.chain(bounds.unwrap_or([0.0; 4])).chain([0.0; 12]);
+                    layer = self.blur(layer, words, clip);
+                }
+                return layer;
+            };
+            // The copy is at the top left of its targets: made, blurred there, and drawn back.
+            let Smaller {
+                origin: [x, y],
+                block: [across, down],
+                extent: [w, h],
+                sigma: [sx, sy],
+            } = smaller;
+            let copy = [x, y, across, down, w, h, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+            let all = [0.0, 0.0, w, h];
+            // Bounds are the whole copy, which then mirrors at its own edges.
+            let mirrored = bounds.map_or([0.0; 4], |_| all);
+            let passes = [
+                ([0.0, 0.0, 0.0, 1.0], [0.0; 4], all),
+                ([sx, 1.0, 0.0, 0.0], mirrored, all),
+                ([sy, 0.0, 1.0, 0.0], mirrored, all),
+                ([0.0, 0.0, 0.0, 2.0], [0.0; 4], clip),
+            ];
+            for (pass, bounds, clip) in passes {
+                let words = pass.into_iter().chain(bounds).chain(copy);
+                layer = self.blur(layer, words, clip);
             }
         }
         layer
+    }
+
+    /// A new layer of one pass of a blur over `layer`, with its words, only within `clip`.
+    fn blur(&mut self, layer: usize, words: impl Iterator<Item = f32>, clip: [f32; 4]) -> usize {
+        let at = self.words(words);
+        let target = self.layer();
+        self.steps.push(Step::Blur {
+            target,
+            layer,
+            at,
+            clip,
+        });
+        target
     }
 
     /// A new layer of `layer` through `filters`, in the px `matrix` takes to the target's, where

@@ -528,7 +528,8 @@ enum Step {
         mask: usize,
     },
     /// Draws `layer` blurred along one axis into `target`, a new layer, only within `clip` (min
-    /// x, min y, max x, max y px), out of which the blur has nothing to spread.
+    /// x, min y, max x, max y px), out of which the blur has nothing to spread. Or one of the
+    /// passes around the blur of a smaller copy: `layer` into its copy, or its copy drawn back.
     Blur {
         target: usize,
         layer: usize,
@@ -1005,6 +1006,7 @@ impl<'a> Renderer<'a> {
             })
             .collect();
         let mut plan = Plan {
+            size: self.size,
             targets: 1,
             ..Plan::default()
         };
