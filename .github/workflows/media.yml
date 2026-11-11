@@ -31,7 +31,7 @@ jobs:
         with:
           key: media
           # All majors build the same binary; only one job needs to save it.
-          save-if: ${{ matrix.ffmpeg == 9 && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v1') }}
+          save-if: ${{ matrix.ffmpeg == 9 && github.ref == 'refs/heads/main' }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
