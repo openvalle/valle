@@ -8,8 +8,10 @@ metadata:
 # Valle
 
 Use the user's `valle`: the installed executable, or `valle` on PATH. `valle --version` says
-which; this skill is written for 0.1. If there is none, ask the user to download it from
-https://github.com/openvalle/valle/releases and put it on PATH; do not build it from source.
+which; this skill is written for 0.1. If there is none, ask the user before installing it,
+then run `curl -fsSL https://openvalle.ai/install.sh | sh` on macOS and Linux, or
+`irm https://openvalle.ai/install.ps1 | iex` in PowerShell on Windows; it installs to
+`~/.valle/bin/valle`. Do not build it from source.
 
 Its guides are built in and match its version; read them instead of guessing a field or a
 function:

@@ -4,8 +4,31 @@ Valle is one executable. Graphics need nothing else; video also needs FFmpeg.
 
 ## The executable
 
-Download it for your platform from
-[Releases](https://github.com/openvalle/valle/releases) and put it on your `PATH`.
+On macOS and Linux:
+
+```sh
+curl -fsSL https://openvalle.ai/install.sh | sh
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://openvalle.ai/install.ps1 | iex
+```
+
+Each downloads the latest release's executable for the machine, checks it against the
+release's `SHA256SUMS`, puts it in `~/.valle/bin` and adds that folder to your `PATH`. Run it
+again to update.
+
+| Variable | What it does |
+| --- | --- |
+| `VALLE_VERSION` | Installs that release, such as `v0.1.0`, instead of the latest |
+| `VALLE_INSTALL` | Installs under that folder instead of `~/.valle` |
+| `VALLE_NO_MODIFY_PATH=1` | Leaves `PATH` alone, and says the line to add |
+
+Or download a package yourself from
+[Releases](https://github.com/openvalle/valle/releases), unpack it and put `valle` on your
+`PATH`.
 
 | Platform | Package |
 | --- | --- |

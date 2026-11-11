@@ -82,9 +82,13 @@ scenes in [`examples/showcase`](examples/showcase), each one file.
 
 ## Get started
 
-1. **Download** `valle` for your platform from
-   [Releases](https://github.com/openvalle/valle/releases) and put it on your `PATH`. For video,
-   install FFmpeg: `brew install ffmpeg` on macOS, other platforms in [Install](docs/install.md).
+1. **Install** Valle:
+   ```sh
+   curl -fsSL https://openvalle.ai/install.sh | sh        # macOS and Linux
+   irm https://openvalle.ai/install.ps1 | iex             # Windows
+   ```
+   For video, install FFmpeg too: `brew install ffmpeg` on macOS, other platforms in
+   [Install](docs/install.md).
 2. **Add the skill** to your agent:
    ```sh
    npx skills add openvalle/valle

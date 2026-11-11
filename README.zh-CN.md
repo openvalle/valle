@@ -80,8 +80,12 @@ Chrome，没有截图：同样的输入，在任何机器上都得到同样的�
 
 ## 开始使用
 
-1. **下载**：从 [Releases](https://github.com/openvalle/valle/releases) 下载对应平台的
-   `valle`，放进 `PATH`。渲染视频还需要 FFmpeg：macOS 上 `brew install ffmpeg`，其他平台见
+1. **安装** Valle：
+   ```sh
+   curl -fsSL https://openvalle.ai/install.sh | sh        # macOS 和 Linux
+   irm https://openvalle.ai/install.ps1 | iex             # Windows
+   ```
+   渲染视频还需要 FFmpeg：macOS 上 `brew install ffmpeg`，其他平台见
    [安装文档](docs/install.md)。
 2. **给 Agent 装上 skill**：
    ```sh

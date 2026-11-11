@@ -63,10 +63,54 @@ jobs:
           mkdir -p "$HOME"
           cat scripts/install.sh | env -u SHELL sh | tee "$RUNNER_TEMP/bare.log"
           "$HOME/.valle/bin/valle" --version
+          # The line as the script prints it: its `$HOME` and `$PATH` are text, not expanded.
+          # shellcheck disable=SC2016
           grep -q 'export PATH="$HOME/.valle/bin:$PATH"' "$RUNNER_TEMP/bare.log"
       - name: Draw a frame with what it installed
         run: |
           "$RUNNER_TEMP/home/.valle/bin/valle" motion render examples/hello.motion.tsx --frame 30 -o frame.png --json
+
+  # The commands as the README gives them: the scripts openvalle.ai serves are these ones, and
+  # they install.
+  served:
+    name: ${{ matrix.name }}
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: curl | sh (macOS)
+            runner: macos-15
+          - name: curl | sh (Linux)
+            runner: ubuntu-24.04
+          - name: irm | iex (Windows)
+            runner: windows-2022
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The served script is this repository's
+        shell: bash
+        run: |
+          script=install.sh
+          if [ "$RUNNER_OS" = Windows ]; then script=install.ps1; fi
+          curl -fsSL "https://openvalle.ai/$script" | diff - "scripts/$script"
+      - name: curl -fsSL https://openvalle.ai/install.sh | sh
+        if: runner.os != 'Windows'
+        run: |
+          export HOME="$RUNNER_TEMP/home"
+          mkdir -p "$HOME"
+          curl -fsSL https://openvalle.ai/install.sh | sh
+          "$HOME/.valle/bin/valle" --version
+      - name: irm https://openvalle.ai/install.ps1 | iex
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:VALLE_INSTALL = Join-Path $env:RUNNER_TEMP 'valle'
+          irm https://openvalle.ai/install.ps1 | iex
+          & (Join-Path $env:VALLE_INSTALL 'bin\valle.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw 'valle does not run' }
 
   # The oldest systems the Linux package is for, and one it is not.
   containers:
