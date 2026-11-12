@@ -7,11 +7,18 @@ on:
     paths: [scripts/install.sh, scripts/install.ps1, .github/workflows/install.yml]
   pull_request:
     paths: [scripts/install.sh, scripts/install.ps1, .github/workflows/install.yml]
-  # After a release, to see its packages install.
+  # A release, once published, is what the scripts install: its packages install on every
+  # system, as the version it is.
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# The version a release's install must be; empty on any other run.
+env:
+  RELEASED: ${{ github.event_name == 'release' && !github.event.release.prerelease && github.event.release.tag_name || '' }}
 
 concurrency:
   group: install-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
@@ -47,7 +54,9 @@ jobs:
           mkdir -p "$HOME"
           touch "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zshrc"
           cat scripts/install.sh | SHELL=/bin/bash sh
-          test "$("$HOME/.valle/bin/valle" --version)" != ""
+          installed=$("$HOME/.valle/bin/valle" --version)
+          test "$installed" != ""
+          if [ -n "$RELEASED" ]; then test "$installed" = "valle ${RELEASED#v}"; fi
           grep -q '.valle/bin' "$HOME/.bashrc" "$HOME/.bash_profile"
       - name: Install again, over itself
         run: |
@@ -183,8 +192,9 @@ jobs:
           Get-Content -Raw scripts/install.ps1 | Invoke-Expression
           $exe = Join-Path $env:VALLE_INSTALL 'bin\valle.exe'
           if (-not (Test-Path $exe)) { throw "no $exe" }
-          & $exe --version
+          $installed = & $exe --version
           if ($LASTEXITCODE -ne 0) { throw 'valle does not run' }
+          if ($env:RELEASED -and $installed -ne "valle $($env:RELEASED.TrimStart('v'))") { throw "installed $installed, not $env:RELEASED" }
           $user = [Environment]::GetEnvironmentVariable('Path', 'User')
           if (($user -split ';') -notcontains (Join-Path $env:VALLE_INSTALL 'bin')) { throw "not on the user's PATH: $user" }
       - name: Install again, over itself

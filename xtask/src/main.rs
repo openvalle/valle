@@ -523,3 +523,34 @@ fn run(command: &mut Command, what: &str) -> Result<(), String> {
         Err(format!("`{what}` failed ({status})"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::root;
+
+    /// A release has one version, written in the workspace, the two packages and the skill:
+    /// a tag is checked against it only once all of them are built.
+    #[test]
+    fn the_packages_and_the_skill_state_the_workspace_s_version() {
+        let version = env!("CARGO_PKG_VERSION");
+        let read = |file: &str| std::fs::read_to_string(root().join(file)).expect(file);
+        for file in [
+            "web/packages/engine/package.json",
+            "web/apps/studio/package.json",
+        ] {
+            let line = format!("\"version\": \"{version}\"");
+            assert!(read(file).contains(&line), "{file} is not {version}");
+        }
+        let skill = read("skills/valle/SKILL.md");
+        assert!(
+            skill.contains(&format!("  version: \"{version}\"\n")),
+            "skills/valle/SKILL.md is not {version}"
+        );
+        // Its text names the minor version its guides are for.
+        let minor = version.rsplit_once('.').expect("three numbers").0;
+        assert!(
+            skill.contains(&format!("this skill is written for {minor}. ")),
+            "skills/valle/SKILL.md is not written for {minor}"
+        );
+    }
+}
