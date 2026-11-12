@@ -60,6 +60,11 @@ export type Events = {
 /** What plays a timeline's sound: an audio worklet the worker gives chunks to. */
 type Audio = { context: AudioContext; node: AudioWorkletNode; gain: GainNode };
 
+/** The frame playing started from, and when, in seconds of its clock: the audio context's when
+ * there is sound to hear, from when its first sample is heard (NaN until then), else the
+ * display's, from the first refresh after it started, with the refresh before this one. */
+type Clock = { frame: number; at: number; gen?: number; refreshed?: number };
+
 export async function createPlayer(options: Options): Promise<Player> {
   if (!/\.(motion\.tsx|timeline\.json)$/.test(options.entry)) {
     throw new PlayerError(
@@ -100,10 +105,11 @@ export class Player {
   #rate!: [number, number];
   #listeners = new Map<keyof Events, Set<(value: never) => void>>();
   #frame = 0;
-  /** While playing: the frame it started from, and when, in seconds of its clock: the audio
-   * context's when there is sound to hear, from when its first sample is heard (NaN until then),
-   * else the page's. */
-  #clock: { frame: number; at: number; gen?: number } | undefined;
+  /** The clock, while playing. */
+  #clock: Clock | undefined;
+  /** How long the display takes to refresh, in seconds: the least seen between two refreshes
+   * since playing began, 0 before two. */
+  #refresh = 0;
   /** The sound of the timeline open, if it has any, and what plays it once it first plays. */
   #sound: { length: number } | null = null;
   #audio: Promise<Audio> | undefined;
@@ -205,17 +211,18 @@ export class Player {
       return;
     }
     const last = this.#info.frames - 1;
+    this.#refresh = 0;
     this.#run(this.#frame >= last && !this.loop ? 0 : this.#frame);
     this.#reached = this.#clock!.frame;
     this.#resetStats(this.#frame);
     this.#emit("play", undefined);
-    const tick = () => {
+    const tick = (refresh?: number) => {
       const clock = this.#clock;
       if (!clock) {
         return;
       }
       const [n, d] = this.#rate;
-      const elapsed = this.#now(clock) - clock.at;
+      const elapsed = this.#elapsed(clock, refresh);
       let index = clock.frame + (Number.isNaN(elapsed) ? 0 : Math.floor(elapsed * (n / d)));
       if (index > last) {
         if (!this.loop) {
@@ -375,13 +382,34 @@ export class Player {
     void this.#audio?.then((a) => a.node.port.postMessage({ stop: true }));
   }
 
-  /** The clock's time now, in seconds. */
-  #now(clock: { gen?: number }): number {
-    if (clock.gen === undefined) {
-      return performance.now() / 1000;
+  /** How far `clock` is past its start, in seconds, at the display refresh a callback is for,
+   * which began at `refresh` ms. The sound's clock is the audio context's. Without sound it is
+   * the display's: refreshes come evenly where callbacks run early or late, so the clock starts
+   * at the first one and reads half a refresh on. A frame then turns between two refreshes, and
+   * none is held a refresh longer than the next for falling on one. */
+  #elapsed(clock: Clock, refresh: number | undefined): number {
+    if (clock.gen !== undefined) {
+      const context = this.#context;
+      const now = context
+        ? context.currentTime - (context.outputLatency || context.baseLatency)
+        : 0;
+      return now - clock.at;
     }
-    const context = this.#context;
-    return context ? context.currentTime - (context.outputLatency || context.baseLatency) : 0;
+    if (refresh === undefined) {
+      return 0;
+    }
+    const at = refresh / 1000;
+    if (clock.refreshed === undefined) {
+      clock.at = at;
+    } else {
+      const took = at - clock.refreshed;
+      // Two callbacks for one refresh are not a refresh apart.
+      if (took > 0.002 && (this.#refresh === 0 || took < this.#refresh)) {
+        this.#refresh = took;
+      }
+    }
+    clock.refreshed = at;
+    return at - clock.at + this.#refresh / 2;
   }
 
   /** What plays the sound, made the first time: in the call that first plays, as browsers let

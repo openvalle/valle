@@ -17,7 +17,7 @@ async function playback(
     player: Player;
     stats: Stats[];
     drawn: number[];
-    advance: (ms: number) => Promise<void>;
+    advance: (ms: number, late?: number) => Promise<void>;
     latency: (ms: number) => void;
   }) => Promise<void>,
 ) {
@@ -74,7 +74,8 @@ async function playback(
   const flush = async () => {
     for (let i = 0; i < 8; i++) await Promise.resolve();
   };
-  const advance = async (ms: number) => {
+  // The display refreshes after `ms`; its callbacks run `late` ms into the refresh.
+  const advance = async (ms: number, late = 0) => {
     now += ms;
     for (const reply of replies.splice(0)) {
       if (reply.at <= now) reply.done();
@@ -83,8 +84,11 @@ async function playback(
     await flush();
     const callbacks = [...frames.values()];
     frames.clear();
-    for (const callback of callbacks) callback(now);
+    const refresh = now;
+    now += late;
+    for (const callback of callbacks) callback(refresh);
     await flush();
+    now = refresh;
   };
   try {
     await player.start({});
@@ -168,4 +172,30 @@ test("seeking and resuming restart the sample without treating jumps or idle tim
     expect(sample.fps).toBeLessThanOrEqual(32);
     expect(sample.dropped).toBe(0);
   });
+});
+
+test("each frame stays the same number of refreshes, whenever the callbacks run", async () => {
+  for (const [hz, refreshes] of [
+    [60, 2],
+    [120, 4],
+    [59.94, 2],
+  ] as const) {
+    await playback(async ({ player, drawn, advance }) => {
+      await advance(7);
+      drawn.length = 0;
+      player.play();
+      // A 30 fps composition, for two seconds, the callbacks up to 11 ms late.
+      const turned: number[] = [];
+      for (let i = 0; i < hz * 2; i++) {
+        const before = drawn.length;
+        await advance(1000 / hz, (i * 7) % 12);
+        if (drawn.length > before) turned.push(i);
+      }
+      const held = turned.slice(1).map((at, i) => at - turned[i]!);
+      // A display a little off 60 Hz drifts past a frame's turn, and is out by one refresh then.
+      const uneven = held.filter((n) => n !== refreshes);
+      expect(uneven.length).toBeLessThanOrEqual(hz === 59.94 ? 1 : 0);
+      expect(new Set(drawn).size).toBe(drawn.length);
+    });
+  }
 });
