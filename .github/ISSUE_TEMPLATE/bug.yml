@@ -1,0 +1,56 @@
+name: Bug report
+description: "Valle did something wrong: a failed command, a wrong frame, a crash."
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What `valle --version` prints. For the browser engine, the version of `@openvalle/engine`.
+      placeholder: valle 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS, Apple silicon
+        - macOS, Intel
+        - Linux x86_64
+        - Linux arm64
+        - Windows x86_64
+        - Windows arm64
+        - A browser, with @openvalle/engine
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: The OS version and the GPU, or the browser and its version.
+      placeholder: Ubuntu 24.04, NVIDIA RTX 3060
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and result
+      description: The command you ran, with `--json`, and everything it printed.
+      render: shell
+      placeholder: |
+        $ valle motion render title.motion.tsx -o title.mp4 --json
+        {"ok":false, ...}
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: And what happened instead. For a wrong picture, attach the frame, from `--frame N -o frame.png`.
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: The file
+      description: The smallest `*.motion.tsx` or `*.timeline.json` that shows it, pasted or attached.
+      render: tsx

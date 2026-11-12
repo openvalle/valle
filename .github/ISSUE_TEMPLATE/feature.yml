@@ -1,0 +1,16 @@
+name: Feature request
+description: Something Valle cannot do yet.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: What you want to make
+      description: The video or the workflow you were after, and where Valle stopped you.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: A component, a field, a command or an option, if you have one in mind.
