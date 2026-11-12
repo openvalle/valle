@@ -182,6 +182,19 @@ pub fn set_directory(directory: PathBuf) {
     let _ = DIRECTORY.set(directory);
 }
 
+/// How to get FFmpeg on this system, which the error for a missing one says.
+#[cfg(target_os = "macos")]
+const INSTALL: &str = "To install it: brew install ffmpeg";
+#[cfg(target_os = "windows")]
+const INSTALL: &str = "To install it: download a `gpl-shared` build (`win64`, or `winarm64` on \
+    ARM) from https://github.com/BtbN/FFmpeg-Builds/releases, unpack it, and give Valle its \
+    `bin` folder as below or add it to PATH";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const INSTALL: &str = "To install it: the `ffmpeg` package of Debian 13, Fedora or Arch is new \
+    enough. On Ubuntu and older Debian, download a `gpl-shared` build (`linux64`, or \
+    `linuxarm64` on ARM) from https://github.com/BtbN/FFmpeg-Builds/releases, unpack it, and \
+    give Valle its `lib` folder as below";
+
 /// The FFmpeg version loaded, loading it the first time: from the folder `--ffmpeg-dir`, else
 /// `VALLE_FFMPEG_DIR`, else `ffmpegDir` of `settings.json` names, else where it is usually
 /// installed.
@@ -205,7 +218,8 @@ pub fn version() -> Result<Version, String> {
         format!(
             "FFmpeg 7, 8 or 9 is needed for video: its shared libraries (not only the ffmpeg \
              program), a GPL build for H.264 and HEVC\n\
-             Install it, then tell Valle where it is with `--ffmpeg-dir FOLDER`, \
+             {INSTALL}\n\
+             If it is somewhere else, tell Valle the folder with `--ffmpeg-dir FOLDER`, \
              `VALLE_FFMPEG_DIR`, or `\"ffmpegDir\"` in {}\n{tried}",
             crate::settings::path()
                 .map_or("~/.valle/settings.json".into(), |p| p.display().to_string())
