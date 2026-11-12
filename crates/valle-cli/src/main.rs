@@ -10,6 +10,7 @@ mod picture;
 mod project;
 mod studio;
 mod timeline;
+mod update;
 mod video;
 
 use std::io::Write;
@@ -202,6 +203,7 @@ fn parse_failed(e: &clap::Error, words: &[String]) -> ExitCode {
 
 fn run(cli: Cli) -> Result<Value, Failure> {
     let events = cli.events;
+    let json = cli.json || cli.events;
     match cli.command {
         Command::Motion(Motion::Check { file, bind, frames }) => {
             scene_file(&file, false, "check")?;
@@ -249,6 +251,7 @@ fn run(cli: Cli) -> Result<Value, Failure> {
             studio::run("timeline", Some(file), serve, events)
         }
         Command::Docs { topic, section } => docs::run(topic, section),
+        Command::Update { version } => update::run(version, json),
         Command::Project(p) => match p.command {
             ProjectCommand::Studio { folder, serve } => {
                 studio::run("project", folder.or(p.folder), serve, events)

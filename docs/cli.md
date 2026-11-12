@@ -40,6 +40,20 @@ Both `check` and `render` take the bindings `--props`, `--data` (JSON, or `@file
 
 `-C FOLDER` works on that project instead of the current folder's.
 
+## Updating
+
+| Command | What it does |
+| --- | --- |
+| `valle update` | Replaces this `valle` with the latest release's, if that is newer |
+| `valle update VERSION` | Installs that release, such as `0.1.0`, newer or not |
+
+The package is checked against the release's `SHA256SUMS`, and the `valle` in it must run and
+say its version before it takes this one's place: when anything fails, the code is `update`
+and this `valle` is as it was. The result has `from`, `version`, the `file` replaced, the
+release's `notes` and, when the minor version changed, the command that updates the `skill`;
+when this is the latest already, `version` and `latest`. Tell the user to start an open Studio
+again.
+
 ## Render options
 
 | Option | What it does |
@@ -124,4 +138,5 @@ names another folder for it.
 | `VALLE_FFMPEG_DIR` | The folder of FFmpeg's shared libraries; see FFmpeg |
 | `VALLE_HOME` | The folder of `settings.json`, `~/.valle` unless set |
 | `WGPU_BACKEND`, `WGPU_ADAPTER_NAME` | Choose another GPU backend or adapter |
+| `VALLE_RELEASES` | Where `valle update` finds releases: a mirror of `https://github.com/openvalle/valle/releases` |
 | `VALLE_LAVAPIPE` | A lavapipe driver to use instead of the built-in one |

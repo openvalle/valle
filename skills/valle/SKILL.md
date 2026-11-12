@@ -11,7 +11,8 @@ Use the user's `valle`: the installed executable, or `valle` on PATH. `valle --v
 which; this skill is written for 0.1. If there is none, ask the user before installing it,
 then run `curl -fsSL https://openvalle.ai/install.sh | sh` on macOS and Linux, or
 `irm https://openvalle.ai/install.ps1 | iex` in PowerShell on Windows; it installs to
-`~/.valle/bin/valle`. Do not build it from source.
+`~/.valle/bin/valle`. Do not build it from source. When the user asks for a newer Valle, run
+`valle update`, and tell them what it says about Studio and this skill.
 
 Its guides are built in and match its version; read them instead of guessing a field or a
 function:

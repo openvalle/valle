@@ -24,9 +24,12 @@ brotli = { workspace = true, optional = true }
 [dependencies]
 brotli-decompressor = { workspace = true, optional = true }
 clap.workspace = true
+flate2.workspace = true
 png.workspace = true
 rfd.workspace = true
+ring.workspace = true
 serde_json.workspace = true
+ureq.workspace = true
 valle-engine = { path = "../valle-engine" }
 valle-native = { path = "../valle-native" }
 valle-project = { path = "../valle-project" }

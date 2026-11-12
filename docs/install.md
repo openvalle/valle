@@ -17,8 +17,7 @@ irm https://openvalle.ai/install.ps1 | iex
 ```
 
 Each downloads the latest release's executable for the machine, checks it against the
-release's `SHA256SUMS`, puts it in `~/.valle/bin` and adds that folder to your `PATH`. Run it
-again to update.
+release's `SHA256SUMS`, puts it in `~/.valle/bin` and adds that folder to your `PATH`.
 
 | Variable | What it does |
 | --- | --- |
@@ -35,6 +34,23 @@ Or download a package yourself from
 | macOS | Apple silicon and Intel, signed and notarized |
 | Linux | x86_64 and arm64, glibc 2.28 or later: AlmaLinux and RHEL 8, Debian 10, Ubuntu 20.04 and later |
 | Windows | x86_64 and arm64 |
+
+## Updating
+
+```sh
+valle update
+```
+
+It replaces the `valle` it is run as with the latest release's, wherever that one is: the
+package is checked against the release's `SHA256SUMS`, and the `valle` in it must run before
+it takes the old one's place. `valle update 0.1.0` installs that release, an earlier one too.
+Running the install script again does the same for `~/.valle/bin`.
+
+A Studio that is open keeps running the `valle` it started with: start it again. When the
+update is to another minor version, such as 0.1 to 0.2, update the skill too, with the command
+below.
+
+## What it draws on
 
 Valle draws on the GPU through Metal, Vulkan or Direct3D 12. On Linux and Windows without a
 GPU, it draws on a CPU driver it carries, with the same pixels on every such machine. The

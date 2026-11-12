@@ -83,14 +83,14 @@ try {
   New-Item -ItemType Directory -Force -Path $Bin | Out-Null
   $Exe = Join-Path $Bin 'valle.exe'
   try {
-    # Over a running valle.exe, which Windows will not overwrite: it can be renamed aside.
+    # Over a running valle.exe, which Windows will not overwrite: it can be renamed aside,
+    # to a name of its own, since one renamed before may be running still, as Studio does.
+    Remove-Item -Force "$Exe.old*" -ErrorAction SilentlyContinue
     if (Test-Path $Exe) {
-      $Old = "$Exe.old"
-      Remove-Item -Force $Old -ErrorAction SilentlyContinue
-      Rename-Item -Path $Exe -NewName 'valle.exe.old'
+      Rename-Item -Path $Exe -NewName "valle.exe.old.$([Guid]::NewGuid().ToString('N'))"
     }
     Move-Item -Force -Path (Join-Path $Temporary 'valle.exe') -Destination $Exe
-    Remove-Item -Force "$Exe.old" -ErrorAction SilentlyContinue
+    Remove-Item -Force "$Exe.old*" -ErrorAction SilentlyContinue
   } catch {
     Fail "could not write $Exe : $($_.Exception.Message)"
   }

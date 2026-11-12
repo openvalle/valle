@@ -57,6 +57,16 @@ pub enum Command {
         #[arg(long, requires = "topic")]
         section: Option<String>,
     },
+    /// Replace this valle with the latest release
+    ///
+    /// Downloads the release's package for this machine, checks it against the release's
+    /// SHA256SUMS and runs the valle in it before it takes this one's place. Nothing is
+    /// changed when this is the latest already, or when any of that fails.
+    #[command(after_help = "Examples:\n  valle update\n  valle update 0.1.0")]
+    Update {
+        /// The release to install in place of the latest, such as 0.1.0
+        version: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

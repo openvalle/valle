@@ -204,7 +204,7 @@ jobs:
           $bin = Join-Path $env:VALLE_INSTALL 'bin'
           $count = @([Environment]::GetEnvironmentVariable('Path', 'User') -split ';' | Where-Object { $_ -eq $bin }).Count
           if ($count -ne 1) { throw "on the user's PATH $count times" }
-          if (Test-Path (Join-Path $bin 'valle.exe.old')) { throw 'the old executable was left behind' }
+          if (Test-Path (Join-Path $bin 'valle.exe.old*')) { throw 'the old executable was left behind' }
       - name: Draw a frame with what it installed
         run: |
           & (Join-Path $env:RUNNER_TEMP 'valle\bin\valle.exe') motion render examples/hello.motion.tsx --frame 30 -o frame.png --json

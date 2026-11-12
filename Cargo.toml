@@ -20,6 +20,8 @@ brotli = "9.0.0"
 brotli-decompressor = "6.3.1"
 # The CLI's commands, options and help.
 clap = { version = "4.6.7", features = ["derive", "wrap_help"] }
+# The packages `valle update` unpacks: gzip, and a zip's deflate.
+flate2 = "1.1.10"
 # vello_cpu's scalar level, which color glyphs are rasterized at.
 fearless_simd = { version = "0.7.0", default-features = false, features = ["std", "force_support_fallback"] }
 image-webp = "0.2.4"
