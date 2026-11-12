@@ -2066,7 +2066,7 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 
 [[package]]
 name = "valle-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fearless_simd",
  "i_overlay",
@@ -2103,7 +2103,7 @@ dependencies = [
 
 [[package]]
 name = "valle-timeline"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde_json",
 ]

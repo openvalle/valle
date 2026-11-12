@@ -2,7 +2,7 @@
 name: valle
 description: Make, edit and render video with the Valle CLI. Use it for Valle work, such as Motion scenes written in TSX (animated titles, graphics, charts), Timeline JSON edits of footage, images, sound and captions, and Valle project folders with snapshots.
 metadata:
-  version: "0.1.0"
+  version: "0.1.1"
 ---
 
 # Valle
