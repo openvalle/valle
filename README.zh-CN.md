@@ -76,7 +76,7 @@ Chrome，没有截图：同样的输入，在任何机器上都得到同样的�
 ## 能做什么
 
 动画、剪辑、字幕和着色器。上面这段 reel 就是一份时间线，用
-[`examples/showcase`](examples/showcase) 里的五个场景剪出来的，每个场景只有一个文件。
+[`examples/showcase`](examples/showcase) 十个场景里的五个剪出来的，每个场景只有一个文件。
 
 ## 开始使用
 

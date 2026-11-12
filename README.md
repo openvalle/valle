@@ -77,8 +77,8 @@ adjust the agent's work, in one executable for macOS, Linux and Windows. No clou
 
 ## What you can make
 
-Motion graphics, edits, captions and shaders. The reel above is a timeline cut from the five
-scenes in [`examples/showcase`](examples/showcase), each one file.
+Motion graphics, edits, captions and shaders. The reel above is a timeline cut from five of
+the ten scenes in [`examples/showcase`](examples/showcase), each one file.
 
 ## Get started
 

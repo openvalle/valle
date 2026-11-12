@@ -199,9 +199,10 @@ function Art({ kind }) {
   );
 }
 
-// How far the ring has turned: it starts with card 08 at the front and stops on card 01.
+// How far the ring has turned: slowly, from card 04 at the front to card 01, so that a card
+// crosses the picture by a few pixels a frame.
 function spin(seconds) {
-  return interpolate(seconds, [0.15, 4.3], [-7 * STEP, 0], { easing: "easeInOutCubic" });
+  return interpolate(seconds, [0.2, 4.4], [-3 * STEP, 0], { easing: "easeInOutSine" });
 }
 
 function Panel({ panel }) {
@@ -212,7 +213,7 @@ function Panel({ panel }) {
   const facing = Math.cos((turn * Math.PI) / 180);
   const shade = interpolate(facing, [0, 1], [0.6, 0]);
   // The card the ring stops on steps out of it.
-  const lift = panel.index === 0 ? spring(seconds - 4.2, { duration: 0.6, bounce: 0.25 }) : 0;
+  const lift = panel.index === 0 ? spring(seconds - 4.3, { duration: 0.6, bounce: 0.25 }) : 0;
   return (
     <View
       className="absolute"
@@ -277,7 +278,6 @@ function Panel({ panel }) {
           border: "1.5px solid #F4EEE433",
           backfaceVisibility: "hidden",
           transform: "rotateY(180deg)",
-          filter: "blur(3px)",
         }}
       >
         <View
@@ -294,6 +294,8 @@ function Panel({ panel }) {
 }
 
 // A card's reflection in the floor: its colour only, mirrored about its foot and fading away.
+// A gradient, not a mask, and the backs are dimmed, not blurred: sixteen of either is most of
+// what a frame costs.
 function Reflection({ panel }) {
   const { seconds } = useCurrentTime();
   const kind = KINDS[panel.kind];
@@ -308,9 +310,8 @@ function Reflection({ panel }) {
         width: PANEL.width,
         height: PANEL.height,
         borderRadius: 22,
-        backgroundColor: kind.tint,
+        backgroundImage: `linear-gradient(to top, ${kind.tint} 0%, ${kind.tint}00 48%)`,
         opacity: interpolate(facing, [-1, 1], [0.04, 0.22]),
-        maskImage: "linear-gradient(to top, #000000 0%, #00000000 48%)",
         transform: `rotateY(${turn}deg) translateZ(${RING}px) translateY(${PANEL.height + 14}px) scaleY(-1)`,
       }}
     />
@@ -320,8 +321,8 @@ function Reflection({ panel }) {
 export default function Carousel() {
   const { seconds } = useCurrentTime();
   // The camera: close on one card, then back and a little above.
-  const push = interpolate(seconds, [0.2, 2.6], [1040, 0], { easing: "easeInOutCubic" });
-  const tilt = interpolate(seconds, [0.4, 2.8], [0, -11], { easing: "easeInOutCubic" });
+  const push = interpolate(seconds, [0.2, 3.0], [1040, 0], { easing: "easeInOutSine" });
+  const tilt = interpolate(seconds, [0.4, 3.2], [0, -11], { easing: "easeInOutSine" });
   const meta = interpolate(seconds, [1.9, 2.7], [0, 1], { easing: "easeOutCubic" });
   const title = interpolate(seconds, [2.9, 3.8], [0, 1], { easing: "easeOutCubic" });
   const pool = interpolate(seconds, [1.0, 2.8], [0, 1], { easing: "easeOutCubic" });
