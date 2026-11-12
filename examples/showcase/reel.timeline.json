@@ -30,7 +30,7 @@
             "id": "variable",
             "kind": "motion",
             "component": "variable",
-            "trimStart": 1.7,
+            "trimStart": 2.7,
             "duration": 1.9
           },
           {
@@ -64,7 +64,7 @@
             "id": "carousel",
             "kind": "motion",
             "component": "carousel",
-            "trimStart": 0.6,
+            "trimStart": 1.3,
             "duration": 2.3
           },
           { "transition": "fade", "inOffset": 0.25, "outOffset": 0.25 },
