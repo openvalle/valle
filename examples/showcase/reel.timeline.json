@@ -7,7 +7,8 @@
     "liquid": "03-liquid.motion.tsx",
     "bloom": "04-bloom.motion.tsx",
     "carousel": "05-carousel.motion.tsx",
-    "card": "reel-card.motion.tsx"
+    "card": "reel-card.motion.tsx",
+    "music": "reel-music.flac"
   },
   "tracks": {
     "visual": [
@@ -76,6 +77,13 @@
             "duration": 2.75
           }
         ]
+      }
+    ],
+    "audio": [
+      {
+        "id": "music",
+        "gain": 0.8,
+        "clips": [{ "id": "drums", "src": "music", "start": 0, "duration": 13.75 }]
       }
     ]
   }
