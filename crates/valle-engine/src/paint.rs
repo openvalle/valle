@@ -1039,18 +1039,27 @@ impl Painter<'_> {
             self.context(Some(d), &mut drawn);
             if s.clip.is_some() || !s.masks.is_empty() || s.source.is_some() {
                 // With the clips in the mask, which takes all the box paints.
-                let items = self.clipped(d, self.nest(std::mem::take(&mut drawn)));
-                let items = self.masked(d, items);
+                let items = self.nest_from(self.chained(std::mem::take(&mut drawn)), self.held(d));
+                let items = self.masked(d, self.clipped(d, items));
                 drawn = items.into_iter().map(|item| (None, item)).collect();
             }
         }
         if self.grouped(d) {
             // With the clips in the layer, so that it blends with all under it.
-            let items = self.nest(drawn);
+            let items = self.nest_from(self.chained(drawn), self.held(d));
             out.extend(group(s.opacity as f32, blend, items).map(|g| (None, g)));
         } else {
             out.extend(drawn);
         }
+    }
+
+    /// How many of the clips `d` is under are around the box it paints in: those of the nearest
+    /// box around it that contains all or is a plane of a scene, which puts them around its
+    /// transform. A layer in it takes the rest, which are in its px.
+    fn held(&self, d: usize) -> usize {
+        std::iter::successors(self.parents[d], |&p| self.parents[p])
+            .find(|&p| self.styles[p].contains_all() || self.in_scene(p))
+            .map_or(0, |p| self.clips[p].len())
     }
 
     /// Whether stacking context `d` paints as one layer: it has an opacity, blends, filters its
@@ -1263,7 +1272,7 @@ impl Painter<'_> {
         };
         let mut drawn = Vec::new();
         self.context(Some(source.root), &mut drawn);
-        let mut shown = self.nest(drawn);
+        let mut shown = self.nest_from(self.chained(drawn), self.held(source.root));
         if source.luminance && !shown.is_empty() {
             shown = vec![Item::Filter {
                 filters: vec![Filter::Luminance],
@@ -2403,6 +2412,27 @@ mod tests {
             panic!("{items:?}")
         };
         assert_eq!(names(items), [r#"transform ["blue", "green"]"#]);
+
+        // A layer in it is in its px, where the clip around it is not: the clip stays around the
+        // transform, and is not in the layer.
+        let tall = |color| [("height", "30px"), ("background", color)];
+        let (items, _) = paint_of(
+            vec![
+                view(&clipping, &[1]),
+                view(&transformed, &[2]),
+                view(&[("opacity", "0.5")], &[3, 4]),
+                view(&tall("green"), &[]),
+                view(&tall("red"), &[]),
+            ],
+            &[0],
+        );
+        let [Item::Clip { items, .. }] = &items[..] else {
+            panic!("{items:?}")
+        };
+        assert_eq!(
+            names(items),
+            [r#"transform ["blue", "group 0.5 [\"green\", \"red\"]"]"#]
+        );
 
         // Its own clip is inside its transform.
         let clipped = [transformed.as_slice(), &[("overflow", "hidden")]].concat();
