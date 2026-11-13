@@ -88,7 +88,8 @@ hundred, then the result). `--perf` times each stage of the work and adds a `per
 the result: each stage with its time in all its spans (`ms`), how many spans it had
 (`count`), and the middle (`p50`), 95th (`p95`) and slowest (`max`) span in milliseconds;
 the process's peak resident memory (`peak_rss_kb`); and, for a render, what it still holds
-(`hold`, such as `gpu_kb`, the GPU memory its buffers and textures take). Stages are
+(`hold`: `gpu_kb`, the GPU memory its buffers and textures take, and the last frame's
+`passes` and `layers`, how many passes drew it and into how many targets). Stages are
 `load.network` (a resource fetched), `load.scene` (a scene compiled and laid out), `eval` (a
 frame made), `draw` (a frame drawn and its commands submitted), `gpu-wait` (waiting for
 one the GPU drew) and `encoder` (waiting for the encoder's surface). A stage's `ms` leaves

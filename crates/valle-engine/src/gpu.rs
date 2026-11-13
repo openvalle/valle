@@ -1130,6 +1130,8 @@ impl<'a> Renderer<'a> {
                 ],
             }));
         }
+        crate::perf::gauge("passes", plan.steps.len() as u64);
+        crate::perf::gauge("layers", plan.targets as u64);
         self.encode(&mut encoder, &plan);
         Ok(encoder)
     }
