@@ -341,9 +341,15 @@ impl Front {
         let mut missed = None;
         for i in 0..self.variants.len() {
             // A variant that fails to evaluate here does not hold here either; a fresh trace
-            // reports the error if it is real.
-            let Ok(values) = eval::guarded(&self.variants[i], clock) else {
-                continue;
+            // reports the error if it is real, as that reason is the one worth reporting.
+            let values = match eval::guarded(&self.variants[i], clock) {
+                Ok(values) => values,
+                Err(e) => {
+                    if i == 0 {
+                        missed = Some(Rc::from(format!("an error: {e}")));
+                    }
+                    continue;
+                }
             };
             if self.variants[i].holds(&values) {
                 let template = self.variants.remove(i).expect("an index in range");
@@ -355,9 +361,9 @@ impl Front {
                     .map(|g| Rc::from(format!("{} at {}", g.kind, g.at)));
             }
         }
-        if missed.is_some() {
-            self.retraced = missed;
-        }
+        // Set even to none: a reason kept from an earlier trace would be that frame's, not this
+        // one's, and `motion check` reports it against this one.
+        self.retraced = missed;
         let template = Rc::new(self.trace(clock)?);
         let values = eval::run(&template.program, clock)?;
         if !template.holds(&values) {
@@ -392,6 +398,7 @@ impl Front {
         self.traces += 1;
         self.steps.set(0);
         let traced = self.context.with(|ctx| -> Result<String, Error> {
+            let _span = crate::perf::span("trace.run");
             let c = &self.composition;
             let composition = Object::new(ctx.clone()).map_err(|e| e.to_string())?;
             let set = |k: &str, v: f64| composition.set(k, v).map_err(|e| e.to_string());
@@ -421,6 +428,7 @@ impl Front {
                 ))
                 .map_err(|e| self.describe(&ctx, e))
         })?;
+        let _span = crate::perf::span("trace.lower");
         lower::variant(
             &traced,
             &|at| self.place(at),
@@ -601,7 +609,7 @@ mod tests {
     use indoc::{formatdoc, indoc};
 
     use super::*;
-    use crate::template::{Kind, Piece, Prop, Tag};
+    use crate::template::{Kind, Op, Part, Piece, Prop, Tag};
 
     const HEAD: &str =
         "export const composition = { width: 320, height: 180, fps: 30, duration: 4 };\n";
@@ -724,6 +732,82 @@ mod tests {
                     [format!("你好\n`\\${{literal}}:{seconds}:😀:55296")]
                 );
             }
+        });
+    }
+
+    #[test]
+    fn concatenated_templates_do_not_keep_every_prefix() {
+        big_stack(|| {
+            let mut f = scene(indoc! {r#"
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  let line = "";
+                  for (let i = 0; i < 128; i++) line += `${i}:${seconds + i};`;
+                  return <Text>{line}</Text>;
+                }
+            "#});
+            for seconds in ["0", "0.5", "2", "0"] {
+                let frame = at(&mut f, seconds);
+                let t: f64 = seconds.parse().unwrap();
+                let expected: String = (0..128)
+                    .map(|i| format!("{i}:{};", t + f64::from(i)))
+                    .collect();
+                assert_eq!(texts(&frame), [expected]);
+                assert_eq!(
+                    frame
+                        .template
+                        .program
+                        .ops
+                        .iter()
+                        .filter(|op| matches!(op, Op::Template(_)))
+                        .count(),
+                    1
+                );
+            }
+            assert_eq!(f.traces(), 1);
+        });
+    }
+
+    #[test]
+    fn concatenated_templates_keep_shared_values_and_guards() {
+        big_stack(|| {
+            let mut f = scene(indoc! {r#"
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  let prefix = "";
+                  for (let i = 0; i < 3; i++) prefix += `${seconds + i}:`;
+                  const shared = `[${prefix}]`;
+                  const doubled = `${shared}|${shared}`;
+                  if (prefix === "0:1:2:") {
+                    return <Text>{`${doubled}:start`}</Text>;
+                  }
+                  return <View><Text>{prefix}</Text><Text>{shared}</Text><Text>{doubled}</Text></View>;
+                }
+            "#});
+            assert_eq!(texts(&at(&mut f, "0")), ["[0:1:2:]|[0:1:2:]:start"]);
+            for seconds in ["0.5", "1.5"] {
+                let frame = at(&mut f, seconds);
+                let t: f64 = seconds.parse().unwrap();
+                let prefix = format!("{t}:{}:{}:", t + 1.0, t + 2.0);
+                let shared = format!("[{prefix}]");
+                assert_eq!(
+                    texts(&frame),
+                    [prefix, shared.clone(), format!("{shared}|{shared}")]
+                );
+                assert!(frame.template.program.ops.iter().any(|op| {
+                    let Op::Template(parts) = op else {
+                        return false;
+                    };
+                    matches!(
+                        &parts[..],
+                        [Part::Expr(a), Part::Text(text), Part::Expr(b)]
+                            if a == b && &**text == "|"
+                    )
+                }));
+            }
+            assert_eq!(texts(&at(&mut f, "0")), ["[0:1:2:]|[0:1:2:]:start"]);
+            // Comparing a string fixes its concrete value, even on the same side of the if.
+            assert_eq!(f.traces(), 3);
         });
     }
 

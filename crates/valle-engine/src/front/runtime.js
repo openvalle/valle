@@ -330,6 +330,7 @@
     let text = "";
     for (const p of parts) {
       if (p instanceof T) {
+        if (p.op === "template") G.joinTemplates = true;
         if (text) out.push({ text });
         text = "";
         out.push(p);
@@ -2196,6 +2197,47 @@
 
   // The variant as `front/lower.rs` reads it: ops in dependency order, nodes flat.
   function serialize(roots, guards) {
+    // Count references before joining templates: a shared prefix must still be computed once,
+    // including when a node or guard reads it as well as another expression.
+    const uses = G.joinTemplates ? new Uint32Array(nextValue) : null;
+    const pending = uses ? [roots, guards] : [];
+    while (pending.length) {
+      const x = pending.pop();
+      if (x instanceof T) {
+        if (uses[x[TRACE_INDEX]]++ === 0) {
+          for (const a of x.args) if (a instanceof T) pending.push(a);
+        }
+      } else if (isArray(x)) {
+        for (const a of x) pending.push(a);
+      } else if (x !== null && typeof x === "object") {
+        for (const [, a] of entries(x)) pending.push(a);
+      }
+    }
+    // Flatten once, at the boundary, rather than copying all preceding parts on each `+=`
+    // while tracing. Only private template intermediates disappear; numeric operations and
+    // shared strings keep their identities and evaluation order.
+    const joined = new Map();
+    function operands(t) {
+      if (!uses || t.op !== "template") return t.args;
+      if (joined.has(t)) return joined.get(t);
+      if (
+        !t.args.some((a) => a instanceof T && a.op === "template" && uses[a[TRACE_INDEX]] === 1)
+      ) {
+        return t.args;
+      }
+      const stack = t.args.slice().reverse();
+      const parts = [];
+      while (stack.length) {
+        const a = stack.pop();
+        if (a instanceof T && a.op === "template" && uses[a[TRACE_INDEX]] === 1) {
+          for (let i = a.args.length - 1; i >= 0; i--) stack.push(a.args[i]);
+        } else {
+          parts.push(a);
+        }
+      }
+      joined.set(t, parts);
+      return parts;
+    }
     const ids = [];
     ids.length = nextValue;
     const ops = [];
@@ -2214,11 +2256,12 @@
           continue;
         }
         const before = stack.length;
-        for (const a of t.args)
+        const args = operands(t);
+        for (const a of args)
           if (a instanceof T && ids[a[TRACE_INDEX]] === undefined) stack.push(a);
         if (stack.length > before) continue;
         stack.pop();
-        ops.push([t.op, t.args.map((a) => arg(t, a))]);
+        ops.push([t.op, args.map((a) => arg(t, a))]);
         ids[t[TRACE_INDEX]] = ops.length - 1;
       }
       return ids[root[TRACE_INDEX]];
@@ -2322,6 +2365,7 @@
       keys: [],
       keyBase: "",
       ops: 0,
+      joinTemplates: false,
       nodes: 0,
       // How deep in <svg> elements tracing is.
       svg: 0,
