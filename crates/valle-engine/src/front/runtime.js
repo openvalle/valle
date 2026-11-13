@@ -2195,7 +2195,7 @@
     return x;
   }
 
-  // The variant as `front/lower.rs` reads it: ops in dependency order, nodes flat.
+  // Record reachable ops with the host in dependency order, then serialize the flat node tree.
   function serialize(roots, guards) {
     // Count references before joining templates: a shared prefix must still be computed once,
     // including when a node or guard reads it as well as another expression.
@@ -2240,13 +2240,8 @@
     }
     const ids = [];
     ids.length = nextValue;
-    const ops = [];
     const arg = (t, a) =>
-      a instanceof T
-        ? ids[a[TRACE_INDEX]]
-        : t.op === "template"
-          ? { text: a.text }
-          : { c: constant(a) };
+      a instanceof T ? ids[a[TRACE_INDEX]] : t.op === "template" ? { text: a.text } : { c: a };
     function id(root) {
       const stack = [root];
       while (stack.length > 0) {
@@ -2261,8 +2256,10 @@
           if (a instanceof T && ids[a[TRACE_INDEX]] === undefined) stack.push(a);
         if (stack.length > before) continue;
         stack.pop();
-        ops.push([t.op, args.map((a) => arg(t, a))]);
-        ids[t[TRACE_INDEX]] = ops.length - 1;
+        ids[t[TRACE_INDEX]] = host.record(
+          t.op,
+          args.map((a) => arg(t, a)),
+        );
       }
       return ids[root[TRACE_INDEX]];
     }
@@ -2322,7 +2319,7 @@
       at: g.at,
     }));
     const top = roots.map(node);
-    return { ops, nodes, roots: top, guards: checks };
+    return { nodes, roots: top, guards: checks };
   }
 
   // ------------------------------------------------------------------------------ modules
@@ -2356,7 +2353,7 @@
     return instances.get(factory);
   }
 
-  // Traces the scene `entry` at a time; returns the variant as JSON.
+  // Traces the scene and records its program in Rust; only nodes and guards cross as JSON.
   function __trace(entry, seconds, progress, composition, props) {
     nextValue = 0;
     G = {

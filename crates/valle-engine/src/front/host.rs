@@ -60,7 +60,8 @@ fn units(text: &str, split: &str) -> Vec<usize> {
 }
 
 /// `__host.op(name, args)`: one op's value over concrete operands, through the evaluator frames
-/// use, so tracing sees the values frames compute; `__host.svg`, the SVG tables as JSON;
+/// use, so tracing sees the values frames compute; `__host.record(name, args)`, its program id
+/// over already recorded operands or constants; `__host.svg`, the SVG tables as JSON;
 /// `__host.random(seed, count, low, high)`, checked by the runtime; `__host.units(text, split)`,
 /// the units of a split text; and `__host.measure(text, style)` and `__host.outline(text, style,
 /// x, y, align)`, what `measureText` and `textOutline` give.
@@ -68,8 +69,20 @@ pub(super) fn install_host<'js>(
     ctx: &Ctx<'js>,
     typeset: Rc<RefCell<Option<Box<dyn Typeset>>>>,
     clips: Rc<Clips>,
+    builder: Rc<RefCell<lower::Builder>>,
 ) -> rquickjs::Result<()> {
     let host = Object::new(ctx.clone())?;
+    let table = clips.clone();
+    host.set(
+        "record",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, name: String, args: Array<'js>| {
+                record(&mut builder.borrow_mut(), name, &args, &table)
+                    .map_err(|e| Exception::throw_type(&ctx, &e))
+            },
+        )?,
+    )?;
     let set = typeset.clone();
     host.set(
         "measure",
@@ -137,6 +150,44 @@ pub(super) fn install_host<'js>(
     ctx.globals().set("__host", host)
 }
 
+fn scalar(v: &Value<'_>) -> Result<V, Error> {
+    if let Some(x) = v.as_number() {
+        Ok(V::Num(x))
+    } else if let Some(b) = v.as_bool() {
+        Ok(V::Bool(b))
+    } else if let Some(s) = v.as_string() {
+        Ok(V::Str(s.to_string().map_err(|e| e.to_string())?.into()))
+    } else {
+        Err(format!("cannot take {}", v.type_of()))
+    }
+}
+
+fn record(
+    builder: &mut lower::Builder,
+    name: String,
+    args: &Array<'_>,
+    clips: &Clips,
+) -> Result<u32, Error> {
+    let mut operands = Vec::with_capacity(args.len());
+    for a in args.iter::<Value>() {
+        let a = a.map_err(|e| e.to_string())?;
+        if let Some(i) = a.as_int() {
+            operands.push(Arg::Expr(i as u32));
+        } else if let Some(o) = a.as_object() {
+            if o.contains_key("text").map_err(|e| e.to_string())? {
+                let text: String = o.get("text").map_err(|e| e.to_string())?;
+                operands.push(Arg::Text(text.into()));
+            } else {
+                let v: Value = o.get("c").map_err(|e| e.to_string())?;
+                operands.push(Arg::Expr(builder.constant(scalar(&v)?)));
+            }
+        } else {
+            return Err(format!("op {name}: invalid operand"));
+        }
+    }
+    builder.push(name, operands, clips)
+}
+
 fn op<'js>(
     ctx: &Ctx<'js>,
     name: &str,
@@ -147,19 +198,12 @@ fn op<'js>(
     let mut operands = Vec::new();
     for a in args.iter::<Value>() {
         let a = a.map_err(|e| e.to_string())?;
-        let v = if let Some(x) = a.as_number() {
-            V::Num(x)
-        } else if let Some(b) = a.as_bool() {
-            V::Bool(b)
-        } else if let Some(s) = a.as_string() {
-            V::Str(s.to_string().map_err(|e| e.to_string())?.into())
-        } else if let Some(o) = a.as_object() {
+        if let Some(o) = a.as_object() {
             let text: String = o.get("text").map_err(|_| format!("op {name}: an object"))?;
             operands.push(Arg::Text(text.into()));
             continue;
-        } else {
-            return Err(format!("op {name}: cannot take {}", a.type_of()));
-        };
+        }
+        let v = scalar(&a).map_err(|e| format!("op {name}: {e}"))?;
         operands.push(Arg::Expr(values.len() as u32));
         values.push(v);
     }

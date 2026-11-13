@@ -127,6 +127,8 @@ pub struct Front {
     shaders: RefCell<HashMap<String, Rc<str>>>,
     /// The clip table of a Timeline's scene.
     clips: Rc<Clips>,
+    /// The program recorded during serialization, emptied after every trace, including errors.
+    builder: Rc<RefCell<lower::Builder>>,
     /// The pictures boxes of it draw, as `Inputs` names them.
     pub drawn: Vec<String>,
 }
@@ -292,11 +294,17 @@ impl Front {
             typeset: Rc::default(),
             shaders: RefCell::default(),
             clips,
+            builder: Rc::default(),
             drawn: inputs.drawn.clone(),
         };
         front.context.with(|ctx| -> Result<(), Error> {
-            install_host(&ctx, front.typeset.clone(), front.clips.clone())
-                .map_err(|e| e.to_string())?;
+            install_host(
+                &ctx,
+                front.typeset.clone(),
+                front.clips.clone(),
+                front.builder.clone(),
+            )
+            .map_err(|e| e.to_string())?;
             front.run(&ctx, RUNTIME.into(), "runtime.js")?;
             front.run(&ctx, format!("__builtin({})", charts.code), "charts.js")?;
             let mut free: Vec<&str> = loader
@@ -427,15 +435,18 @@ impl Front {
                     self.values.as_str(),
                 ))
                 .map_err(|e| self.describe(&ctx, e))
-        })?;
+        });
         let _span = crate::perf::span("trace.lower");
+        // Take the recorder even on a JS error: a failed trace must not retain a partial program.
+        let program = std::mem::take(&mut *self.builder.borrow_mut()).finish();
+        let traced = traced?;
         lower::variant(
             &traced,
+            program,
             &|at| self.place(at),
             &self.resources,
             &self.pictures(),
             &self.shaders.borrow(),
-            &self.clips,
         )
     }
 
@@ -808,6 +819,73 @@ mod tests {
             assert_eq!(texts(&at(&mut f, "0")), ["[0:1:2:]|[0:1:2:]:start"]);
             // Comparing a string fixes its concrete value, even on the same side of the if.
             assert_eq!(f.traces(), 3);
+        });
+    }
+
+    #[test]
+    fn recorded_constants_preserve_numbers_booleans_and_text() {
+        big_stack(|| {
+            let mut f = scene(indoc! {r#"
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  return <Text>{`${seconds * -0}|${seconds + Infinity}|${seconds - Infinity}|${seconds + NaN}|${seconds < 1 ? true : false}|你好🚀:${seconds + 0.1}`}</Text>;
+                }
+            "#});
+            for (time, expected) in [
+                ("0.5", "0|Infinity|-Infinity|NaN|true|你好🚀:0.6"),
+                ("1.5", "0|Infinity|-Infinity|NaN|false|你好🚀:1.6"),
+                ("0.5", "0|Infinity|-Infinity|NaN|true|你好🚀:0.6"),
+            ] {
+                let frame = at(&mut f, time);
+                assert_eq!(texts(&frame), [expected]);
+                assert!(frame.template.program.ops.iter().any(
+                    |op| matches!(op, Op::Const(V::Num(n)) if n.to_bits() == (-0.0f64).to_bits())
+                ));
+            }
+            assert_eq!(f.traces(), 1);
+        });
+    }
+
+    #[test]
+    fn recording_is_cleared_after_serialization_and_lowering_errors() {
+        big_stack(|| {
+            let mut f = scene(indoc! {r#"
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  if (seconds < 1) return <Text>{`first:${seconds}`}</Text>;
+                  if (seconds < 2) return <Image src="resource://missing" style={{ opacity: seconds / 2 }} />;
+                  if (seconds < 3) return <View key="box"><Text>{seconds}</Text><View style={{ width: interpolate(bounds("box").width, [0, 1], [0, 1], { easing: "invalid" }) }} /></View>;
+                  return <Text>{`last:${seconds}`}</Text>;
+                }
+            "#});
+            for _ in 0..3 {
+                assert_eq!(texts(&at(&mut f, "0")), ["first:0"]);
+                assert!(
+                    f.frame(Tick::parse_seconds("1.5").unwrap())
+                        .err()
+                        .unwrap()
+                        .contains("missing")
+                );
+                assert!(
+                    std::mem::take(&mut *f.builder.borrow_mut())
+                        .finish()
+                        .ops
+                        .is_empty()
+                );
+                assert!(
+                    f.frame(Tick::parse_seconds("2.5").unwrap())
+                        .err()
+                        .unwrap()
+                        .contains("invalid")
+                );
+                assert!(
+                    std::mem::take(&mut *f.builder.borrow_mut())
+                        .finish()
+                        .ops
+                        .is_empty()
+                );
+                assert_eq!(texts(&at(&mut f, "3")), ["last:3"]);
+            }
         });
     }
 

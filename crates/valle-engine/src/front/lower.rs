@@ -1,6 +1,6 @@
-//! Lowering: a traced variant, as `runtime.js` serializes it, into a frame template. Ops arrive by
-//! name over operands; `make` turns one into the engine's expression, for tracing (`__host.op`) and
-//! for the template alike.
+//! Lowering a traced variant into a frame template. The host builds its program directly as the
+//! runtime visits reachable values; only nodes and guards arrive as JSON. `make` builds the same
+//! expression for evaluating concrete operands during tracing and recording the program.
 
 use std::collections::{HashMap, hash_map::Entry};
 use std::rc::Rc;
@@ -35,6 +35,59 @@ enum ConstantKey {
     Num(u64),
     Bool(bool),
     Str(Rc<str>),
+}
+
+/// A trace's program, built in dependency order as the runtime visits reachable values.
+#[derive(Default)]
+pub(super) struct Builder {
+    program: Program,
+    constants: HashMap<ConstantKey, u32>,
+    expressions: HashMap<(String, Vec<Arg>), u32>,
+}
+
+impl Builder {
+    pub(super) fn constant(&mut self, v: V) -> u32 {
+        let key = match &v {
+            V::Num(n) => ConstantKey::Num(n.to_bits()),
+            V::Bool(b) => ConstantKey::Bool(*b),
+            V::Str(s) => ConstantKey::Str(s.clone()),
+        };
+        *self.constants.entry(key).or_insert_with(|| {
+            let id = self.program.ops.len() as u32;
+            self.program.ops.push(Op::Const(v));
+            id
+        })
+    }
+
+    pub(super) fn push(
+        &mut self,
+        name: String,
+        args: Vec<Arg>,
+        clips: &Clips,
+    ) -> Result<u32, Error> {
+        for arg in &args {
+            if let Arg::Expr(i) = arg
+                && *i as usize >= self.program.ops.len()
+            {
+                return Err(format!("op {i} is used before it is defined"));
+            }
+        }
+        Ok(match self.expressions.entry((name, args)) {
+            Entry::Occupied(e) => *e.get(),
+            Entry::Vacant(e) => {
+                let (name, args) = e.key();
+                let op = make(name, args, clips)?;
+                let id = self.program.ops.len() as u32;
+                self.program.ops.push(op);
+                e.insert(id);
+                id
+            }
+        })
+    }
+
+    pub(super) fn finish(self) -> Program {
+        self.program
+    }
 }
 
 /// The expression `name` over `args`; a clip's reads the clip table `clips`.
@@ -304,12 +357,10 @@ impl Constant {
 enum Ref {
     Expr(u32),
     Const { c: Constant },
-    Text { text: String },
 }
 
 #[derive(Deserialize)]
 struct Traced {
-    ops: Vec<(String, Vec<Ref>)>,
     nodes: Vec<TracedNode>,
     roots: Vec<u32>,
     guards: Vec<TracedGuard>,
@@ -371,70 +422,28 @@ struct TracedGuard {
     at: At,
 }
 
-/// The template of a variant `runtime.js` serialized; `place` names where a site or stack line is
-/// in the source, `resources` are the scene's, and `inputs` the pictures the Timeline gives it as
-/// its role has them, numbered after its resources.
+/// Binds serialized nodes and guards to a recorded program. `place` names a site or stack line
+/// in the source; `resources` are the scene's, and `inputs` the pictures the Timeline gives its
+/// role, numbered after its resources.
 pub fn variant(
     json: &str,
+    program: Program,
     place: &dyn Fn(&At) -> Rc<str>,
     resources: &[Slot],
     inputs: &[&str],
     shaders: &HashMap<String, Rc<str>>,
-    clips: &Clips,
 ) -> Result<Template, Error> {
     let traced: Traced =
         serde_json::from_str(json).map_err(|e| format!("a traced variant: {e}"))?;
-    let mut program = Program::default();
-    let mut constants = HashMap::new();
-    let mut expressions = HashMap::new();
-    // Program index of each traced op; ops come in dependency order.
-    let mut ids: Vec<u32> = Vec::with_capacity(traced.ops.len());
-    let expr = |ids: &[u32], e: u32| -> Result<u32, Error> {
-        ids.get(e as usize)
-            .copied()
-            .ok_or_else(|| format!("op {e} is used before it is defined"))
+    let expr = |e: u32| -> Result<u32, Error> {
+        ((e as usize) < program.ops.len())
+            .then_some(e)
+            .ok_or_else(|| format!("op {e} does not exist"))
     };
-    for (name, refs) in traced.ops {
-        let mut args = Vec::with_capacity(refs.len());
-        for r in refs {
-            args.push(match r {
-                Ref::Expr(e) => Arg::Expr(expr(&ids, e)?),
-                Ref::Const { c } => {
-                    let v = c.value()?;
-                    let key = match &v {
-                        V::Num(n) => ConstantKey::Num(n.to_bits()),
-                        V::Bool(b) => ConstantKey::Bool(*b),
-                        V::Str(s) => ConstantKey::Str(s.clone()),
-                    };
-                    Arg::Expr(*constants.entry(key).or_insert_with(|| {
-                        let id = program.ops.len() as u32;
-                        program.ops.push(Op::Const(v));
-                        id
-                    }))
-                }
-                Ref::Text { text } => Arg::Text(text.into()),
-            });
-        }
-        // Reuse the first identical operation, retaining its evaluation order and errors even
-        // when no node draws its value. All operands have already been mapped to shared ids.
-        let id = match expressions.entry((name, args)) {
-            Entry::Occupied(e) => *e.get(),
-            Entry::Vacant(e) => {
-                let (name, args) = e.key();
-                let op = make(name, args, clips)?;
-                let id = program.ops.len() as u32;
-                program.ops.push(op);
-                e.insert(id);
-                id
-            }
-        };
-        ids.push(id);
-    }
     let prop = |r: Ref| -> Result<Prop, Error> {
         match r {
-            Ref::Expr(e) => Ok(Prop::Expr(expr(&ids, e)?)),
+            Ref::Expr(e) => Ok(Prop::Expr(expr(e)?)),
             Ref::Const { c } => Ok(Prop::Const(c.value()?)),
-            Ref::Text { .. } => Err("a prop cannot be template text".into()),
         }
     };
     let count = traced.nodes.len() as u32;
@@ -649,12 +658,12 @@ pub fn variant(
             _ => return Err("a guard wants truthiness or a value".into()),
         };
         guards.push(Guard {
-            expr: expr(&ids, g.e)?,
+            expr: expr(g.e)?,
             want,
             when: g
                 .when
                 .into_iter()
-                .map(|(c, side)| Ok((expr(&ids, c)?, side)))
+                .map(|(c, side)| Ok((expr(c)?, side)))
                 .collect::<Result<_, Error>>()?,
             kind: g.kind.into(),
             at: place(&g.at),
@@ -716,31 +725,46 @@ mod tests {
         assert!(make("add", &[e(0), Arg::Text("x".into())], &Clips::new()).is_err());
     }
 
+    fn push(b: &mut Builder, name: &str, args: Vec<Arg>) -> u32 {
+        b.push(name.into(), args, &Clips::new()).unwrap()
+    }
+
     #[test]
     fn repeated_ops_share_values_without_losing_guards_or_late_inputs() {
+        let mut b = Builder::default();
+        let e = Arg::Expr;
+        assert_eq!(push(&mut b, "seconds", vec![]), 0);
+        assert_eq!(push(&mut b, "seconds", vec![]), 0);
+        assert_eq!(b.constant(V::Num(2.0)), 1);
+        assert_eq!(push(&mut b, "mul", vec![e(0), e(1)]), 2);
+        assert_eq!(push(&mut b, "mul", vec![e(0), e(1)]), 2);
+        assert_eq!(push(&mut b, "add", vec![e(2), e(2)]), 3);
+        assert_eq!(b.constant(V::Num(1.0)), 4);
+        assert_eq!(push(&mut b, "gt", vec![e(3), e(4)]), 5);
+        for _ in 0..2 {
+            assert_eq!(
+                push(&mut b, "template", vec![Arg::Text("x=".into()), e(2)]),
+                6
+            );
+            assert_eq!(b.constant(V::Num(2.0)), 1);
+        }
+        assert_eq!(push(&mut b, "bounds|width|box", vec![]), 7);
+        assert_eq!(push(&mut b, "bounds|width|box", vec![]), 7);
+        assert_eq!(push(&mut b, "add", vec![e(7), e(7)]), 8);
         let json = r#"{
-            "ops": [
-                ["seconds", []], ["seconds", []],
-                ["mul", [0, {"c": 2}]], ["mul", [1, {"c": 2}]],
-                ["add", [2, 3]], ["gt", [4, {"c": 1}]],
-                ["template", [{"text": "x="}, 2]],
-                ["template", [{"text": "x="}, 3]],
-                ["bounds|width|box", []], ["bounds|width|box", []],
-                ["add", [8, 9]]
-            ],
             "nodes": [{"type": "view", "path": "box", "classes": [],
-                       "style": [["width", 4], ["height", 10]], "children": []}],
+                       "style": [["width", 3], ["height", 8]], "children": []}],
             "roots": [0],
-            "guards": [{"e": 5, "truthy": false, "when": [[3, true]],
+            "guards": [{"e": 5, "truthy": false, "when": [[2, true]],
                         "kind": "if", "at": 1}]
         }"#;
         let t = variant(
             json,
+            b.finish(),
             &|_| "test".into(),
             &[],
             &[],
             &HashMap::new(),
-            &Clips::new(),
         )
         .unwrap();
         assert_eq!(t.program.ops.len(), 9);
@@ -775,49 +799,52 @@ mod tests {
 
     #[test]
     fn shared_constants_keep_signed_zero_and_unused_errors() {
-        let lower = |ops| {
-            variant(
-                &format!(r#"{{"ops": {ops}, "nodes": [], "roots": [], "guards": []}}"#),
-                &|_| "test".into(),
-                &[],
-                &[],
-                &HashMap::new(),
-                &Clips::new(),
-            )
-            .unwrap()
-        };
-        let t = lower(
-            r#"[["div", [{"c": 1}, {"c": 0}]],
-                ["div", [{"c": 1}, {"c": -0.0}]],
-                ["div", [{"c": 1}, {"c": 0}]]]"#,
+        let mut b = Builder::default();
+        let one = b.constant(V::Num(1.0));
+        let zero = b.constant(V::Num(0.0));
+        let positive = push(&mut b, "div", vec![Arg::Expr(one), Arg::Expr(zero)]);
+        let negative = b.constant(V::Num(-0.0));
+        push(&mut b, "div", vec![Arg::Expr(one), Arg::Expr(negative)]);
+        assert_eq!(
+            push(&mut b, "div", vec![Arg::Expr(one), Arg::Expr(zero)]),
+            positive
         );
         let clock = crate::eval::Clock {
             seconds: 0.0,
             progress: 0.0,
         };
-        let values = crate::eval::run(&t.program, clock).unwrap();
+        let values = crate::eval::run(&b.finish(), clock).unwrap();
         assert_eq!(values.len(), 5);
         assert_eq!(values[2], V::Num(f64::INFINITY));
         assert_eq!(values[4], V::Num(f64::NEG_INFINITY));
 
-        let t = lower(r#"[["path|length", [{"c": "not a path"}]]]"#);
-        assert!(crate::eval::run(&t.program, clock).is_err());
+        let mut b = Builder::default();
+        let path = b.constant(V::Str("not a path".into()));
+        push(&mut b, "path|length", vec![Arg::Expr(path)]);
+        assert!(crate::eval::run(&b.finish(), clock).is_err());
+        assert!(
+            Builder::default()
+                .push(
+                    "add".into(),
+                    vec![Arg::Expr(5), Arg::Expr(0)],
+                    &Clips::new()
+                )
+                .is_err()
+        );
     }
 
     #[test]
     fn variants_lower_to_templates() {
         let json = r#"{
-            "ops": [["seconds", []], ["mul", [0, {"c": 2}]], ["gt", [1, {"c": 1}]],
-                    ["template", [{"text": "t="}, 1]]],
             "nodes": [
-                {"type": "view", "path": "a", "classes": ["flex"], "style": [["opacity", 1],
+                {"type": "view", "path": "a", "classes": ["flex"], "style": [["opacity", 2],
                  ["width", {"c": {"nf": "Infinity"}}]], "children": [1], "site": 4},
                 {"type": "text", "path": null, "classes": [], "style": [], "children": [],
-                 "site": null, "content": [{"text": 3}]}
+                 "site": null, "content": [{"text": 5}]}
             ],
             "roots": [0],
-            "guards": [{"e": 2, "truthy": false, "when": [], "kind": "if", "at": 7},
-                       {"e": 0, "eq": {"nf": "NaN"}, "when": [[2, true]], "kind": "escape",
+            "guards": [{"e": 4, "truthy": false, "when": [], "kind": "if", "at": 7},
+                       {"e": 0, "eq": {"nf": "NaN"}, "when": [[4, true]], "kind": "escape",
                         "at": "m0.js:3"}]
         }"#;
         let place = |at: &At| -> Rc<str> {
@@ -826,7 +853,18 @@ mod tests {
                 At::Stack(s) => s.as_str().into(),
             }
         };
-        let t = variant(json, &place, &[], &[], &HashMap::new(), &Clips::new()).unwrap();
+        let mut b = Builder::default();
+        let seconds = push(&mut b, "seconds", vec![]);
+        let two = b.constant(V::Num(2.0));
+        let doubled = push(&mut b, "mul", vec![Arg::Expr(seconds), Arg::Expr(two)]);
+        let one = b.constant(V::Num(1.0));
+        push(&mut b, "gt", vec![Arg::Expr(doubled), Arg::Expr(one)]);
+        push(
+            &mut b,
+            "template",
+            vec![Arg::Text("t=".into()), Arg::Expr(doubled)],
+        );
+        let t = variant(json, b.finish(), &place, &[], &[], &HashMap::new()).unwrap();
         // seconds, 2, mul, 1, gt, template
         assert_eq!(t.program.ops.len(), 6);
         assert_eq!(t.program.ops[2], Op::Bin(Bin::Mul, 0, 1));
@@ -848,12 +886,12 @@ mod tests {
         assert_eq!(t.guards[1].when, [(4, true)]);
         assert!(
             variant(
-                r#"{"ops": [["add", [5, {"c": 1}]]], "nodes": [], "roots": [], "guards": []}"#,
+                r#"{"nodes": [], "roots": [], "guards": [{"e": 5, "truthy": false, "when": [], "kind": "if", "at": 0}]}"#,
+                Program::default(),
                 &place,
                 &[],
                 &[],
                 &HashMap::new(),
-                &Clips::new()
             )
             .is_err()
         );
