@@ -968,18 +968,20 @@ function cornerTangents(x0, y0, x1, y1, r1, rc, cw) {
   const r = r1 - rc;
   const D = x11 * y10 - x10 * y11;
   const d = (dy < 0 ? -1 : 1) * Math.sqrt(Math.max(0, r * r * d2 - D * D));
-  let [cx0, cy0] = [(D * dy - dx * d) / d2, (-D * dx - dy * d) / d2];
+  const [cx0, cy0] = [(D * dy - dx * d) / d2, (-D * dx - dy * d) / d2];
   const [cx1, cy1] = [(D * dy + dx * d) / d2, (-D * dx + dy * d) / d2];
   const [dx0, dy0, dx1, dy1] = [cx0 - x00, cy0 - y00, cx1 - x00, cy1 - y00];
-  // The closer of the two.
-  if (dx0 * dx0 + dy0 * dy0 > dx1 * dx1 + dy1 * dy1) [cx0, cy0] = [cx1, cy1];
+  // The closer of the two. A select, not an if: which one it is changes nothing about the path
+  // the arc draws, and a traced comparison would trace the scene again each time it changed.
+  const near = dx0 * dx0 + dy0 * dy0 > dx1 * dx1 + dy1 * dy1;
+  const [cx, cy] = near ? [cx1, cy1] : [cx0, cy0];
   return {
-    cx: cx0,
-    cy: cy0,
+    cx,
+    cy,
     x01: -ox,
     y01: -oy,
-    x11: cx0 * (r1 / r - 1),
-    y11: cy0 * (r1 / r - 1),
+    x11: cx * (r1 / r - 1),
+    y11: cy * (r1 / r - 1),
   };
 }
 
