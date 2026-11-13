@@ -3,8 +3,6 @@
 //! Tracing and frame evaluation both go through here, so a value seen while tracing is bit for bit
 //! the value a frame computes.
 
-use std::fmt::{self, Write};
-
 /// A `Math` function scene code may call on traced values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MathFn {
@@ -206,76 +204,7 @@ pub fn number_to_string(x: f64) -> String {
 
 /// Appends a number without allocating the intermediate strings a template would copy.
 pub(crate) fn push_number(out: &mut String, x: f64) {
-    if x.is_nan() {
-        out.push_str("NaN");
-        return;
-    }
-    if x == 0.0 {
-        out.push('0');
-        return;
-    }
-    if x.is_infinite() {
-        out.push_str(if x > 0.0 { "Infinity" } else { "-Infinity" });
-        return;
-    }
-    if x < 0.0 {
-        out.push('-');
-    }
-    // `{:e}` prints the shortest round-trip digits, as `d.ddde±x`.
-    let mut buffer = NumberBuffer {
-        bytes: [0; 32],
-        len: 0,
-    };
-    write!(&mut buffer, "{:e}", x.abs()).expect("a number fits in the buffer");
-    let sci = std::str::from_utf8(&buffer.bytes[..buffer.len]).expect("a number is ASCII");
-    let (mantissa, exp) = sci.split_once('e').expect("{:e} prints an exponent");
-    let mut digits = [0; 17];
-    let mut k = 0;
-    for b in mantissa.bytes().filter(|&b| b != b'.') {
-        digits[k] = b;
-        k += 1;
-    }
-    let digits = std::str::from_utf8(&digits[..k]).expect("digits are ASCII");
-    let k = digits.len() as i32;
-    // x = 0.d1d2…dk × 10^n
-    let n = exp.parse::<i32>().expect("{:e} prints an integer exponent") + 1;
-    const ZEROS: &str = "000000000000000000000";
-    if k <= n && n <= 21 {
-        out.push_str(digits);
-        out.push_str(&ZEROS[..(n - k) as usize]);
-    } else if 0 < n && n <= 21 {
-        let (whole, frac) = digits.split_at(n as usize);
-        out.push_str(whole);
-        out.push('.');
-        out.push_str(frac);
-    } else if -6 < n && n <= 0 {
-        out.push_str("0.");
-        out.push_str(&ZEROS[..(-n) as usize]);
-        out.push_str(digits);
-    } else {
-        let (d, rest) = digits.split_at(1);
-        out.push_str(d);
-        if !rest.is_empty() {
-            out.push('.');
-            out.push_str(rest);
-        }
-        write!(out, "e{:+}", n - 1).expect("writing to a String");
-    }
-}
-
-/// A finite f64 needs at most 17 significant digits; its scientific notation fits in 32 bytes.
-struct NumberBuffer {
-    bytes: [u8; 32],
-    len: usize,
-}
-
-impl Write for NumberBuffer {
-    fn write_str(&mut self, text: &str) -> fmt::Result {
-        let end = self.len + text.len();
-        self.bytes[self.len..end].copy_from_slice(text.as_bytes());
-        self.len = end;
-        Ok(())
-    }
+    out.push_str(ryu_js::Buffer::new().format(x));
 }
 
 #[cfg(test)]
@@ -291,6 +220,9 @@ mod tests {
             (-2.5, "-2.5"),
             (0.1 + 0.2, "0.30000000000000004"),
             (123456789.0, "123456789"),
+            // Equally close shortest decimals choose an even last digit, unlike `{:e}`.
+            (f64::from_bits(0x4319_4a5a_0220_10f5), "1779656215233597.2"),
+            (f64::from_bits(0xc2de_89e8_4d3a_04e8), "-134310626912275.62"),
             (1e21, "1e+21"),
             (1.5e21, "1.5e+21"),
             (1e20, "100000000000000000000"),
@@ -312,6 +244,40 @@ mod tests {
             appended.push_str(" suffix");
             assert_eq!(appended, format!("prefix {want} suffix"), "{x:e}");
         }
+    }
+
+    #[test]
+    fn number_strings_match_quickjs_at_boundaries_and_across_float_bits() {
+        let mut numbers = vec![0.0, -0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY];
+        // Neighbors on both sides of every decimal exponent, including the subnormal range
+        // and the boundaries where JavaScript switches between plain and exponent notation.
+        for exp in -324..=308 {
+            let x: f64 = format!("1e{exp}").parse().unwrap();
+            for x in [x.next_down(), x, x.next_up()] {
+                numbers.extend([x, -x]);
+            }
+        }
+        let mut bits = 0xd1b5_4a32_d192_ed03u64;
+        for _ in 0..10_000 {
+            bits ^= bits << 13;
+            bits ^= bits >> 7;
+            bits ^= bits << 17;
+            numbers.push(f64::from_bits(bits));
+        }
+        let rt = rquickjs::Runtime::new().unwrap();
+        let ctx = rquickjs::Context::full(&rt).unwrap();
+        ctx.with(|ctx| {
+            // QuickJS's native String(), without Valle's runtime or host formatter installed.
+            let string: rquickjs::Function = ctx.eval("x => String(x)").unwrap();
+            for x in numbers {
+                let expected: String = string.call((x,)).unwrap();
+                assert_eq!(number_to_string(x), expected, "bits {:016x}", x.to_bits());
+                let mut text = String::from("before:");
+                push_number(&mut text, x);
+                text.push_str(":after");
+                assert_eq!(text, format!("before:{expected}:after"));
+            }
+        });
     }
 
     #[test]
