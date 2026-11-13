@@ -145,6 +145,13 @@ names another folder for it.
 | Variable | What it does |
 | --- | --- |
 | `VALLE_CACHE_DIR` | The cache of downloads and built-in fonts; `~/.valle/cache` unless set |
+
+Files from the web are kept in the cache by the SHA-256 of their content, whatever their
+kind: fonts, images, shaders and videos. A URL whose path holds a content hash, such as
+jsDelivr's `…/gh/google/fonts@<commit>/…`, serves what that hash names and cannot change, so
+a file fetched from one is used again without asking the server. Any other URL is asked
+about each time with its ETag and Last-Modified, and the cached copy is used when the
+server says it is current, or when the server cannot be reached.
 | `VALLE_FFMPEG_DIR` | The folder of FFmpeg's shared libraries; see FFmpeg |
 | `VALLE_HOME` | The folder of `settings.json`, `~/.valle` unless set |
 | `WGPU_BACKEND`, `WGPU_ADAPTER_NAME` | Choose another GPU backend or adapter |

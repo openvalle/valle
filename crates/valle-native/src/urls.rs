@@ -95,6 +95,13 @@ impl UrlCache {
             .filter(|record| {
                 record.url == url && self.file(&record.sha256, &record.name).is_file()
             });
+        // The URL names the content, as a commit or a version hash does: the copy can never be
+        // out of date, so it is not asked about again.
+        if fixed(url)
+            && let Some(record) = &record
+        {
+            return Ok(self.file(&record.sha256, &record.name));
+        }
         match self.download(url, record.as_ref()) {
             Ok(Answer::NotModified) => {
                 let record = record.expect("asked about it");
@@ -283,6 +290,16 @@ fn web(url: &str) -> Result<(), String> {
     } else {
         Err(format!("{url}: not an HTTP or HTTPS address"))
     }
+}
+
+/// Whether `url` names the content it serves: a segment of it is a git commit or another content
+/// hash, 40 or 64 hex digits, so what it serves cannot change under the same URL. A URL such as
+/// jsDelivr's `gh/google/fonts@<commit>/…` is one.
+fn fixed(url: &str) -> bool {
+    let content = url.split(['?', '#']).next().unwrap_or_default();
+    content.split(['/', '@']).any(|segment| {
+        matches!(segment.len(), 40 | 64) && segment.chars().all(|c| c.is_ascii_hexdigit())
+    })
 }
 
 /// The name a file from `url` is kept as: the URL's last segment, or `file` when that is empty or
@@ -491,6 +508,36 @@ mod tests {
         assert_eq!(cache.fetch_pinned(&url, &font, "Font.ttf").unwrap(), path);
         assert_eq!(fs::read_dir(root.join("partial")).unwrap().count(), 0);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_url_that_names_its_content_is_not_asked_about_again() {
+        let (cache, root) = cache("fixed");
+        let commit = "5bb28733cec313b63fbd415b574b5ae35c8aa8b8";
+        let server = Server::new(vec![reply(200, &[("ETag", "\"a\"")], "font")]);
+        let url = server
+            .url
+            .replace("/font.ttf", &format!("/@{commit}/font.ttf"));
+        let first = cache.fetch(&url).unwrap();
+        assert_eq!(read(&first), "font");
+        // A second fetch asks nothing: the server has no reply to give and the thread would
+        // panic if it were asked.
+        assert_eq!(cache.fetch(&url).unwrap(), first);
+        assert_eq!(server.finish().len(), 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn only_a_whole_content_hash_fixes_a_url() {
+        let commit = "5bb28733cec313b63fbd415b574b5ae35c8aa8b8";
+        let sha = "498efd461f6ddfcb7a111bf9a565709d2085d48201d501ead960d93e84ffbb88";
+        assert!(fixed(&format!("https://x/@{commit}/a.ttf")));
+        assert!(fixed(&format!("https://x/{sha}/a.ttf")));
+        assert!(fixed(&format!("https://x/{sha}/a.ttf?v=1#top")));
+        assert!(!fixed("https://x/@main/a.ttf"));
+        assert!(!fixed(&format!("https://x/{}/a.ttf", &commit[..39])));
+        assert!(!fixed(&format!("https://x/{}/a.ttf", "g".repeat(40))));
+        assert!(!fixed("https://x/a.ttf"));
     }
 
     #[test]
