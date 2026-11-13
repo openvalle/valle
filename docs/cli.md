@@ -84,7 +84,17 @@ or integer string; Project render records also keep an explicit `--fps`.
 ## Output
 
 Every command takes `--json` (one JSON result) and `--events` (progress lines, at most a
-hundred, then the result). A result leaves out fields that would be `null` or empty. It has
+hundred, then the result). `--perf` times each stage of the work and adds a `perf` object to
+the result: each stage with its time in all its spans (`ms`), how many spans it had
+(`count`), and the middle (`p50`), 95th (`p95`) and slowest (`max`) span in milliseconds;
+the process's peak resident memory (`peak_rss_kb`); and, for a render, what it still holds
+(`hold`, such as `gpu_kb`, the GPU memory its buffers and textures take). Stages are
+`load.network` (a resource fetched), `load.scene` (a scene compiled and laid out), `eval` (a
+frame made), `draw` (a frame drawn and its commands submitted), `gpu-wait` (waiting for
+one the GPU drew) and `encoder` (waiting for the encoder's surface). A stage's `ms` leaves
+out the stages inside it, so all stages' `ms` added together is the work done and not more.
+Without `--perf` timing costs one atomic check a span. A result leaves
+out fields that would be `null` or empty. It has
 `status`, and a failure `code`, `message`, `hint` and, for a check, `problems`. The exit code is 0 on success and 1 on failure. A render's result includes the
 file, the frames, its size and, for a video, the codec, the encoder, the GPU it drew on as
 `adapter`, and the sound's loudness.

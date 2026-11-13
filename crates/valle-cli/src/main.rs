@@ -124,18 +124,25 @@ fn main() -> ExitCode {
         Ok(cli) => cli,
         Err(e) => return parse_failed(&e, &words),
     };
-    let json = cli.json || cli.events;
+    let perf = cli.perf;
+    let json = cli.json || cli.events || perf;
     EVENTS.store(cli.events, Ordering::Relaxed);
+    if perf {
+        valle_engine::perf::enable();
+    }
     if let Some(directory) = cli.ffmpeg_dir.clone() {
         valle_native::media::set_directory(directory);
     }
     let thread = std::thread::Builder::new()
         .stack_size(STACK)
         .spawn(move || run(cli));
-    let result = match thread.map(|t| t.join()) {
+    let mut result = match thread.map(|t| t.join()) {
         Ok(Ok(done)) => done,
         _ => Err(Failure::new("internal", "the command stopped")),
     };
+    if perf && let Ok(value) = &mut result {
+        value["perf"] = valle_engine::perf::report();
+    }
     // Some of it done and the rest not: the command failed.
     let partial = matches!(&result, Ok(v) if v["status"] == "partial");
     match (result, json) {

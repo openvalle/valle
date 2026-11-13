@@ -32,6 +32,12 @@ pub struct Cli {
     /// The folder of FFmpeg's shared libraries, in place of `VALLE_FFMPEG_DIR` and settings.json
     #[arg(long, global = true, value_name = "FOLDER")]
     pub ffmpeg_dir: Option<std::path::PathBuf>,
+    /// Time each stage of the work, and report it: adds `perf` to the result
+    ///
+    /// Each stage's count of spans, their time in all, the middle one and the slowest, and the
+    /// process's resident memory as it began.
+    #[arg(long, global = true)]
+    pub perf: bool,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -592,6 +598,18 @@ mod tests {
 
     fn parse(words: &[&str]) -> Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("valle").chain(words.iter().copied()))
+    }
+
+    #[test]
+    fn perf_is_a_global_flag_before_or_after_the_command() {
+        for words in [
+            &["motion", "render", "a.motion.tsx", "-o", "x.mp4", "--perf"][..],
+            &["--perf", "motion", "render", "a.motion.tsx", "-o", "x.mp4"][..],
+        ] {
+            let cli = parse(words).unwrap_or_else(|e| panic!("{words:?}: {e}"));
+            assert!(cli.perf, "{words:?}");
+        }
+        assert!(!parse(&["motion", "check", "a.motion.tsx"]).unwrap().perf);
     }
 
     fn scene(words: &[&str]) -> Args {

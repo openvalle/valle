@@ -79,31 +79,43 @@ pub fn render(
     let mut direct = false;
     for (k, &i) in frames.iter().enumerate() {
         let at = c.fps.frame_start(i).map_err(|e| Failure::new("scene", e))?;
-        let frame = scene.frame(at).map_err(|e| Failure::new("scene", e))?;
+        let frame = {
+            let _span = valle_engine::perf::span("eval");
+            scene.frame(at).map_err(|e| Failure::new("scene", e))?
+        };
         let (items, pictures) = (&frame.items, &frame.pictures);
-        match (&textures, writer.surface().map_err(failed)?) {
-            (Some(textures), Some(surface)) => {
-                let planes = (textures.planes(gpu.device(), &surface)).map_err(failed)?;
-                let views = [&planes.luma, &planes.chroma];
-                let done = renderer
-                    .planes(items, pictures, scene.faces(), scene.images(), views)
-                    .map_err(gpu_failed)?;
-                drawing.push_back((done, surface, planes));
-                direct = true;
-                if drawing.len() > 1
-                    && let Some((done, surface, planes)) = drawing.pop_front()
-                {
-                    gpu.wait(done).map_err(gpu_failed)?;
-                    drop(planes);
-                    writer.send(surface).map_err(failed)?;
+        let drawn = {
+            let _span = valle_engine::perf::span("draw");
+            match (&textures, writer.surface().map_err(failed)?) {
+                (Some(textures), Some(surface)) => {
+                    let planes = (textures.planes(gpu.device(), &surface)).map_err(failed)?;
+                    let views = [&planes.luma, &planes.chroma];
+                    let done = renderer
+                        .planes(items, pictures, scene.faces(), scene.images(), views)
+                        .map_err(gpu_failed)?;
+                    drawing.push_back((done, surface, planes));
+                    direct = true;
+                    Ok(())
+                }
+                _ => {
+                    let pixels = renderer
+                        .render(items, pictures, scene.faces(), scene.images())
+                        .map_err(gpu_failed)?;
+                    writer.push(&pixels).map_err(failed)
                 }
             }
-            _ => {
-                let pixels = renderer
-                    .render(items, pictures, scene.faces(), scene.images())
-                    .map_err(gpu_failed)?;
-                writer.push(&pixels).map_err(failed)?;
+        };
+        drawn?;
+        if drawing.len() > 1
+            && let Some((done, surface, planes)) = drawing.pop_front()
+        {
+            {
+                let _span = valle_engine::perf::span("gpu-wait");
+                gpu.wait(done).map_err(gpu_failed)?;
             }
+            drop(planes);
+            let _span = valle_engine::perf::span("encoder");
+            writer.send(surface).map_err(failed)?;
         }
         if let Some(m) = mixer.as_deref_mut() {
             // The samples from this frame's start to the next's.
@@ -121,6 +133,8 @@ pub fn render(
         writer.send(surface).map_err(failed)?;
     }
     writer.finish().map_err(failed)?;
+    valle_engine::perf::gauge("gpu_kb", renderer.bytes() / 1024);
+    valle_engine::perf::gauge("frames", frames.len() as u64);
     let seconds = started.elapsed().as_secs_f64();
     let encoder = match encoding {
         Encoding::Hardware => "hardware",

@@ -43,7 +43,10 @@ pub fn load(args: &Args) -> Result<Loaded, Failure> {
             if cache.is_none() {
                 *cache = Some(UrlCache::global().ok()?);
             }
-            let file = cache.as_ref()?.fetch(path).ok()?;
+            let file = {
+                let _span = valle_engine::perf::span("load.network");
+                cache.as_ref()?.fetch(path).ok()?
+            };
             let bytes = std::fs::read(&file).ok()?;
             urls.borrow_mut().push((path.to_string(), file));
             return Some(bytes);
@@ -58,8 +61,10 @@ pub fn load(args: &Args) -> Result<Loaded, Failure> {
     };
     let mut inputs = inputs.clone();
     inputs.fps = args.fps.or(inputs.fps);
-    let mut scene =
-        Scene::load(entry, &read, &inputs, fonts()).map_err(|e| Failure::new("scene", e))?;
+    let mut scene = {
+        let _span = valle_engine::perf::span("load.scene");
+        Scene::load(entry, &read, &inputs, fonts()).map_err(|e| Failure::new("scene", e))?
+    };
     let decoding = args.decoder;
     // The resources of one file share its decoders.
     let mut pools: BTreeMap<PathBuf, Rc<RefCell<Pool>>> = BTreeMap::new();
