@@ -530,3 +530,57 @@ impl Plan {
         Some(i)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn small_blurs_keep_the_full_resolution_kernel() {
+        // These include the odd and even kernels in tests/blur_sampling.rs. A threshold change
+        // must not silently turn that exact sampling test into an approximation test.
+        for sigma in [0.01, 0.15, 0.7, 1.0, 1.25, 2.5, 5.0, 6.07] {
+            for bounds in [None, Some([3.0, 5.0, 7.0, 9.0])] {
+                assert!(
+                    Smaller::of(sigma, [0.0, 0.0, 32.0, 24.0], bounds, [32, 24]).is_none(),
+                    "sigma {sigma}, bounds {bounds:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn larger_blurs_switch_copy_sizes_and_keep_mirrored_bounds() {
+        // Straddle every change of copy size, also exercised by the GPU continuity test.
+        for (sigma, block) in [
+            (6.08, 2.0),
+            (8.0, 2.0),
+            (12.16, 2.0),
+            (12.17, 4.0),
+            (24.32, 4.0),
+            (24.34, 8.0),
+            (30.0, 8.0),
+            (48.65, 8.0),
+            (48.67, 16.0),
+            (60.0, 16.0),
+        ] {
+            let copy = Smaller::of(sigma, [0.0, 0.0, 65.0, 49.0], None, [65, 49]).unwrap();
+            assert_eq!(copy.block, [block; 2], "sigma {sigma}");
+        }
+        // Fractional blocks must end exactly at the bounds, even off the canvas or 1 px wide.
+        for (bounds, extent, block) in [
+            ([3.0, 5.0, 7.0, 9.0], [4.0, 5.0], [1.75, 1.8]),
+            (
+                [-3.0, -5.0, 11.0, 13.0],
+                [6.0, 7.0],
+                [11.0 / 6.0, 13.0 / 7.0],
+            ),
+            ([4.0, 2.0, 1.0, 3.0], [1.0, 2.0], [1.0, 1.5]),
+        ] {
+            let copy = Smaller::of(8.0, [0.0, 0.0, 32.0, 24.0], Some(bounds), [32, 24]).unwrap();
+            assert_eq!(copy.origin, [bounds[0], bounds[1]]);
+            assert_eq!(copy.extent, extent);
+            assert_eq!(copy.block, block);
+        }
+    }
+}
