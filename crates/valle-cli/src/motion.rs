@@ -439,7 +439,11 @@ pub fn draw(
     at: Result<Tick, String>,
 ) -> Result<Vec<u8>, Failure> {
     let at = at.map_err(|e| Failure::new("scene", e))?;
-    let frame = scene.frame(at).map_err(|e| Failure::new("scene", e))?;
+    let frame = {
+        let _span = valle_engine::perf::span("eval");
+        scene.frame(at).map_err(|e| Failure::new("scene", e))?
+    };
+    let _span = valle_engine::perf::span("draw");
     renderer
         .render(&frame.items, &frame.pictures, scene.faces(), scene.images())
         .map_err(|e| Failure::new("gpu", e))
