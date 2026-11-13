@@ -84,28 +84,29 @@ pub fn render(
             scene.frame(at).map_err(|e| Failure::new("scene", e))?
         };
         let (items, pictures) = (&frame.items, &frame.pictures);
-        let drawn = {
-            let _span = valle_engine::perf::span("draw");
-            match (&textures, writer.surface().map_err(failed)?) {
-                (Some(textures), Some(surface)) => {
-                    let planes = (textures.planes(gpu.device(), &surface)).map_err(failed)?;
-                    let views = [&planes.luma, &planes.chroma];
-                    let done = renderer
-                        .planes(items, pictures, scene.faces(), scene.images(), views)
-                        .map_err(gpu_failed)?;
-                    drawing.push_back((done, surface, planes));
-                    direct = true;
-                    Ok(())
-                }
-                _ => {
-                    let pixels = renderer
-                        .render(items, pictures, scene.faces(), scene.images())
-                        .map_err(gpu_failed)?;
-                    writer.push(&pixels).map_err(failed)
-                }
+        match (&textures, writer.surface().map_err(failed)?) {
+            (Some(textures), Some(surface)) => {
+                let _span = valle_engine::perf::span("draw");
+                let planes = (textures.planes(gpu.device(), &surface)).map_err(failed)?;
+                let views = [&planes.luma, &planes.chroma];
+                let done = renderer
+                    .planes(items, pictures, scene.faces(), scene.images(), views)
+                    .map_err(gpu_failed)?;
+                drawing.push_back((done, surface, planes));
+                direct = true;
             }
-        };
-        drawn?;
+            _ => {
+                let pixels = {
+                    let _span = valle_engine::perf::span("draw");
+                    renderer
+                        .render(items, pictures, scene.faces(), scene.images())
+                        .map_err(gpu_failed)?
+                };
+                // Converted and encoded here, on this thread, as `draw` would hide it.
+                let _span = valle_engine::perf::span("encoder");
+                writer.push(&pixels).map_err(failed)?;
+            }
+        }
         if drawing.len() > 1
             && let Some((done, surface, planes)) = drawing.pop_front()
         {
