@@ -2570,6 +2570,7 @@ dependencies = [
  "image-webp",
  "indoc",
  "kurbo",
+ "libc",
  "libm",
  "naga",
  "oxc",

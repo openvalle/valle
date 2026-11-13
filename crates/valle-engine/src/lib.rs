@@ -16,6 +16,7 @@ pub mod noise;
 pub mod paint;
 pub mod particles;
 pub mod path;
+pub mod perf;
 pub mod scene;
 pub mod shader;
 pub mod slug;

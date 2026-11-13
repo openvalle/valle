@@ -13,6 +13,7 @@ image-webp.workspace = true
 icu_properties.workspace = true
 i_overlay.workspace = true
 kurbo.workspace = true
+libc.workspace = true
 libm.workspace = true
 naga.workspace = true
 oxc.workspace = true

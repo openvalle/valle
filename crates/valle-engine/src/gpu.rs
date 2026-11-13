@@ -643,6 +643,34 @@ pub struct Renderer<'a> {
 }
 
 impl<'a> Renderer<'a> {
+    /// The bytes of GPU memory the renderer holds: its stores, its frame and output textures,
+    /// its layers and the images it shows.
+    pub fn bytes(&self) -> u64 {
+        let stores = [
+            &self.transforms,
+            &self.rects,
+            &self.gradients,
+            &self.segments,
+            &self.glyphs,
+            &self.layers,
+            &self.curves,
+            &self.lists,
+        ];
+        let textures = std::iter::once(&self.frame)
+            .chain(std::iter::once(&self.output))
+            .chain(self.pool.iter())
+            .chain(self.images.iter().map(|(_, s)| s));
+        let texture = |s: &Surface| {
+            let size = s.texture.size();
+            u64::from(size.width)
+                * u64::from(size.height)
+                * s.texture.format().block_copy_size(None).unwrap_or(4) as u64
+        };
+        stores.iter().map(|s| s.buffer.size()).sum::<u64>()
+            + self.readback.size()
+            + textures.map(texture).sum::<u64>()
+    }
+
     pub fn new(gpu: &'a Gpu, width: u32, height: u32) -> Renderer<'a> {
         let device = &gpu.device;
         let size = [width, height];
