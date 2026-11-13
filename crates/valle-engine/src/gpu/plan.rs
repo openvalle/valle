@@ -111,7 +111,7 @@ impl Reach {
 
 /// The standard deviation a smaller copy is blurred by at the least, in its own px: under it the
 /// copy's px would show in the blur.
-const LEAST: f32 = 6.0;
+const LEAST: f32 = 3.0;
 
 /// The most of a layer's px that a px of a smaller copy is across.
 const MOST: u32 = 16;
