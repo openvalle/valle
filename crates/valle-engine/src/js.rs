@@ -3,6 +3,8 @@
 //! Tracing and frame evaluation both go through here, so a value seen while tracing is bit for bit
 //! the value a frame computes.
 
+use std::fmt::{self, Write};
+
 /// A `Math` function scene code may call on traced values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MathFn {
@@ -195,45 +197,85 @@ fn to_int32(x: f64) -> i32 {
 }
 
 /// A number as `String(x)` prints it: the shortest digits that read back to `x`, in plain notation
-/// from 1e-7 up to 1e21 and in exponent notation (`1e+21`, `1.5e-7`) beyond.
+/// from 1e-6 up to (but not including) 1e21, and in exponent notation beyond.
 pub fn number_to_string(x: f64) -> String {
+    let mut out = String::new();
+    push_number(&mut out, x);
+    out
+}
+
+/// Appends a number without allocating the intermediate strings a template would copy.
+pub(crate) fn push_number(out: &mut String, x: f64) {
     if x.is_nan() {
-        return "NaN".into();
+        out.push_str("NaN");
+        return;
     }
     if x == 0.0 {
-        return "0".into();
+        out.push('0');
+        return;
     }
     if x.is_infinite() {
-        return if x > 0.0 { "Infinity" } else { "-Infinity" }.into();
+        out.push_str(if x > 0.0 { "Infinity" } else { "-Infinity" });
+        return;
     }
-    let sign = if x < 0.0 { "-" } else { "" };
+    if x < 0.0 {
+        out.push('-');
+    }
     // `{:e}` prints the shortest round-trip digits, as `d.ddde±x`.
-    let sci = format!("{:e}", x.abs());
+    let mut buffer = NumberBuffer {
+        bytes: [0; 32],
+        len: 0,
+    };
+    write!(&mut buffer, "{:e}", x.abs()).expect("a number fits in the buffer");
+    let sci = std::str::from_utf8(&buffer.bytes[..buffer.len]).expect("a number is ASCII");
     let (mantissa, exp) = sci.split_once('e').expect("{:e} prints an exponent");
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    let mut digits = [0; 17];
+    let mut k = 0;
+    for b in mantissa.bytes().filter(|&b| b != b'.') {
+        digits[k] = b;
+        k += 1;
+    }
+    let digits = std::str::from_utf8(&digits[..k]).expect("digits are ASCII");
     let k = digits.len() as i32;
     // x = 0.d1d2…dk × 10^n
     let n = exp.parse::<i32>().expect("{:e} prints an integer exponent") + 1;
-    let body = if k <= n && n <= 21 {
-        format!("{digits}{}", "0".repeat((n - k) as usize))
+    const ZEROS: &str = "000000000000000000000";
+    if k <= n && n <= 21 {
+        out.push_str(digits);
+        out.push_str(&ZEROS[..(n - k) as usize]);
     } else if 0 < n && n <= 21 {
         let (whole, frac) = digits.split_at(n as usize);
-        format!("{whole}.{frac}")
+        out.push_str(whole);
+        out.push('.');
+        out.push_str(frac);
     } else if -6 < n && n <= 0 {
-        format!("0.{}{digits}", "0".repeat((-n) as usize))
+        out.push_str("0.");
+        out.push_str(&ZEROS[..(-n) as usize]);
+        out.push_str(digits);
     } else {
-        let e = n - 1;
-        let e = if e >= 0 {
-            format!("+{e}")
-        } else {
-            e.to_string()
-        };
-        match digits.split_at(1) {
-            (d, "") => format!("{d}e{e}"),
-            (d, rest) => format!("{d}.{rest}e{e}"),
+        let (d, rest) = digits.split_at(1);
+        out.push_str(d);
+        if !rest.is_empty() {
+            out.push('.');
+            out.push_str(rest);
         }
-    };
-    format!("{sign}{body}")
+        write!(out, "e{:+}", n - 1).expect("writing to a String");
+    }
+}
+
+/// A finite f64 needs at most 17 significant digits; its scientific notation fits in 32 bytes.
+struct NumberBuffer {
+    bytes: [u8; 32],
+    len: usize,
+}
+
+impl Write for NumberBuffer {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        let end = self.len + text.len();
+        self.bytes[self.len..end].copy_from_slice(text.as_bytes());
+        self.len = end;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -265,6 +307,10 @@ mod tests {
         ];
         for (x, want) in cases {
             assert_eq!(number_to_string(x), want, "{x:e}");
+            let mut appended = String::from("prefix ");
+            push_number(&mut appended, x);
+            appended.push_str(" suffix");
+            assert_eq!(appended, format!("prefix {want} suffix"), "{x:e}");
         }
     }
 

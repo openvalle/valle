@@ -189,7 +189,11 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
             for p in parts {
                 match p {
                     Part::Text(t) => s.push_str(t),
-                    Part::Expr(i) => s.push_str(&values[*i as usize].text()),
+                    Part::Expr(i) => match &values[*i as usize] {
+                        V::Num(n) => js::push_number(&mut s, *n),
+                        V::Bool(b) => s.push_str(if *b { "true" } else { "false" }),
+                        V::Str(t) => s.push_str(t),
+                    },
                 }
             }
             V::Str(Rc::from(s))

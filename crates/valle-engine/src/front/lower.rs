@@ -2,7 +2,7 @@
 //! name over operands; `make` turns one into the engine's expression, for tracing (`__host.op`) and
 //! for the template alike.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use std::rc::Rc;
 
 use serde::Deserialize;
@@ -23,9 +23,18 @@ use crate::time::{Rate, Speed, Tick};
 use crate::transition;
 
 /// An operand of an op by name: an earlier expression, or literal text of a template.
+#[derive(PartialEq, Eq, Hash)]
 pub enum Arg {
     Expr(u32),
     Text(Rc<str>),
+}
+
+/// Constants are keyed by bits, so sharing them never loses a number's sign of zero.
+#[derive(PartialEq, Eq, Hash)]
+enum ConstantKey {
+    Num(u64),
+    Bool(bool),
+    Str(Rc<str>),
 }
 
 /// The expression `name` over `args`; a clip's reads the clip table `clips`.
@@ -376,6 +385,8 @@ pub fn variant(
     let traced: Traced =
         serde_json::from_str(json).map_err(|e| format!("a traced variant: {e}"))?;
     let mut program = Program::default();
+    let mut constants = HashMap::new();
+    let mut expressions = HashMap::new();
     // Program index of each traced op; ops come in dependency order.
     let mut ids: Vec<u32> = Vec::with_capacity(traced.ops.len());
     let expr = |ids: &[u32], e: u32| -> Result<u32, Error> {
@@ -389,14 +400,35 @@ pub fn variant(
             args.push(match r {
                 Ref::Expr(e) => Arg::Expr(expr(&ids, e)?),
                 Ref::Const { c } => {
-                    program.ops.push(Op::Const(c.value()?));
-                    Arg::Expr(program.ops.len() as u32 - 1)
+                    let v = c.value()?;
+                    let key = match &v {
+                        V::Num(n) => ConstantKey::Num(n.to_bits()),
+                        V::Bool(b) => ConstantKey::Bool(*b),
+                        V::Str(s) => ConstantKey::Str(s.clone()),
+                    };
+                    Arg::Expr(*constants.entry(key).or_insert_with(|| {
+                        let id = program.ops.len() as u32;
+                        program.ops.push(Op::Const(v));
+                        id
+                    }))
                 }
                 Ref::Text { text } => Arg::Text(text.into()),
             });
         }
-        program.ops.push(make(&name, &args, clips)?);
-        ids.push(program.ops.len() as u32 - 1);
+        // Reuse the first identical operation, retaining its evaluation order and errors even
+        // when no node draws its value. All operands have already been mapped to shared ids.
+        let id = match expressions.entry((name, args)) {
+            Entry::Occupied(e) => *e.get(),
+            Entry::Vacant(e) => {
+                let (name, args) = e.key();
+                let op = make(name, args, clips)?;
+                let id = program.ops.len() as u32;
+                program.ops.push(op);
+                e.insert(id);
+                id
+            }
+        };
+        ids.push(id);
     }
     let prop = |r: Ref| -> Result<Prop, Error> {
         match r {
@@ -682,6 +714,94 @@ mod tests {
         );
         assert!(make("math|random", &[], &Clips::new()).is_err());
         assert!(make("add", &[e(0), Arg::Text("x".into())], &Clips::new()).is_err());
+    }
+
+    #[test]
+    fn repeated_ops_share_values_without_losing_guards_or_late_inputs() {
+        let json = r#"{
+            "ops": [
+                ["seconds", []], ["seconds", []],
+                ["mul", [0, {"c": 2}]], ["mul", [1, {"c": 2}]],
+                ["add", [2, 3]], ["gt", [4, {"c": 1}]],
+                ["template", [{"text": "x="}, 2]],
+                ["template", [{"text": "x="}, 3]],
+                ["bounds|width|box", []], ["bounds|width|box", []],
+                ["add", [8, 9]]
+            ],
+            "nodes": [{"type": "view", "path": "box", "classes": [],
+                       "style": [["width", 4], ["height", 10]], "children": []}],
+            "roots": [0],
+            "guards": [{"e": 5, "truthy": false, "when": [[3, true]],
+                        "kind": "if", "at": 1}]
+        }"#;
+        let t = variant(
+            json,
+            &|_| "test".into(),
+            &[],
+            &[],
+            &HashMap::new(),
+            &Clips::new(),
+        )
+        .unwrap();
+        assert_eq!(t.program.ops.len(), 9);
+        assert_eq!(t.nodes[0].style[0].1, Prop::Expr(3));
+        assert_eq!(t.nodes[0].style[1].1, Prop::Expr(8));
+        assert_eq!(t.guards[0].expr, 5);
+        assert_eq!(t.guards[0].when, [(2, true)]);
+        assert_eq!(
+            t.program.late(),
+            [false, false, false, false, false, false, false, true, true]
+        );
+        let clock = crate::eval::Clock {
+            seconds: 0.25,
+            progress: 0.0,
+        };
+        let mut values = crate::eval::run(&t.program, clock).unwrap();
+        assert_eq!(values[3], V::Num(1.0));
+        assert_eq!(values[6], V::Str("x=0.5".into()));
+        assert!(t.holds(&values));
+        crate::eval::settle(&t.program, clock, &mut values, &|_, _| 42.0).unwrap();
+        assert_eq!(values[8], V::Num(84.0));
+        let later = crate::eval::guarded(
+            &t,
+            crate::eval::Clock {
+                seconds: 2.0,
+                ..clock
+            },
+        )
+        .unwrap();
+        assert!(!t.holds(&later));
+    }
+
+    #[test]
+    fn shared_constants_keep_signed_zero_and_unused_errors() {
+        let lower = |ops| {
+            variant(
+                &format!(r#"{{"ops": {ops}, "nodes": [], "roots": [], "guards": []}}"#),
+                &|_| "test".into(),
+                &[],
+                &[],
+                &HashMap::new(),
+                &Clips::new(),
+            )
+            .unwrap()
+        };
+        let t = lower(
+            r#"[["div", [{"c": 1}, {"c": 0}]],
+                ["div", [{"c": 1}, {"c": -0.0}]],
+                ["div", [{"c": 1}, {"c": 0}]]]"#,
+        );
+        let clock = crate::eval::Clock {
+            seconds: 0.0,
+            progress: 0.0,
+        };
+        let values = crate::eval::run(&t.program, clock).unwrap();
+        assert_eq!(values.len(), 5);
+        assert_eq!(values[2], V::Num(f64::INFINITY));
+        assert_eq!(values[4], V::Num(f64::NEG_INFINITY));
+
+        let t = lower(r#"[["path|length", [{"c": "not a path"}]]]"#);
+        assert!(crate::eval::run(&t.program, clock).is_err());
     }
 
     #[test]
