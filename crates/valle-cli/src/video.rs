@@ -136,6 +136,7 @@ pub fn render(
     writer.finish().map_err(failed)?;
     valle_engine::perf::gauge("gpu_kb", renderer.bytes() / 1024);
     valle_engine::perf::gauge("frames", frames.len() as u64);
+    valle_engine::perf::gauge("traces", scene.traces().0 as u64);
     let seconds = started.elapsed().as_secs_f64();
     let encoder = match encoding {
         Encoding::Hardware => "hardware",
