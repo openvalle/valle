@@ -390,35 +390,61 @@ pub fn encode(em: f32, contours: &[Vec<Curve>]) -> Outline {
     let vertical = across(1);
     out.bands = [bands(horizontal.len()), bands(vertical.len())];
 
-    let mut lists: Vec<Vec<u32>> = Vec::new();
+    // Each band's curves, flat: counted per band so that a band's curves are one slice of it,
+    // then sorted as its ray reads them, the furthest first, so that the ray stops at the first
+    // curve that ends before the pixel. Horizontal bands come first, bottom up; vertical ones
+    // after, left to right.
+    let mut flat: Vec<(f32, u32)> = Vec::new();
+    let mut spans: Vec<(usize, usize)> = Vec::new();
     // Horizontal bands cut y and sort by x; vertical ones cut x and sort by y.
     for (cut, list) in [(1, &horizontal), (0, &vertical)] {
         let sort = 1 - cut;
         let n = out.bands[1 - cut] as usize;
-        let mut bands: Vec<Vec<(f32, u32)>> = vec![Vec::new(); n];
+        let mut diff = vec![0i64; n + 1];
+        for &(c, _) in list {
+            let lo = c[0][cut].min(c[1][cut]).min(c[2][cut]);
+            let hi = c[0][cut].max(c[1][cut]).max(c[2][cut]);
+            let first = out.band(cut, lo - BAND_MARGIN);
+            let last = out.band(cut, hi + BAND_MARGIN);
+            diff[first] += 1;
+            diff[last + 1] -= 1;
+        }
+        // How many curves each band holds, and where each band's start among them.
+        let mut starts = Vec::with_capacity(n + 1);
+        let mut total = 0usize;
+        let mut running = 0i64;
+        for &change in &diff[..n] {
+            running += change;
+            starts.push(total);
+            total += running as usize;
+        }
+        starts.push(total);
+        let base = flat.len();
+        flat.resize(base + total, (0.0, 0));
+        let mut at = starts.clone();
         for &(c, texel) in list {
             let lo = c[0][cut].min(c[1][cut]).min(c[2][cut]);
             let hi = c[0][cut].max(c[1][cut]).max(c[2][cut]);
             let reach = c[0][sort].max(c[1][sort]).max(c[2][sort]);
             let first = out.band(cut, lo - BAND_MARGIN);
             let last = out.band(cut, hi + BAND_MARGIN);
-            for band in &mut bands[first..=last] {
-                band.push((reach, texel));
+            for band in first..=last {
+                flat[base + at[band]] = (reach, texel);
+                at[band] += 1;
             }
         }
-        for mut band in bands {
-            band.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
-            lists.push(band.into_iter().map(|(_, t)| t).collect());
+        for band in 0..n {
+            let (from, to) = (base + starts[band], base + starts[band + 1]);
+            flat[from..to].sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+            spans.push((from, to));
         }
     }
-    let mut start = 2 * lists.len();
-    for list in &lists {
-        out.lists.extend([list.len() as u32, start as u32]);
-        start += list.len();
+    let mut start = 2 * spans.len();
+    for &(from, to) in &spans {
+        out.lists.extend([(to - from) as u32, start as u32]);
+        start += to - from;
     }
-    for list in lists {
-        out.lists.extend(list);
-    }
+    out.lists.extend(flat.iter().map(|&(_, t)| t));
     out
 }
 
