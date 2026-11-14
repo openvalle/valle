@@ -36,7 +36,7 @@ impl Plan {
             || template
                 .nodes
                 .iter()
-                .any(|n| matches!(n.kind, Kind::Text { .. }));
+                .any(|n| matches!(n.kind, Kind::Text { .. } | Kind::Svg { tag: Tag::Text, .. }));
         // Guard inputs have already been checked by Front. Only values consumed by nodes
         // can invalidate the remaining checks. Keep direct outputs, not all their operands:
         // changing seconds need not invalidate a width that still evaluates to 20px.

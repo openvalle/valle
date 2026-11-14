@@ -2008,6 +2008,8 @@
   // An inline SVG element, into `out`: its attributes, constants or traced values, and the SVG
   // elements in it.
   function svgElement(type, props, children, out, at) {
+    if ((type === "tspan" || type === "textPath") && !G.svgText)
+      fail(at, "<" + type + "> must be inside SVG <text>");
     if (type !== "svg" && G.svg === 0) fail(at, "<" + type + "> must be inside an <svg>");
     if (type === "svg" && G.svg > 0) fail(at, "an <svg> inside an <svg> is not supported yet");
     if (++G.nodes > MAX_NODES) fail(at, "a frame has more than " + MAX_NODES + " elements");
@@ -2053,10 +2055,13 @@
     };
     if (key !== null) G.keys.push(key);
     G.svg++;
+    const previousText = G.svgText;
+    G.svgText = ["text", "tspan", "textPath"].includes(type);
     try {
       for (const c of children) render(c, node.children, at);
     } finally {
       G.svg--;
+      G.svgText = previousText;
       if (key !== null) G.keys.pop();
     }
     const holds = SVG_HOLDS[type];
@@ -2407,8 +2412,22 @@
       return;
     }
     if (!x.__el) {
+      if (G.svgText && scalar(x)) {
+        if (++G.nodes > MAX_NODES) fail(at, "a frame has more than " + MAX_NODES + " elements");
+        out.push({
+          type: "svg",
+          tag: "#text",
+          attributes: [["value", x]],
+          path: null,
+          classes: [],
+          style: [],
+          children: [],
+          site: at,
+        });
+        return;
+      }
       if (typeof x === "string" && x.trim() === "") return;
-      if (G.svg > 0) fail(at, "text in an <svg> is not supported yet: " + stringify(String(x)));
+      if (G.svg > 0) fail(at, "text must be inside SVG <text>: " + stringify(String(x)));
       fail(at, "text must be inside <Text>: " + stringify(String(x)));
     }
     const { type, props, children } = x;
@@ -2806,6 +2825,7 @@
       nodes: 0,
       // How deep in <svg> elements tracing is.
       svg: 0,
+      svgText: false,
       composition,
       // The scene's own: Echo and Shutter sample its clock, inside clips as well.
       root: composition,

@@ -2390,7 +2390,7 @@ mod tests {
                     "<g> cannot be inside <clipPath>: it holds shapes",
                 ),
                 ("<mask />", "<mask> must be inside an <svg>"),
-                ("<svg>hi</svg>", "text in an <svg> is not supported yet"),
+                ("<svg>hi</svg>", "text must be inside SVG <text>"),
                 (
                     "<svg><image href=\"data:image/png;base64,\" /></svg>",
                     "<image> in an <svg> is not supported yet",

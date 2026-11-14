@@ -3,6 +3,7 @@
 
 pub mod file;
 mod template;
+pub(crate) mod text;
 
 pub(crate) use template::Template;
 
@@ -51,6 +52,11 @@ pub struct Fit {
 /// A basic shape, or a path, and whether each of its segments ends a command.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
+    /// Shaped glyph outlines and their typographic cells, in SVG user units.
+    Text {
+        path: Path,
+        bounds: [f64; 4],
+    },
     Path {
         path: Path,
         ends: Vec<bool>,
@@ -88,6 +94,8 @@ pub enum Element {
         fit: Fit,
     },
     G,
+    Text(text::Position),
+    TextRun(Rc<str>),
     Shape(Shape),
     Defs,
     Gradient(Gradient),
@@ -183,7 +191,7 @@ pub struct Computed {
 
 /// Presentation attributes: style properties of the same name, which the element's style
 /// overrides. Every SVG element takes them.
-const PRESENTATION: [&str; 28] = [
+const PRESENTATION: [&str; 40] = [
     "fill",
     "fillOpacity",
     "fillRule",
@@ -192,6 +200,18 @@ const PRESENTATION: [&str; 28] = [
     "strokeOpacity",
     "strokeWidth",
     "vectorEffect",
+    "fontFamily",
+    "fontSize",
+    "fontWeight",
+    "fontStyle",
+    "fontStretch",
+    "fontVariant",
+    "fontKerning",
+    "letterSpacing",
+    "wordSpacing",
+    "textAnchor",
+    "dominantBaseline",
+    "whiteSpace",
     "strokeLinecap",
     "strokeLinejoin",
     "strokeMiterlimit",
@@ -255,6 +275,18 @@ fn own(tag: Tag) -> &'static [&'static str] {
     match tag {
         Tag::Svg => &["width", "height", "viewBox", "preserveAspectRatio"],
         Tag::G | Tag::Defs => &[],
+        Tag::Text | Tag::Tspan => &["x", "y", "dx", "dy", "rotate", "textLength", "lengthAdjust"],
+        Tag::TextPath => &[
+            "href",
+            "xlinkHref",
+            "startOffset",
+            "textLength",
+            "lengthAdjust",
+            "method",
+            "spacing",
+            "side",
+        ],
+        Tag::TextRun => &["value"],
         Tag::Path => &["d", "pathLength"],
         Tag::Circle => &["cx", "cy", "r", "pathLength"],
         Tag::Ellipse => &["cx", "cy", "rx", "ry", "pathLength"],
@@ -339,6 +371,11 @@ pub fn holds(tag: Tag) -> Holds {
         Tag::Svg | Tag::G | Tag::Defs | Tag::Mask | Tag::Symbol | Tag::Marker => Holds::Any,
         Tag::LinearGradient | Tag::RadialGradient => Holds::Only(&[Tag::Stop], "<stop>s"),
         Tag::ClipPath => Holds::Only(&SHAPES, "shapes"),
+        Tag::Text | Tag::Tspan => Holds::Only(
+            &[Tag::Tspan, Tag::TextPath, Tag::TextRun],
+            "text, <tspan>s and <textPath>s",
+        ),
+        Tag::TextPath => Holds::Only(&[Tag::Tspan, Tag::TextRun], "text and <tspan>s"),
         _ => Holds::Nothing,
     }
 }
@@ -356,7 +393,10 @@ pub fn tables() -> String {
     let mut elements = serde_json::Map::new();
     let mut holding = serde_json::Map::new();
     // An <image> shows an image an SVG file embeds; inline, an <Image> shows one.
-    for tag in Tag::ALL.into_iter().filter(|&t| t != Tag::Image) {
+    for tag in Tag::ALL
+        .into_iter()
+        .filter(|&t| !matches!(t, Tag::Image | Tag::TextRun))
+    {
         elements.insert(tag.name().into(), own(tag).into());
         match holds(tag) {
             Holds::Any => {
@@ -573,6 +613,10 @@ pub fn computed(
                     .map_or(Ok(Orient::Angle(0.0)), |o| orient(&o).map_err(at("orient")))?,
             })
         }
+        Tag::Text | Tag::Tspan | Tag::TextPath => {
+            Element::Text(self::text::Position::parse(tag, attributes)?)
+        }
+        Tag::TextRun => Element::TextRun(text("value").unwrap_or_default().into()),
         Tag::Image => Element::Image {
             at: [length("x")?, length("y")?],
             size: [auto("width")?, auto("height")?],
@@ -853,7 +897,7 @@ pub fn path(shape: &Shape, size: [f64; 2]) -> Option<Path> {
     let [w, h] = size;
     let point = |x: Length, y: Length| [x.resolve(w) as f32, y.resolve(h) as f32];
     let path = match shape {
-        Shape::Path { path, .. } => path.clone(),
+        Shape::Path { path, .. } | Shape::Text { path, .. } => path.clone(),
         Shape::Circle { .. } | Shape::Ellipse { .. } => {
             let (center, radii) = ellipse_geometry(shape, size)?;
             ellipse(center, radii)?

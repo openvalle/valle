@@ -1,0 +1,32 @@
+<!doctype html><meta charset="utf-8" /><title>SVG text</title
+><style>
+  @font-face {
+    font-family: TestSans;
+    src: url("/tests/resources/NotoSans.ttf");
+    font-weight: 100 900;
+  }
+  svg {
+    font-family: TestSans;
+  }
+  body {
+    margin: 0;
+  }
+  #canvas {
+    width: 360px;
+    height: 260px;
+    background: white;
+  }
+  svg,
+  img {
+    display: block;
+  }
+</style>
+<div id="canvas"></div>
+<script>
+  fetch("/tests/cases/svg/text/file/source.svg")
+    .then((r) => r.text())
+    .then((s) => {
+      document.querySelector("#canvas").innerHTML = s;
+      document.querySelector("svg").style.isolation = "isolate";
+    });
+</script>

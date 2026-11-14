@@ -166,6 +166,8 @@ pub struct Style {
     pub stroke: Stroke,
     /// Non-inherited SVG stroke geometry computed in the viewport, before outer CSS transforms.
     pub non_scaling_stroke: bool,
+    pub text_anchor: f64,
+    pub dominant_baseline: crate::svg::text::Baseline,
     /// A gradient stop's color, a color or `currentColor`, and its opacity.
     pub stop_color: Paint,
     pub stop_opacity: f64,
@@ -322,6 +324,8 @@ impl Style {
             even_odd: _,
             stroke: _,
             non_scaling_stroke: _,
+            text_anchor: _,
+            dominant_baseline: _,
             stop_color: _,
             stop_opacity: _,
             clip_ref: _,
@@ -766,6 +770,12 @@ pub(super) fn compute(
         even_odd: d.even_odd.unwrap_or(even_odd),
         stroke,
         non_scaling_stroke: d.non_scaling_stroke,
+        text_anchor: d
+            .text_anchor
+            .unwrap_or(parent.map_or(0.0, |p| p.text_anchor)),
+        dominant_baseline: d
+            .dominant_baseline
+            .unwrap_or(parent.map_or_default(|p| p.dominant_baseline)),
         stop_color: d.stop_color.clone().unwrap_or(Paint::Color(color::BLACK)),
         stop_opacity: d.stop_opacity.unwrap_or(1.0),
         clip_ref: d.clip_ref.clone(),

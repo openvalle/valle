@@ -231,6 +231,8 @@ pub(super) enum Field {
     StrokeOpacity,
     StrokeWidth,
     VectorEffect,
+    TextAnchor,
+    DominantBaseline,
     StrokeLinecap,
     StrokeLinejoin,
     StrokeMiterlimit,
@@ -313,7 +315,7 @@ pub(super) enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 260] = [
+const FIELDS: [(&str, Field); 262] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -623,6 +625,8 @@ const FIELDS: [(&str, Field); 260] = [
     ("strokeOpacity", Field::StrokeOpacity),
     ("strokeWidth", Field::StrokeWidth),
     ("vectorEffect", Field::VectorEffect),
+    ("textAnchor", Field::TextAnchor),
+    ("dominantBaseline", Field::DominantBaseline),
     ("strokeLinecap", Field::StrokeLinecap),
     ("strokeLinejoin", Field::StrokeLinejoin),
     ("strokeMiterlimit", Field::StrokeMiterlimit),
@@ -711,7 +715,21 @@ impl Field {
     pub(super) fn drawn_in_svg(self) -> bool {
         matches!(
             self,
-            Field::Filter
+            Field::TextAnchor
+                | Field::DominantBaseline
+                | Field::FontSize
+                | Field::FontWeight
+                | Field::FontStretch
+                | Field::FontStyle
+                | Field::FontFamily
+                | Field::FontFeatureSettings
+                | Field::FontVariationSettings
+                | Field::FontVariant(_)
+                | Field::LetterSpacing
+                | Field::WordSpacing
+                | Field::WhiteSpace
+                | Field::WhiteSpaceCollapse
+                | Field::Filter
                 | Field::MixBlendMode
                 | Field::Isolation
                 | Field::Transform

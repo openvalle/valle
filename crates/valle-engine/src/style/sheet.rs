@@ -440,6 +440,10 @@ impl Sheet {
             ));
         }
         if let Some(g) = &b.svg {
+            // Character data is not an element: it uses its containing text element's pen.
+            if g.tag == Tag::TextRun {
+                style.non_scaling_stroke = parent.is_some_and(|p| p.non_scaling_stroke);
+            }
             let mut svg = g.computed(frame).map_err(|e| format!("{}: {e}", b.place))?;
             if declared.transform_set && svg.transform.is_some() {
                 Rc::make_mut(&mut svg).transform = None;
@@ -538,6 +542,7 @@ impl Sheet {
             tag(r),
             Some(
                 Tag::G
+                    | Tag::Text
                     | Tag::Path
                     | Tag::Circle
                     | Tag::Ellipse

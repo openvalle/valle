@@ -712,6 +712,20 @@ impl Text {
         Ok(x.map(|x| x.map(|x| x * k)))
     }
 
+    /// The font's x-height in pixels, used by SVG's middle baseline.
+    pub(crate) fn x_height(&mut self, font: &Font) -> Result<f32, Error> {
+        let layout = self.alone("x", font)?;
+        Ok(layout
+            .lines()
+            .find_map(|line| {
+                line.items().find_map(|item| match item {
+                    PositionedLayoutItem::GlyphRun(run) => run.run().font_metrics().x_height,
+                    _ => None,
+                })
+            })
+            .unwrap_or(font.size as f32 * 0.5))
+    }
+
     /// The ascent, descent and line gap, px, of the first face of `font`, at its size and
     /// weight, as runs in it have them.
     pub fn metrics(&mut self, font: &Font) -> Result<[f32; 3], Error> {

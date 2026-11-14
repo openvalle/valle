@@ -190,6 +190,39 @@ group. The outer SVG isolates its contents from the page. CSS filter functions u
 SVG user units and follow the element's transform; `filter: "url(#id)"` and SVG
 `<filter>`/`<fe*>` definitions are not implemented.
 
+### SVG text
+
+`<text>` sets a baseline position with `x` and `y`; `<tspan>` changes its font or
+paint and continues at the current text position. `x`, `y`, `dx`, `dy` and `rotate`
+accept SVG number lists (lengths can also use px or percentages). A final `rotate`
+value continues for the remaining characters. Fonts are the same bundled or
+resource fonts used by `<Text>`, including weight, style, OpenType features and
+letter spacing. SVG text paints with `fill` and `stroke`, not CSS `color`.
+
+```tsx
+<svg width={600} height={200}>
+  <defs><path id="arc" d="M40 160 Q300 -40 560 160" /></defs>
+  <text x={300} y={40} fontSize={28} textAnchor="middle">
+    Hello <tspan fill="#e86a55" fontWeight={700}>Valle</tspan>
+  </text>
+  <text fontSize={24} fill="#3869c9" textAnchor="middle">
+    <textPath href="#arc" startOffset={`${40 + progress * 20}%`}>Along the curve</textPath>
+  </text>
+</svg>
+```
+
+`textAnchor` is `start`, `middle` or `end`; it aligns each positioned text chunk
+using its advance width. `dominantBaseline` supports `auto`, `alphabetic`, `middle`,
+`central`, `hanging`, `text-before-edge` and `text-after-edge` (also `text-top`,
+`text-bottom` and `ideographic`). `textLength` sets the advance width; `lengthAdjust`
+is `spacing` (default) or `spacingAndGlyphs`.
+
+`textPath` reads a local `#id` and places shaped glyphs along that path. `startOffset`
+is in user units or a percentage of its length; glyphs outside the path are hidden.
+It supports `method="align"` and `side="left"`; stretching glyph outlines along the
+curve, text decorations and text as a clipPath child are not implemented. All text
+is vector geometry in both inline SVG and SVG resources; no host fonts are read.
+
 ## Valle filters
 
 Use these in `style.filter` for the element and its children, or `style.backdropFilter`

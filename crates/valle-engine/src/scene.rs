@@ -153,6 +153,16 @@ impl Scene {
             }
             pictures.push(picture);
         }
+        // Shape embedded SVG text after all font resources have been registered.
+        for picture in &mut pictures {
+            if let Picture::Svg(doc) = picture {
+                let canvas = match doc.natural {
+                    Natural::Size(s) => s.map(f64::from),
+                    _ => [300.0, 150.0],
+                };
+                crate::svg::text::shape(&doc.template, &mut doc.styles, &mut text, |_| canvas)?;
+            }
+        }
         // The pictures its role reads, after its resources: files bound to them, or placeholders
         // of the composition's size.
         let c = front.composition;
@@ -406,6 +416,10 @@ impl Scene {
             contained(&template, sheet, &styles, &painted)?;
             styles = painted;
         }
+        crate::svg::text::shape(&template, &mut styles, &mut self.text, |i| {
+            let r = laid.boxes[i].content;
+            [f64::from(r.width), f64::from(r.height)]
+        })?;
         Ok(Laid {
             template,
             values,
@@ -1293,7 +1307,7 @@ mod tests {
 
             let broken = |path: &str| match path {
                 "scenes/icon.svg" => {
-                    Some(b"<svg xmlns='http://www.w3.org/2000/svg'><text/></svg>".to_vec())
+                    Some(b"<svg xmlns='http://www.w3.org/2000/svg'><filter/></svg>".to_vec())
                 }
                 _ => files(source.clone())(path),
             };
@@ -1302,7 +1316,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 e,
-                "scenes/s.motion.tsx: resource icon: scenes/icon.svg: 1:41: <text> is not supported yet"
+                "scenes/s.motion.tsx: resource icon: scenes/icon.svg: 1:41: <filter> is not supported yet"
             );
         });
     }

@@ -119,6 +119,11 @@ fn element(
     let Some(tag) = Tag::by_name(name) else {
         return fail(format!("<{name}> is not supported yet"));
     };
+    if matches!(tag, Tag::Tspan | Tag::TextPath)
+        && !matches!(parent, Some(Tag::Text | Tag::Tspan | Tag::TextPath))
+    {
+        return fail(format!("<{name}> must be inside SVG <text>"));
+    }
     if let Some(p) = parent {
         let only = match super::holds(p) {
             Holds::Any => None,
@@ -196,8 +201,27 @@ fn element(
         site: Some(place(xml, x).into()),
     });
     let mut children = Vec::new();
-    for c in x.children().filter(Xml::is_element) {
-        children.extend(element(xml, c, Some(tag), out)?);
+    for c in x.children() {
+        if c.is_element() {
+            children.extend(element(xml, c, Some(tag), out)?);
+        } else if c.is_text() && matches!(tag, Tag::Text | Tag::Tspan | Tag::TextPath) {
+            children.push(out.nodes.len() as u32);
+            out.nodes.push(Node {
+                kind: Kind::Svg {
+                    tag: Tag::TextRun,
+                    attributes: vec![(
+                        "value".into(),
+                        Prop::Const(V::Str(c.text().unwrap_or_default().into())),
+                    )],
+                    geometry: None,
+                },
+                path: None,
+                classes: vec![],
+                style: vec![],
+                children: vec![],
+                site: Some(place(xml, c).into()),
+            });
+        }
     }
     out.nodes[index].children = children;
     Ok(Some(index as u32))
@@ -469,7 +493,6 @@ mod tests {
             let text = format!("<svg xmlns=\"http://www.w3.org/2000/svg\">\n  {inside}\n</svg>");
             error(&text)
         };
-        assert_eq!(svg("<text>Hi</text>"), "2:3: <text> is not supported yet");
         let e = svg("<foreignObject />");
         assert!(
             e.starts_with("2:3: <foreignObject> is not supported: "),

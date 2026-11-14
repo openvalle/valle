@@ -650,9 +650,14 @@ pub enum Tag {
     Symbol,
     Marker,
     Image,
+    Text,
+    Tspan,
+    TextPath,
+    /// Internal character data, never an authored element.
+    TextRun,
 }
 
-const TAGS: [(&str, Tag); 19] = [
+const TAGS: [(&str, Tag); 23] = [
     ("svg", Tag::Svg),
     ("g", Tag::G),
     ("path", Tag::Path),
@@ -672,6 +677,10 @@ const TAGS: [(&str, Tag); 19] = [
     ("symbol", Tag::Symbol),
     ("marker", Tag::Marker),
     ("image", Tag::Image),
+    ("text", Tag::Text),
+    ("tspan", Tag::Tspan),
+    ("textPath", Tag::TextPath),
+    ("#text", Tag::TextRun),
 ];
 
 impl Tag {

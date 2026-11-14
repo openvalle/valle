@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/text.html",
+  "assertion": "SVG text shares font shaping, fills and strokes; nested tspans continue the cursor, character position lists and rotations apply in user space, text anchors and textLength adjust chunks, and textPath places glyph centers on a curve.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Chrome and Firefox agree on anchored advances, tspan positioning, baseline and textPath geometry with the pinned Noto Sans. Reviewed differences are glyph-edge rasterization and subpixel shaping (7220 changed pixels, maximum 190 channels); the guide geometry and solid regions match. Numeric unit assertions separately check anchor advances, textLength cursor continuation, curve sampling and backward seeks. The file page loads its SVG into an isolated element to use the same pinned font.",
+    "pixels": {
+      "maxDifference": 192,
+      "maxPixels": 7300
+    }
+  }
+}

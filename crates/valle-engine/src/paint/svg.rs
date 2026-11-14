@@ -221,7 +221,7 @@ impl<'a> Drawing<'a> {
         let scale = matrix.radius_scale();
         let mut items = Vec::new();
         match &c.element {
-            Element::G | Element::Svg { .. } => {
+            Element::G | Element::Text(_) | Element::Svg { .. } => {
                 for &k in &self.template.nodes[i].children {
                     self.element(k as usize, size, matrix, &mut items, copy);
                 }
@@ -256,7 +256,12 @@ impl<'a> Drawing<'a> {
                 let Some(path) = svg::path(shape, size) else {
                     return;
                 };
-                let bbox = svg::bounds(&path);
+                let bbox = if matches!(shape, svg::Shape::Text { .. }) {
+                    self.text_bbox(i, size, copy)
+                        .unwrap_or_else(|| svg::bounds(&path))
+                } else {
+                    svg::bounds(&path)
+                };
                 let k = &s.stroke;
                 let [w, h] = size;
                 let diagonal = ((w * w + h * h) / 2.0).sqrt() as f32;
@@ -329,7 +334,8 @@ impl<'a> Drawing<'a> {
                     pixelated: s.pixelated,
                 });
             }
-            Element::Shape(_)
+            Element::TextRun(_)
+            | Element::Shape(_)
             | Element::Image { .. }
             | Element::Defs
             | Element::Gradient(_)
@@ -466,7 +472,9 @@ impl<'a> Drawing<'a> {
             }
         }
         match &c.element {
-            Element::G => self.around_bounds(&self.template.nodes[i].children, size, copy, true),
+            Element::G | Element::Text(_) => {
+                self.around_bounds(&self.template.nodes[i].children, size, copy, true)
+            }
             Element::Use { .. } => {
                 let instance = s.instance.as_deref()?;
                 match self.symbol(i, size, copy) {
@@ -517,6 +525,29 @@ impl<'a> Drawing<'a> {
         }
     }
 
+    /// Text runs share the owning text element's typographic reference box.
+    fn text_bbox(&self, mut i: usize, size: [f64; 2], copy: Option<&Instance>) -> Option<[f64; 4]> {
+        while let Some((parent, _)) = self
+            .template
+            .nodes
+            .iter()
+            .enumerate()
+            .find(|(_, n)| n.children.contains(&(i as u32)))
+        {
+            i = parent;
+            if matches!(
+                self.template.nodes[i].kind,
+                crate::template::Kind::Svg {
+                    tag: crate::template::Tag::Text,
+                    ..
+                }
+            ) {
+                return self.bbox(i, size, copy);
+            }
+        }
+        None
+    }
+
     /// `i`'s bounding box in its user units, in a viewport `size` user units big, with its style
     /// in `copy` if that holds it: a shape's path's, a group's around its children's, a
     /// `<use>`'s around its copy's; `None` where it has none.
@@ -527,8 +558,11 @@ impl<'a> Drawing<'a> {
             return None;
         }
         match &c.element {
+            Element::Shape(svg::Shape::Text { bounds, .. }) => Some(*bounds),
             Element::Shape(shape) => svg::path(shape, size).map(|p| svg::bounds(&p)),
-            Element::G => self.around(&self.template.nodes[i].children, size, copy),
+            Element::G | Element::Text(_) => {
+                self.around(&self.template.nodes[i].children, size, copy)
+            }
             Element::Image { .. } => self.image(i, size, copy).map(|(viewport, ..)| viewport),
             Element::Use { .. } => {
                 let instance = s.instance.as_deref()?;
