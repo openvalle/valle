@@ -190,6 +190,30 @@ group. The outer SVG isolates its contents from the page. CSS filter functions u
 SVG user units and follow the element's transform; `filter: "url(#id)"` and SVG
 `<filter>`/`<fe*>` definitions are not implemented.
 
+### Vertical text
+
+On `Text`, set `writingMode: "vertical-rl"` (columns run right to left) or
+`"vertical-lr"` (left to right). `"horizontal-tb"` is the default. A vertical
+paragraph wraps to its **height**; `lineHeight` is the column width. `textAlign`
+aligns along the vertical inline axis. Logical dimensions and edges follow this
+writing mode: `inlineSize` becomes height and `paddingInlineStart` is top padding.
+
+`textOrientation` is inherited by `Span`: `"mixed"` keeps CJK upright, uses the
+font's vertical punctuation and turns Latin sideways; `"upright"` keeps every
+character upright; `"sideways"` turns all text clockwise. Font fallback, fill,
+stroke, shadow and decorations use the same scene fonts and paint path as
+horizontal text. These values can change over time, including on backward seeks.
+
+```tsx
+<Text style={{ writingMode: "vertical-rl", height: 320, fontSize: 36, lineHeight: "48px" }}>
+  春风<Span style={{ color: "crimson", textOrientation: "upright" }}>2026</Span>山水
+</Text>
+```
+
+This is vertical **Text/Span** layout; vertical container layout and vertical SVG
+text are not implemented and report an error. Use flex or grid to position separate
+text blocks. `sideways-rl`, `sideways-lr` and `text-combine-upright` are not supported.
+
 ### SVG patterns
 
 Use `<pattern id="dots" width={20} height={20} patternUnits="userSpaceOnUse">`

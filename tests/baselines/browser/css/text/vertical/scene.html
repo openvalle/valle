@@ -1,0 +1,41 @@
+<!doctype html><meta charset="utf-8" /><title>Vertical text</title>
+<style>
+  @font-face {
+    font-family: CJK;
+    src: url("/tests/resources/NotoSansSC.ttf");
+    font-weight: 100 900;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+  }
+  #canvas {
+    position: relative;
+    width: 420px;
+    height: 260px;
+    background: white;
+  }
+  .text {
+    position: absolute;
+    top: 10px;
+    width: 90px;
+    height: 230px;
+    font-family: CJK;
+    font-size: 24px;
+    line-height: 32px;
+    writing-mode: vertical-rl;
+  }
+</style>
+<div id="canvas">
+  <!-- prettier-ignore -->
+  <div class="text" data-key="mixed" style="left:10px;color:#17365d;background:#eff6ff">春风<span style="color:#b91c1c">ABC</span>，（山水）。天地人间</div>
+  <!-- prettier-ignore -->
+  <div class="text" data-key="lr" style="left:110px;color:#14532d;background:#f0fdf4;writing-mode:vertical-lr">春风<span style="color:#b91c1c">ABC</span>，（山水）。天地人间</div>
+  <!-- prettier-ignore -->
+  <div class="text" data-key="upright" style="left:210px;color:#7c2d12;background:#fff7ed;text-orientation:upright">Valle 2026</div>
+  <!-- prettier-ignore -->
+  <div class="text" data-key="sideways" style="left:310px;color:#581c87;background:#faf5ff;text-orientation:sideways;text-decoration:underline 1px;white-space:pre">Valle
+Motion</div>
+</div>

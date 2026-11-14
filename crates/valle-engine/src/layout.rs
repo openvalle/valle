@@ -21,7 +21,7 @@ use taffy::{
 
 use crate::image::Picture;
 use crate::style::math::{self, Calc};
-use crate::style::{DecorationStyle, SkipInk, Style};
+use crate::style::{DecorationStyle, SkipInk, Style, WritingMode};
 use crate::svg::Element;
 use crate::template::{self, Error, Kind, Prop, Tag, Template, V};
 use crate::text::{Content, Lines, Piece, Stripe, Text, cjk_ranges, wave};
@@ -250,7 +250,25 @@ pub fn layout(
         };
         if let Some(c) = &contents[i] {
             let place = |e| format!("{}: {e}", template.nodes[i].place());
-            let mut laid = text.lines(c, content.width).map_err(place)?;
+            let vertical = c.font.writing != WritingMode::Horizontal;
+            let inline = if vertical {
+                content.height
+            } else {
+                content.width
+            };
+            let mut laid = text.lines(c, inline).map_err(place)?;
+            if c.font.writing == WritingMode::VerticalLr {
+                for (k, b) in laid.boxes.iter_mut().enumerate() {
+                    let shift = content.width - 2.0 * b[0] - b[1];
+                    for run in laid.runs.iter().filter(|r| r.line as usize == k) {
+                        for g in &mut laid.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize] {
+                            g.y += shift;
+                        }
+                    }
+                    b[0] += shift;
+                    laid.baselines[k] += shift;
+                }
+            }
             let at = [content.x, content.y];
             laid.decorations = decorations(&laid, at, i, template, styles, text).map_err(place)?;
             spans(
@@ -262,12 +280,31 @@ pub fn layout(
                 &mut boxes,
             )
             .map_err(place)?;
+            if vertical {
+                let matrix = vertical_matrix(content);
+                for j in i + 1..n {
+                    let mut p = parents[j];
+                    while let Some(k) = p {
+                        if k == i {
+                            boxes[j].border = matrix.bounds(boxes[j].border);
+                            boxes[j].padding = matrix.bounds(boxes[j].padding);
+                            boxes[j].content = matrix.bounds(boxes[j].content);
+                            break;
+                        }
+                        p = parents[k];
+                    }
+                }
+            }
             let style = &styles[i];
-            let overflow = style.ellipsis && style.layout.overflow.x != Overflow::Visible;
+            let overflow = style.ellipsis
+                && (if vertical {
+                    style.layout.overflow.y
+                } else {
+                    style.layout.overflow.x
+                }) != Overflow::Visible;
             if overflow || c.clamp.is_some_and(|n| laid.boxes.len() > n) {
                 let (font, node) = (&style.font, i as u32);
-                (text.truncate(&mut laid, font, node, content.width, overflow, c.clamp))
-                    .map_err(place)?;
+                (text.truncate(&mut laid, font, node, inline, overflow, c.clamp)).map_err(place)?;
             }
             lines[i] = Some(laid);
         }
@@ -277,6 +314,18 @@ pub fn layout(
         lines,
         canvas,
     })
+}
+
+/// Logical inline/block positions of a vertical paragraph to physical canvas positions.
+pub(crate) fn vertical_matrix(at: Rect) -> crate::paint::Matrix {
+    crate::paint::Matrix::affine([
+        0.0,
+        1.0,
+        -1.0,
+        0.0,
+        (at.x + at.width + at.y) as f64,
+        (at.y - at.x) as f64,
+    ])
 }
 
 /// The pieces of text of node `i`, a Text or a Span, and of the Spans in it, in order.
@@ -497,7 +546,7 @@ fn decorations(
                         let below = |y: f32| y - at[1] - g.y;
                         let band = [below(band[0]) + 0.5, below(band[1]) - 0.5];
                         let size = style.font.size as f32;
-                        if let Some([x0, x1]) = text.ink(g.face, g.id, size, band)? {
+                        if let Some([x0, x1]) = text.ink(g.face, g.id, size, band, g.upright)? {
                             let x = at[0] + g.x;
                             gaps.push([(x + x0 - dilation).round(), (x + x1 + dilation).round()]);
                         }
@@ -636,16 +685,25 @@ impl Tree<'_> {
             failed.get_or_insert_with(|| format!("{}: {e}", template.nodes[i].place()));
         };
         let mut out = compute_leaf_layout(inputs, layout, calc, |known, available| {
-            let measured = match (known.width, available.width) {
+            let vertical = c.font.writing != WritingMode::Horizontal;
+            let (length, space) = if vertical {
+                (known.height, available.height)
+            } else {
+                (known.width, available.width)
+            };
+            let measured = match (length, space) {
                 (Some(w), _) | (None, AvailableSpace::Definite(w)) => text.measure(c, Some(w)),
                 (None, AvailableSpace::MinContent) => text.min_content(c),
                 (None, AvailableSpace::MaxContent) => text.measure(c, None),
             };
             match measured {
-                Ok([w, h]) => Size {
-                    width: known.width.unwrap_or(w),
-                    height: known.height.unwrap_or(h),
-                },
+                Ok([w, h]) => {
+                    let [w, h] = if vertical { [h, w] } else { [w, h] };
+                    Size {
+                        width: known.width.unwrap_or(w),
+                        height: known.height.unwrap_or(h),
+                    }
+                }
                 Err(e) => {
                     fail(e);
                     Size::ZERO

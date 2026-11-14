@@ -34,8 +34,8 @@ pub use computed::{
 };
 pub use font::{
     Collapse, Decoration, DecorationStyle, Family, Feature, Font, FontStyle, LineHeight,
-    OverflowWrap, SkipInk, TextAlign, TextShadow, TextTransform, VARIANTS, Variant, Variation,
-    WordBreak,
+    Orientation, OverflowWrap, SkipInk, TextAlign, TextShadow, TextTransform, VARIANTS, Variant,
+    Variation, WordBreak, WritingMode,
 };
 pub use property::properties;
 pub use sheet::Sheet;

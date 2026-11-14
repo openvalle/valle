@@ -1,0 +1,99 @@
+{
+  "spec": "https://www.w3.org/TR/css-writing-modes-4/#text-orientation",
+  "assertion": "Vertical Text lays out columns in both directions, uses upright CJK and vertical punctuation with sideways Latin, supports upright and sideways overrides, and preserves styled text and decorations.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Chrome agrees with CSS Text adjacent fullwidth punctuation trimming; Firefox and WebKit retain full bracket advances with this font. Reviewed enlarged native/Chrome images and differences: column placement, wrapping, spans, backgrounds and decorations agree; 6268 changed pixels are glyph contours and subpixel/hinting differences (maximum 220 channels). Independent layout and numeric vertical-advance tests protect geometry.",
+    "pixels": {
+      "maxDifference": 222,
+      "maxPixels": 6400
+    }
+  },
+  "layout": [
+    {
+      "key": "mixed",
+      "border": {
+        "x": 10,
+        "y": 10,
+        "width": 90,
+        "height": 230
+      },
+      "padding": {
+        "x": 10,
+        "y": 10,
+        "width": 90,
+        "height": 230
+      },
+      "content": {
+        "x": 10,
+        "y": 10,
+        "width": 90,
+        "height": 230
+      }
+    },
+    {
+      "key": "lr",
+      "border": {
+        "x": 110,
+        "y": 10,
+        "width": 90,
+        "height": 230
+      },
+      "padding": {
+        "x": 110,
+        "y": 10,
+        "width": 90,
+        "height": 230
+      },
+      "content": {
+        "x": 110,
+        "y": 10,
+        "width": 90,
+        "height": 230
+      }
+    },
+    {
+      "key": "upright",
+      "border": {
+        "x": 210,
+        "y": 10,
+        "width": 90,
+        "height": 230
+      },
+      "padding": {
+        "x": 210,
+        "y": 10,
+        "width": 90,
+        "height": 230
+      },
+      "content": {
+        "x": 210,
+        "y": 10,
+        "width": 90,
+        "height": 230
+      }
+    },
+    {
+      "key": "sideways",
+      "border": {
+        "x": 310,
+        "y": 10,
+        "width": 90,
+        "height": 230
+      },
+      "padding": {
+        "x": 310,
+        "y": 10,
+        "width": 90,
+        "height": 230
+      },
+      "content": {
+        "x": 310,
+        "y": 10,
+        "width": 90,
+        "height": 230
+      }
+    }
+  ]
+}

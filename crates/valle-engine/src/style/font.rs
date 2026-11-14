@@ -118,6 +118,24 @@ pub enum SkipInk {
     None,
 }
 
+/// The inline and column directions of a Text paragraph.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum WritingMode {
+    #[default]
+    Horizontal,
+    VerticalRl,
+    VerticalLr,
+}
+
+/// Glyph orientation within vertical lines.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Orientation {
+    #[default]
+    Mixed,
+    Upright,
+    Sideways,
+}
+
 /// The inherited text properties, computed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Font {
@@ -131,6 +149,8 @@ pub struct Font {
     pub family: Rc<[Family]>,
     pub line_height: LineHeight,
     pub align: TextAlign,
+    pub writing: WritingMode,
+    pub orientation: Orientation,
     /// `text-indent` of the first line, which the text's own box takes, not a Span's; its
     /// percentages are of the width lines break to fit.
     pub indent: Option<Calc>,
@@ -188,6 +208,8 @@ impl Font {
             family: Rc::new([Family::SansSerif]),
             line_height: LineHeight::Normal,
             align: TextAlign::Start,
+            writing: WritingMode::Horizontal,
+            orientation: Orientation::Mixed,
             indent: None,
             spacing: 0.0,
             word_spacing: 0.0,
@@ -1272,6 +1294,8 @@ mod tests {
             family: Rc::new([Family::SansSerif]),
             line_height: LineHeight::Normal,
             align: TextAlign::Start,
+            writing: WritingMode::Horizontal,
+            orientation: Orientation::Mixed,
             indent: None,
             spacing: 0.0,
             word_spacing: 0.0,
@@ -1307,6 +1331,8 @@ mod tests {
             ]),
             line_height: LineHeight::Factor(1.5),
             align: TextAlign::Center,
+            writing: WritingMode::Horizontal,
+            orientation: Orientation::Mixed,
             indent: None,
             spacing: 2.0,
             word_spacing: 5.0,

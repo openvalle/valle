@@ -9,6 +9,8 @@
 //! lines again. Its line boxes stack as Chrome stacks them, each from the paragraph's own font
 //! (CSS's strut) and the runs of glyphs on it.
 
+mod vertical;
+
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -34,7 +36,7 @@ use crate::slug;
 use crate::style::color::Rgba;
 use crate::style::{
     Collapse, DecorationStyle, Family, Feature, Font, FontStyle, LineHeight, OverflowWrap,
-    TextAlign, TextTransform, VARIANTS, Variation, WordBreak,
+    TextAlign, TextTransform, VARIANTS, Variation, WordBreak, WritingMode,
 };
 use crate::template::Error;
 
@@ -91,6 +93,8 @@ pub struct Glyph {
     pub y: f32,
     pub node: u32,
     pub cluster: u32,
+    /// Counter-rotate a vertical upright glyph before the paragraph turns clockwise.
+    pub upright: bool,
 }
 
 /// A run of glyphs of one node on a line, with its left and right edges, less the white space
@@ -561,6 +565,31 @@ impl Text {
         width: Option<f32>,
         min: bool,
     ) -> Result<[f32; 2], Error> {
+        if content.font.writing != WritingMode::Horizontal {
+            let mut font = content.font.clone();
+            font.align = TextAlign::Start;
+            let measured = Content {
+                font: &font,
+                pieces: content
+                    .pieces
+                    .iter()
+                    .map(|p| Piece {
+                        text: p.text.clone(),
+                        node: p.node,
+                        font: p.font,
+                    })
+                    .collect(),
+                clamp: content.clamp,
+            };
+            let lines = vertical::lines(self, &measured, width, min)?;
+            let shown = content.clamp.unwrap_or(usize::MAX).min(lines.boxes.len());
+            let height = lines
+                .boxes
+                .get(shown.saturating_sub(1))
+                .map_or(0.0, |b| b[0] + b[1]);
+            let wide = lines.runs.iter().map(|r| r.x[1]).fold(0.0, f32::max);
+            return Ok([(wide * 64.0).ceil() / 64.0, height]);
+        }
         let strut = self.strut(content.font)?;
         let p = self.paragraph(content, width, min)?;
         if p.empty {
@@ -579,6 +608,9 @@ impl Text {
     /// The baseline of `content`'s first line from the top of its box, its lines broken to fit
     /// `width` px; empty text has no lines, and no baseline.
     pub fn baseline(&mut self, content: &Content, width: f32) -> Result<Option<f32>, Error> {
+        if content.font.writing != WritingMode::Horizontal {
+            return Ok(None);
+        }
         let strut = self.strut(content.font)?;
         let p = self.paragraph(content, Some(width), false)?;
         if p.empty {
@@ -592,6 +624,9 @@ impl Text {
 
     /// `content` broken to fit `width` px and aligned in it.
     pub fn lines(&mut self, content: &Content, width: f32) -> Result<Lines, Error> {
+        if content.font.writing != WritingMode::Horizontal {
+            return vertical::lines(self, content, Some(width), false);
+        }
         let alignment = match content.font.align {
             TextAlign::Start => Alignment::Start,
             TextAlign::End => Alignment::End,
@@ -677,6 +712,7 @@ impl Text {
                 y,
                 node,
                 cluster,
+                upright: false,
             }));
         }
         Ok(Lines {
@@ -698,6 +734,7 @@ impl Text {
         id: u32,
         size: f32,
         band: [f32; 2],
+        upright: bool,
     ) -> Result<Option<[f32; 2]>, Error> {
         let (em, curves) = match self.outlines.entry((face, id)) {
             Entry::Occupied(o) => o.into_mut(),
@@ -708,6 +745,16 @@ impl Text {
         };
         let k = size / *em;
         // Font units are y up.
+        let turned;
+        let curves = if upright {
+            turned = curves
+                .iter()
+                .map(|c| c.map(|[x, y]| [-y, x]))
+                .collect::<Vec<_>>();
+            &turned
+        } else {
+            curves
+        };
         let x = path::across(curves, -band[1] / k, -band[0] / k);
         Ok(x.map(|x| x.map(|x| x * k)))
     }
@@ -829,6 +876,7 @@ impl Text {
                 y: lines.baselines[l],
                 node,
                 cluster: lines.string.len() as u32,
+                upright: false,
             }));
             lines.runs.push(Run {
                 node,
@@ -1416,6 +1464,8 @@ mod tests {
             family: Rc::new([Family::SansSerif]),
             line_height: LineHeight::Normal,
             align: TextAlign::Start,
+            writing: WritingMode::Horizontal,
+            orientation: crate::style::Orientation::Mixed,
             indent: None,
             spacing: 0.0,
             word_spacing: 0.0,
@@ -1824,8 +1874,8 @@ mod tests {
         assert_eq!(lines.runs[0].glyphs, [0, 2]);
         let [x, g] = [lines.glyphs[0], lines.glyphs[1]];
         let below = [1.5, 2.5];
-        assert_eq!(t.ink(x.face, x.id, 20.0, below).unwrap(), None);
-        let [left, right] = t.ink(g.face, g.id, 20.0, below).unwrap().unwrap();
+        assert_eq!(t.ink(x.face, x.id, 20.0, below, false).unwrap(), None);
+        let [left, right] = t.ink(g.face, g.id, 20.0, below, false).unwrap().unwrap();
         // The g's tail, within its advance.
         assert!(
             0.0 < left && left < right && right < g.x - x.x,

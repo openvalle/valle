@@ -1702,6 +1702,8 @@ impl Painter<'_> {
             return;
         };
         let at = self.layout.boxes[i].content;
+        let vertical = self.styles[i].font.writing != crate::style::WritingMode::Horizontal;
+        let offset = |by: [f32; 2]| if vertical { [by[1], -by[0]] } else { by };
         // Text is content, which its own box clips.
         let clip = match self.clipping(i) {
             true => Some(i),
@@ -1717,14 +1719,14 @@ impl Painter<'_> {
                 move |color: Option<[f32; 4]>, by: [f32; 2]| -> Vec<Item> {
                     (lines.decorations.iter())
                         .filter(|d| d.run == k as u32 && d.through == through)
-                        .flat_map(|d| stripe(d, at, color.unwrap_or(work(d.color)), by))
+                        .flat_map(|d| stripe(d, at, color.unwrap_or(work(d.color)), offset(by)))
                         .collect()
                 }
             };
             let glyphs = &lines.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize];
             let size = s.font.size as f32;
             let drawn = |stroke: f32, color: [f32; 4], by: [f32; 2]| {
-                faces(glyphs, at, size, color, stroke, by)
+                faces(glyphs, at, size, color, stroke, offset(by))
             };
             let fill = work(s.font.fill.unwrap_or(s.color));
             let stroke = match s.font.stroke > 0.0 && s.font.size > 0.0 {
@@ -1766,6 +1768,21 @@ impl Painter<'_> {
             self.shadowed(s, stripes(false), clip, &mut drawn);
             self.shadowed(s, glyphs, clip, &mut drawn);
             self.shadowed(s, stripes(true), clip, &mut drawn);
+            if vertical {
+                let matrix = crate::layout::vertical_matrix(at);
+                drawn = drawn
+                    .into_iter()
+                    .map(|(clip, item)| {
+                        (
+                            clip,
+                            Item::Transform {
+                                matrix,
+                                items: vec![item],
+                            },
+                        )
+                    })
+                    .collect();
+            }
             match self.template.nodes[run.node as usize].kind {
                 Kind::Span { unit: true, .. } => {
                     let items = drawn.into_iter().map(|(_, item)| item).collect();
@@ -1936,6 +1953,7 @@ impl Painter<'_> {
                 continue;
             };
             let at = self.layout.boxes[n].content;
+            let first = items.len();
             for (k, run) in lines.runs.iter().enumerate() {
                 let s = &self.styles[run.node as usize];
                 if !s.visible {
@@ -1946,6 +1964,13 @@ impl Painter<'_> {
                 items.extend(faces(glyphs, at, size, OPAQUE, 0.0, [0.0; 2]));
                 let decorations = lines.decorations.iter().filter(|d| d.run == k as u32);
                 items.extend(decorations.flat_map(|d| stripe(d, at, OPAQUE, [0.0; 2])));
+            }
+            if self.styles[n].font.writing != crate::style::WritingMode::Horizontal {
+                let inside = items.split_off(first);
+                items.push(Item::Transform {
+                    matrix: crate::layout::vertical_matrix(at),
+                    items: inside,
+                });
             }
         }
         items
@@ -2087,15 +2112,41 @@ fn faces(
     stroke: f32,
     [dx, dy]: [f32; 2],
 ) -> impl Iterator<Item = Item> + '_ {
-    (glyphs.chunk_by(|a, b| a.face == b.face)).map(move |g| Item::Glyphs {
-        face: g[0].face,
-        size,
-        color,
-        stroke,
-        glyphs: (g.iter())
-            .map(|g| (g.id, [at.x + g.x + dx, at.y + g.y + dy]))
-            .collect(),
-    })
+    glyphs
+        .chunk_by(|a, b| a.face == b.face && !a.upright && !b.upright)
+        .map(move |g| {
+            if g[0].upright {
+                let g = g[0];
+                Item::Transform {
+                    matrix: Matrix::affine([
+                        0.0,
+                        -1.0,
+                        1.0,
+                        0.0,
+                        (at.x + g.x + dx) as f64,
+                        (at.y + g.y + dy) as f64,
+                    ]),
+                    items: vec![Item::Glyphs {
+                        face: g.face,
+                        size,
+                        color,
+                        stroke,
+                        glyphs: vec![(g.id, [0.0; 2])],
+                    }],
+                }
+            } else {
+                Item::Glyphs {
+                    face: g[0].face,
+                    size,
+                    color,
+                    stroke,
+                    glyphs: g
+                        .iter()
+                        .map(|g| (g.id, [at.x + g.x + dx, at.y + g.y + dy]))
+                        .collect(),
+                }
+            }
+        })
 }
 
 /// A decoration laid out in a box whose content box is `at`, in `color`, moved by `by`: its

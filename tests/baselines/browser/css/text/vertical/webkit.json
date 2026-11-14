@@ -1,0 +1,96 @@
+{
+  "size": [420, 260],
+  "sources": {
+    "tests/baselines/browser/css/text/vertical/scene.html": "1aafc9559bb4432855744c704ddb161699474a35afaf2b60c585ce4aa9d8d1e5",
+    "tests/resources/NotoSansSC.ttf": "6cbd3ac22ef454e4e9bcfb67369ea94297002a218e9abebc90852534afee096a"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "mixed",
+        "border": {
+          "x": 10,
+          "y": 10,
+          "width": 90,
+          "height": 230
+        },
+        "padding": {
+          "x": 10,
+          "y": 10,
+          "width": 90,
+          "height": 230
+        },
+        "content": {
+          "x": 10,
+          "y": 10,
+          "width": 90,
+          "height": 230
+        }
+      },
+      {
+        "key": "lr",
+        "border": {
+          "x": 110,
+          "y": 10,
+          "width": 90,
+          "height": 230
+        },
+        "padding": {
+          "x": 110,
+          "y": 10,
+          "width": 90,
+          "height": 230
+        },
+        "content": {
+          "x": 110,
+          "y": 10,
+          "width": 90,
+          "height": 230
+        }
+      },
+      {
+        "key": "upright",
+        "border": {
+          "x": 210,
+          "y": 10,
+          "width": 90,
+          "height": 230
+        },
+        "padding": {
+          "x": 210,
+          "y": 10,
+          "width": 90,
+          "height": 230
+        },
+        "content": {
+          "x": 210,
+          "y": 10,
+          "width": 90,
+          "height": 230
+        }
+      },
+      {
+        "key": "sideways",
+        "border": {
+          "x": 310,
+          "y": 10,
+          "width": 90,
+          "height": 230
+        },
+        "padding": {
+          "x": 310,
+          "y": 10,
+          "width": 90,
+          "height": 230
+        },
+        "content": {
+          "x": 310,
+          "y": 10,
+          "width": 90,
+          "height": 230
+        }
+      }
+    ],
+    "lines": []
+  }
+}

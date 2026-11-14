@@ -26,6 +26,7 @@ const CASES: {
   { entry: "tests/cases/svg/text/file/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/pattern/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/pattern/file/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/text/vertical/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "examples/hello.motion.tsx", frames: [0, 60] },
   { entry: "tests/cases/svg/css-transforms/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/css-transforms/file/scene.motion.tsx", frames: [0] },

@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 fearless_simd.workspace = true
+harfrust.workspace = true
 image-webp.workspace = true
 icu_properties.workspace = true
 i_overlay.workspace = true

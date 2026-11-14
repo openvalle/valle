@@ -2571,6 +2571,7 @@ name = "valle-engine"
 version = "0.1.1"
 dependencies = [
  "fearless_simd",
+ "harfrust",
  "i_overlay",
  "icu_properties",
  "image-webp",

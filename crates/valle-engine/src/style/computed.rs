@@ -509,6 +509,8 @@ pub(super) fn compute(
             Some(Leading::Len(l)) => LineHeight::Px(l.px(units(size), size)),
         },
         align: d.text_align.unwrap_or(inherited.align),
+        writing: d.writing.unwrap_or(inherited.writing),
+        orientation: d.orientation.unwrap_or(inherited.orientation),
         indent: match &d.text_indent {
             None => inherited.indent.clone(),
             Some(l) => Some(l.calc(units(size))),

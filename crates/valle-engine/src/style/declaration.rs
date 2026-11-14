@@ -11,9 +11,9 @@ use taffy::{
 use super::color::Rgba;
 use super::computed::{BLENDS, Blend, BorderStyle, Cap, Fit, Join, PAINT_ORDER, Paint, PaintPart};
 use super::font::{
-    Collapse, DecorationStyle, Family, Feature, FontStyle, Leading, OverflowWrap, SkipInk,
-    TextAlign, TextTransform, VARIANTS, Variation, Weight, WordBreak, families, features,
-    font_style, leading, stretch, variants, variations, weight,
+    Collapse, DecorationStyle, Family, Feature, FontStyle, Leading, Orientation, OverflowWrap,
+    SkipInk, TextAlign, TextTransform, VARIANTS, Variation, Weight, WordBreak, WritingMode,
+    families, features, font_style, leading, stretch, variants, variations, weight,
 };
 use super::property::{BorderPart, Field, NO_FLOW, NO_SCROLL, Sides, USE_FLEX};
 use super::units::{
@@ -194,6 +194,8 @@ pub(super) struct Declared {
     pub(super) variations: Option<Rc<[Variation]>>,
     pub(super) line_height: Option<Leading>,
     pub(super) text_align: Option<TextAlign>,
+    pub(super) writing: Option<WritingMode>,
+    pub(super) orientation: Option<Orientation>,
     /// `normal` is `Auto`, 0.
     pub(super) text_indent: Option<Len>,
     pub(super) letter_spacing: Option<Len>,
@@ -326,6 +328,8 @@ impl Default for Declared {
             variations: None,
             line_height: None,
             text_align: None,
+            writing: None,
+            orientation: None,
             text_indent: None,
             letter_spacing: None,
             word_spacing: None,
@@ -533,6 +537,7 @@ pub(super) fn named(which: Sides) -> &'static [usize] {
         S::Left | S::InlineStart => &[3],
         S::Inline => &[3, 1],
         S::Block => &[0, 2],
+        S::RightLeft => &[1, 3],
     }
 }
 
@@ -1334,6 +1339,26 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::FontVariant(variant) => variants(v, variant, d)?,
         F::FontVariationSettings => d.variations = Some(variations(v)?),
         F::LineHeight => d.line_height = Some(leading(v)?),
+        F::WritingMode => {
+            d.writing = Some(keyword(
+                v,
+                &[
+                    ("horizontal-tb", WritingMode::Horizontal),
+                    ("vertical-rl", WritingMode::VerticalRl),
+                    ("vertical-lr", WritingMode::VerticalLr),
+                ],
+            )?)
+        }
+        F::TextOrientation => {
+            d.orientation = Some(keyword(
+                v,
+                &[
+                    ("mixed", Orientation::Mixed),
+                    ("upright", Orientation::Upright),
+                    ("sideways", Orientation::Sideways),
+                ],
+            )?)
+        }
         F::TextAlign => {
             d.text_align = Some(keyword(
                 v,

@@ -104,6 +104,9 @@ pub(super) struct Bound {
     pub(super) updates: Option<cache::Updates>,
     /// Whether it is a Text.
     pub(super) text: bool,
+    pub(super) textual: bool,
+    /// Full declaration order only when a Text has flow-relative box properties.
+    logical: Vec<([Field; 2], Prop, Rc<str>, bool)>,
     /// Each with what errors call it, and whether it is a presentation attribute.
     pub(super) rest: Vec<(Field, Prop, Rc<str>, bool)>,
     /// Where errors point.
@@ -401,6 +404,28 @@ impl Sheet {
             }
             Cow::Owned(d)
         };
+        let writing = declared
+            .writing
+            .or(parent.map(|p| p.font.writing))
+            .unwrap_or_default();
+        let declared = if writing != super::WritingMode::Horizontal && !b.logical.is_empty() {
+            let mut d = Declared::default();
+            let axis = usize::from(writing == super::WritingMode::VerticalLr);
+            for (field, prop, what, attribute) in &b.logical {
+                if frame.unsettled(prop) {
+                    continue;
+                }
+                let v = match prop {
+                    Prop::Const(v) => v,
+                    Prop::Expr(e) => &frame.values[*e as usize],
+                };
+                set(&mut d, field[axis], &presented(v, *attribute))
+                    .map_err(|e| format!("{}: {what}: {e}", b.place))?;
+            }
+            Cow::Owned(d)
+        } else {
+            declared
+        };
         let (canvas, resources) = (frame.canvas, frame.resources);
         let mut base = b.base.borrow_mut();
         let kept = base.as_ref().and_then(|s| {
@@ -430,6 +455,12 @@ impl Sheet {
                 style
             }
         };
+        if style.font.writing != super::WritingMode::Horizontal && (!b.textual || b.svg.is_some()) {
+            return Err(format!(
+                "{}: vertical writing-mode is supported on Text and Span, not container or SVG layout",
+                b.place
+            ));
+        }
         style.source = b.source;
         let boxed = (b.svg.as_ref()).is_none_or(|g| g.tag == Tag::Svg);
         if boxed && (style.clip_ref.is_some() || style.mask_ref.is_some()) {
@@ -737,6 +768,27 @@ fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result
         ));
     }
     written.extend(classes.iter().filter(|d| d.important).map(class));
+    let logical = if matches!(node.kind, Kind::Text { .. })
+        && written.iter().any(|(key, ..)| {
+            Field::by_name(key)
+                .is_some_and(|f| f.vertical(key, true) != f || f.vertical(key, false) != f)
+        }) {
+        written
+            .iter()
+            .filter_map(|(key, prop, what, attribute)| {
+                Field::by_name(key).map(|f| {
+                    (
+                        [f.vertical(key, true), f.vertical(key, false)],
+                        prop.as_ref().clone(),
+                        what.clone(),
+                        *attribute,
+                    )
+                })
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     for (key, prop, what, attribute) in written {
         let field = (Field::by_name(&key))
             .ok_or_else(|| format!("{place}: {}", unsupported(&what, &key)))?;
@@ -906,10 +958,16 @@ fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result
         _ => None,
     };
     Ok(Bound {
-        updates: cache::Updates::new(&rest),
+        updates: if logical.is_empty() {
+            cache::Updates::new(&rest)
+        } else {
+            None
+        },
+        logical,
         base: RefCell::default(),
         declared,
         text: matches!(node.kind, Kind::Text { .. }),
+        textual: matches!(node.kind, Kind::Text { .. } | Kind::Span { .. }),
         rest,
         place,
         source,

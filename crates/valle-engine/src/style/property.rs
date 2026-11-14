@@ -256,6 +256,8 @@ pub(super) enum Field {
     FontVariationSettings,
     LineHeight,
     TextAlign,
+    WritingMode,
+    TextOrientation,
     TextIndent,
     LetterSpacing,
     WordSpacing,
@@ -310,12 +312,13 @@ pub(super) enum Sides {
     InlineEnd,
     BlockStart,
     BlockEnd,
+    RightLeft,
 }
 
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 262] = [
+const FIELDS: [(&str, Field); 264] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -674,6 +677,8 @@ const FIELDS: [(&str, Field); 262] = [
     ("fontVariationSettings", Field::FontVariationSettings),
     ("lineHeight", Field::LineHeight),
     ("textAlign", Field::TextAlign),
+    ("writingMode", Field::WritingMode),
+    ("textOrientation", Field::TextOrientation),
     ("textIndent", Field::TextIndent),
     ("letterSpacing", Field::LetterSpacing),
     ("wordSpacing", Field::WordSpacing),
@@ -834,6 +839,59 @@ impl Field {
         )
     }
 
+    /// Resolve flow-relative box properties for a vertical Text before declarations cascade.
+    pub(super) fn vertical(self, key: &str, rl: bool) -> Self {
+        use Sides as S;
+        let side = |s| match s {
+            S::Inline => S::Block,
+            S::Block => {
+                if rl {
+                    S::RightLeft
+                } else {
+                    S::Inline
+                }
+            }
+            S::InlineStart => S::Top,
+            S::InlineEnd => S::Bottom,
+            S::BlockStart => {
+                if rl {
+                    S::Right
+                } else {
+                    S::Left
+                }
+            }
+            S::BlockEnd => {
+                if rl {
+                    S::Left
+                } else {
+                    S::Right
+                }
+            }
+            other => other,
+        };
+        match key {
+            "inlineSize" => Self::Height,
+            "blockSize" => Self::Width,
+            "minInlineSize" => Self::MinHeight,
+            "minBlockSize" => Self::MinWidth,
+            "maxInlineSize" => Self::MaxHeight,
+            "maxBlockSize" => Self::MaxWidth,
+            "overflowInline" => Self::OverflowY,
+            "overflowBlock" => Self::OverflowX,
+            "borderStartStartRadius" => Self::CornerRadius(if rl { 1 } else { 0 }),
+            "borderStartEndRadius" => Self::CornerRadius(if rl { 2 } else { 3 }),
+            "borderEndEndRadius" => Self::CornerRadius(if rl { 3 } else { 2 }),
+            "borderEndStartRadius" => Self::CornerRadius(if rl { 0 } else { 1 }),
+            _ => match self {
+                Self::Inset(s) => Self::Inset(side(s)),
+                Self::Margin(s) => Self::Margin(side(s)),
+                Self::Padding(s) => Self::Padding(side(s)),
+                Self::Border(s, p) => Self::Border(side(s), p),
+                other => other,
+            },
+        }
+    }
+
     /// Whether it styles text, as a Span takes it.
     pub(super) fn textual(self) -> bool {
         matches!(
@@ -850,6 +908,8 @@ impl Field {
                 | Field::FontVariationSettings
                 | Field::LineHeight
                 | Field::TextAlign
+                | Field::WritingMode
+                | Field::TextOrientation
                 | Field::TextIndent
                 | Field::LetterSpacing
                 | Field::WordSpacing
