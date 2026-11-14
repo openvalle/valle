@@ -2617,6 +2617,30 @@
       const roots = [...n.style, ...attributes].map(([, v]) => v);
       if (parts) roots.push(...parts);
       const table = batch(n, roots);
+      // Keep simple repeated ellipses as rows through style and drawing. References and
+      // observable keys are expanded by the Rust binder when the surrounding scene needs them.
+      const geometry = n.tag === "circle" ? ["cx", "cy", "r"] : ["cx", "cy", "rx", "ry"];
+      const fields = new Set([...geometry, "fill", "fillOpacity", "fillRule", "opacity", "color"]);
+      if (
+        ["circle", "ellipse"].includes(n.tag) &&
+        n.style.length === 0 &&
+        n.classes.length === 0 &&
+        attributes.every(([k]) => fields.has(k))
+      ) {
+        const { data: _data, ref: reference, ...instances } = table;
+        nodes.push({
+          type: n.type,
+          tag: n.tag,
+          path: null,
+          classes: [],
+          style: [],
+          attributes: [],
+          children: [],
+          site: n.site >= 0 ? n.site : null,
+          instances: { ...instances, fields: attributes.map(([k, v]) => [k, reference(v)]) },
+        });
+        return [nodes.length - 1];
+      }
       return table.data.map((data, row) => {
         let indices;
         try {

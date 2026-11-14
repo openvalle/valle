@@ -111,6 +111,78 @@ impl<'a> Drawing<'a> {
         let Some(c) = s.svg.as_deref() else {
             return;
         };
+        if let Some(rows) = &s.svg_instances {
+            if !s.visible || s.layout.display == Display::None {
+                return;
+            }
+            if matches!(s.stroke.paint, Paint::None)
+                && rows.iter().all(|r| {
+                    r.opacity == 1.0 && !matches!(r.fill.as_ref().unwrap_or(&s.fill), Paint::Url(_))
+                })
+            {
+                let rows: Vec<_> = rows
+                    .iter()
+                    .filter_map(|r| {
+                        let ([x, y], [rx, ry]) = svg::ellipse_geometry(&r.shape, size)?;
+                        let mut color = match r.fill.as_ref().unwrap_or(&s.fill) {
+                            Paint::None => return None,
+                            Paint::Color(c) => *c,
+                            Paint::CurrentColor => r.color.unwrap_or(s.color),
+                            Paint::Url(_) => unreachable!(),
+                        };
+                        color[3] *= r.fill_opacity.unwrap_or(s.fill_opacity);
+                        (color[3] > 0.0).then(|| super::PathInstance {
+                            matrix: Matrix::affine([
+                                rx.into(),
+                                0.0,
+                                0.0,
+                                ry.into(),
+                                x.into(),
+                                y.into(),
+                            ]),
+                            color: work(color),
+                            even_odd: r.even_odd.unwrap_or(s.even_odd),
+                        })
+                    })
+                    .collect();
+                if !rows.is_empty() {
+                    out.push(Item::Paths {
+                        path: svg::ellipse([0.0; 2], [1.0; 2]).expect("unit ellipse"),
+                        rows,
+                    });
+                }
+                return;
+            }
+            let mut style = s.clone();
+            style.svg_instances = None;
+            for row in rows.iter() {
+                style.fill.clone_from(row.fill.as_ref().unwrap_or(&s.fill));
+                style.fill_opacity = row.fill_opacity.unwrap_or(s.fill_opacity);
+                style.even_odd = row.even_odd.unwrap_or(s.even_odd);
+                style.color = row.color.unwrap_or(s.color);
+                style.opacity = row.opacity;
+                let shape = svg::Computed {
+                    element: Element::Shape(row.shape.clone()),
+                    transform: None,
+                    path_length: None,
+                    id: None,
+                };
+                self.draw_element(i, size, matrix, out, copy, (&style, &shape));
+            }
+            return;
+        }
+        self.draw_element(i, size, matrix, out, copy, (s, c));
+    }
+
+    fn draw_element(
+        &self,
+        i: usize,
+        size: [f64; 2],
+        matrix: Matrix,
+        out: &mut Vec<Item>,
+        copy: Option<&Instance>,
+        (s, c): (&Style, &svg::Computed),
+    ) {
         if s.layout.display == Display::None || s.opacity <= 0.0 {
             return;
         }

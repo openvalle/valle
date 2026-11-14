@@ -83,6 +83,7 @@ impl Shading {
 /// A variant's styles, bound once; `compute` gives each frame's.
 pub struct Sheet {
     instances: Vec<Option<super::instances::Table>>,
+    svg_instances: Vec<Option<super::instances::svg::Table>>,
     pub(super) nodes: Vec<Bound>,
     /// Each node's parent, a mask's source's the mask. Parents come before their children.
     pub(super) parents: Vec<Option<u32>>,
@@ -180,13 +181,30 @@ impl Sheet {
                     template
                         .instances
                         .iter()
-                        .find(|(node, _)| *node as usize == i)
+                        .find(|(node, _)| {
+                            *node as usize == i && template.nodes[i].kind == Kind::View
+                        })
                         .map(|(_, table)| {
                             super::instances::Table::new(table, template.nodes[i].place())
                         })
                         .transpose()
                 })
                 .collect::<Result<_, _>>()?,
+            svg_instances: (0..n)
+                .map(|i| {
+                    let Kind::Svg { tag, .. } = template.nodes[i].kind else {
+                        return Ok(None);
+                    };
+                    template
+                        .instances
+                        .iter()
+                        .find(|(node, _)| *node as usize == i)
+                        .map(|(_, table)| {
+                            super::instances::svg::Table::new(table, tag, template.nodes[i].place())
+                        })
+                        .transpose()
+                })
+                .collect::<Result<_, Error>>()?,
             nodes,
             parents,
             ends,
@@ -292,6 +310,9 @@ impl Sheet {
     pub fn reads(&self, nodes: &[usize], mut f: impl FnMut(u32)) {
         for &i in nodes {
             if let Some(table) = &self.instances[i] {
+                table.reads(&mut f);
+            }
+            if let Some(table) = &self.svg_instances[i] {
                 table.reads(&mut f);
             }
         }
@@ -427,6 +448,9 @@ impl Sheet {
         }
         if let Some(table) = &self.instances[i] {
             style.instances = Some(table.compute(frame.values, &style, frame.canvas)?);
+        }
+        if let Some(table) = &self.svg_instances[i] {
+            style.svg_instances = Some(table.compute(frame.values)?);
         }
         Ok(style)
     }

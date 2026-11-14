@@ -3,6 +3,8 @@
 
 use std::rc::Rc;
 
+pub mod svg;
+
 use super::computed::{Style, computed_transforms};
 use super::declaration::{Declared, set};
 use super::property::Field;
@@ -93,9 +95,9 @@ impl Fixed {
     }
 }
 
-impl Table {
-    pub fn new(table: &Instances, place: Rc<str>) -> Result<Self, String> {
-        let formula = table.formula.as_ref().map(|shared| {
+impl Formula {
+    fn new(table: &Instances) -> Option<Self> {
+        table.formula.as_ref().map(|shared| {
             let data = table.rows[0].len();
             let mut dynamic = vec![false; shared.program.ops.len()];
             dynamic[data..data + shared.imports.len()].fill(true);
@@ -113,32 +115,69 @@ impl Table {
                 data,
                 dynamic,
             }
-        });
+        })
+    }
+    fn prepare(&self, row: &[Prop]) -> Result<Vec<V>, String> {
+        let mut local = Vec::new();
+        for p in row {
+            let Prop::Const(v) = p else {
+                return Err("instance data must be constant".into());
+            };
+            local.push(v.clone());
+        }
+        local.resize(self.data + self.shared.imports.len(), V::Num(0.0));
+        for (i, op) in self.shared.program.ops.iter().enumerate().skip(local.len()) {
+            local.push(if self.dynamic[i] {
+                V::Num(0.0)
+            } else {
+                crate::eval::value(
+                    op,
+                    &local,
+                    crate::eval::Clock {
+                        seconds: 0.0,
+                        progress: 0.0,
+                    },
+                )?
+            });
+        }
+        Ok(local)
+    }
+    fn evaluate(&self, fixed: &Vec<V>, values: &[V], local: &mut Vec<V>) -> Result<(), String> {
+        local.clone_from(fixed);
+        for (slot, e) in self.shared.imports.iter().enumerate() {
+            local[self.data + slot] = values[*e as usize].clone();
+        }
+        for (i, op) in self
+            .shared
+            .program
+            .ops
+            .iter()
+            .enumerate()
+            .skip(self.data + self.shared.imports.len())
+        {
+            if self.dynamic[i] {
+                local[i] = crate::eval::value(
+                    op,
+                    local,
+                    crate::eval::Clock {
+                        seconds: 0.0,
+                        progress: 0.0,
+                    },
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Table {
+    pub fn new(table: &Instances, place: Rc<str>) -> Result<Self, String> {
+        let formula = Formula::new(table);
         let mut rows = Vec::with_capacity(table.rows.len());
         for row in &table.rows {
             let mut local = Vec::new();
             let props = if let Some(f) = &formula {
-                for p in row {
-                    let Prop::Const(v) = p else {
-                        return Err("instance data must be constant".into());
-                    };
-                    local.push(v.clone());
-                }
-                local.resize(f.data + f.shared.imports.len(), V::Num(0.0));
-                for (i, op) in f.shared.program.ops.iter().enumerate().skip(local.len()) {
-                    local.push(if f.dynamic[i] {
-                        V::Num(0.0)
-                    } else {
-                        crate::eval::value(
-                            op,
-                            &local,
-                            crate::eval::Clock {
-                                seconds: 0.0,
-                                progress: 0.0,
-                            },
-                        )?
-                    });
-                }
+                local = f.prepare(row)?;
                 &f.shared.outputs
             } else {
                 row
@@ -204,29 +243,7 @@ impl Table {
         let mut d = Declared::default();
         for row in &self.rows {
             let values = if let Some(f) = &self.formula {
-                local.clone_from(&row.local);
-                for (slot, e) in f.shared.imports.iter().enumerate() {
-                    local[f.data + slot] = values[*e as usize].clone();
-                }
-                for (i, op) in f
-                    .shared
-                    .program
-                    .ops
-                    .iter()
-                    .enumerate()
-                    .skip(f.data + f.shared.imports.len())
-                {
-                    if f.dynamic[i] {
-                        local[i] = crate::eval::value(
-                            op,
-                            &local,
-                            crate::eval::Clock {
-                                seconds: 0.0,
-                                progress: 0.0,
-                            },
-                        )?;
-                    }
-                }
+                f.evaluate(&row.local, values, &mut local)?;
                 &local
             } else {
                 values

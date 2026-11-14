@@ -40,6 +40,7 @@ const CASES: {
   { entry: "tests/cases/motion/noise/scene.motion.tsx", frames: [0, 4, 2] },
   { entry: "tests/cases/motion/points/scene.motion.tsx", frames: [0, 7, 2, 4, 0] },
   { entry: "tests/cases/motion/svg-map/scene.motion.tsx", frames: [0, 7, 2, 5, 0] },
+  { entry: "tests/cases/motion/svg-instances/scene.motion.tsx", frames: [0, 7, 2, 5, 0] },
   { entry: "tests/cases/motion/particles/scene.motion.tsx", frames: [0, 7, 8, 9] },
   { entry: "examples/09-cards-3d.motion.tsx", frames: [210] },
   { entry: "examples/10-lower-third.motion.tsx", frames: [40] },

@@ -1014,6 +1014,10 @@ impl<'a> Renderer<'a> {
         letterbox: bool,
     ) -> Result<wgpu::CommandEncoder, Error> {
         // The images' textures, kept while frames show them, and color glyphs'.
+        // Each prepare has its own buffers, including pictures rendered before the main frame.
+        for kept in self.paths.values_mut() {
+            kept.uploaded = None;
+        }
         let rasters = || self.colors.values().flatten().map(|(i, _)| i);
         self.images
             .retain(|(p, _)| images.iter().any(|i| i.same(p)) || rasters().any(|r| r.same(p)));
@@ -1139,6 +1143,109 @@ impl<'a> Renderer<'a> {
         let _encoding = crate::perf::span("draw.encode");
         self.encode(&mut encoder, &plan);
         Ok(encoder)
+    }
+
+    /// Append one filled path instance; compatible instances share the same glyph draw run.
+    fn path(
+        &mut self,
+        path: &crate::path::Path,
+        (even_odd, color): (bool, [f32; 4]),
+        (transform, matrix): At,
+        plan: &mut Plan,
+        runs: &mut Vec<Run>,
+    ) {
+        // An outline of 1 px a unit, y up, as glyph outlines are, kept while frames
+        // draw the same path.
+        let tolerance = TOLERANCE / (matrix.radius_scale() as f32).max(1e-6);
+        let key = {
+            let _span = crate::perf::span("path.key");
+            path.quad_key(tolerance)
+        };
+        let kept = match self.paths.get_mut(&key) {
+            Some(kept) => kept,
+            None => {
+                let quads = crate::perf::span("path.quads");
+                let contours: Vec<Vec<Curve>> = (path.quads(tolerance).into_iter())
+                    .map(|c| c.into_iter().map(|q| q.map(|[x, y]| [x, -y])).collect())
+                    .collect();
+                drop(quads);
+                let outline = {
+                    let _span = crate::perf::span("path.encode");
+                    slug::encode(1.0, &contours)
+                };
+                let kept = Kept {
+                    outline,
+                    runs: None,
+                    uploaded: None,
+                    used: false,
+                };
+                self.paths.entry(key).or_insert(kept)
+            }
+        };
+        kept.used = true;
+        let o = &kept.outline;
+        if o.curves.is_empty() {
+            return;
+        }
+        let [x0, y0, x1, y1] = o.bounds;
+        let r = Rect {
+            x: x0,
+            y: -y1,
+            width: x1 - x0,
+            height: y1 - y0,
+        };
+        let on = Reach::of(matrix, r);
+        plan.reach = plan.reach.union(on.grown(1.0));
+        let first = *kept.uploaded.get_or_insert_with(|| {
+            let (curves, lists) = &mut plan.paths;
+            let first = [(curves.len() / 4) as u32, lists.len() as u32];
+            curves.extend(o.curves.iter().flatten().map(|v| v.to_bits()));
+            lists.extend(&o.lists);
+            first
+        });
+        // A path large on the target draws in runs of cells about `CELL` px across,
+        // where the transform keeps its scale everywhere.
+        let cells = match (on.0, matrix.least_scale()) {
+            (Some([x0, y0, x1, y1]), Some(least)) if (x1 - x0).max(y1 - y0) > CELL => {
+                let least = least as f32;
+                let across = |n: f32| ((n * least / CELL).ceil() as usize).clamp(1, 256);
+                Some(([across(r.width), across(r.height)], 1.5 / least))
+            }
+            _ => None,
+        };
+        let whole = [slug::Run {
+            rect: o.bounds,
+            solid: false,
+        }];
+        let parts: &[slug::Run] = match cells {
+            Some((cells, margin)) => {
+                let at = (cells, margin.to_bits(), even_odd);
+                if kept.runs.as_ref().is_none_or(|(k, _)| *k != at) {
+                    let _span = crate::perf::span("path.runs");
+                    let runs = o.runs(cells, margin, even_odd);
+                    kept.runs = Some((at, runs));
+                }
+                kept.runs.as_ref().map_or(&[], |(_, r)| r)
+            }
+            None => &whole,
+        };
+        let i = (plan.glyphs.len() / GLYPH) as u32;
+        let [u, v] = o.band_scale();
+        let bands = o.bands[0] | o.bands[1] << 16;
+        for part in parts {
+            let flags = u8::from(even_odd) | u8::from(part.solid) << 1;
+            let floats = [0.0, 0.0, 1.0, f32::from(flags)]
+                .into_iter()
+                .chain(o.bounds);
+            let floats = floats.chain([u, v, 0.0, 0.0]);
+            plan.glyphs.extend(floats.map(f32::to_bits));
+            plan.placed.push(plan.glyphs.len());
+            plan.glyphs.extend([first[0], first[1], bands, transform]);
+            plan.glyphs.extend(color.map(f32::to_bits));
+            plan.glyphs.extend(part.rect.map(f32::to_bits));
+        }
+        let n = parts.len() as u32;
+        extend(runs, Run::Glyphs(i..i + n));
     }
 
     /// Plans drawing `items` into `target`, at `at`.
@@ -1406,95 +1513,15 @@ impl<'a> Renderer<'a> {
                     even_odd,
                     color,
                 } => {
-                    // An outline of 1 px a unit, y up, as glyph outlines are, kept while frames
-                    // draw the same path.
-                    let tolerance = TOLERANCE / (matrix.radius_scale() as f32).max(1e-6);
-                    let key = {
-                        let _span = crate::perf::span("path.key");
-                        path.quad_key(tolerance)
-                    };
-                    let kept = match self.paths.get_mut(&key) {
-                        Some(kept) => kept,
-                        None => {
-                            let quads = crate::perf::span("path.quads");
-                            let contours: Vec<Vec<Curve>> = (path.quads(tolerance).into_iter())
-                                .map(|c| c.into_iter().map(|q| q.map(|[x, y]| [x, -y])).collect())
-                                .collect();
-                            drop(quads);
-                            let outline = {
-                                let _span = crate::perf::span("path.encode");
-                                slug::encode(1.0, &contours)
-                            };
-                            let kept = Kept {
-                                outline,
-                                runs: None,
-                                used: false,
-                            };
-                            self.paths.entry(key).or_insert(kept)
+                    self.path(path, (*even_odd, *color), at, plan, runs);
+                }
+                Item::Paths { path, rows } => {
+                    for row in rows {
+                        let m = matrix.times(row.matrix);
+                        if let Some(i) = plan.transform(m) {
+                            self.path(path, (row.even_odd, row.color), (i, m), plan, runs);
                         }
-                    };
-                    kept.used = true;
-                    let o = &kept.outline;
-                    if o.curves.is_empty() {
-                        continue;
                     }
-                    let [x0, y0, x1, y1] = o.bounds;
-                    let r = Rect {
-                        x: x0,
-                        y: -y1,
-                        width: x1 - x0,
-                        height: y1 - y0,
-                    };
-                    let on = Reach::of(matrix, r);
-                    plan.reach = plan.reach.union(on.grown(1.0));
-                    let (curves, lists) = &mut plan.paths;
-                    let first = [(curves.len() / 4) as u32, lists.len() as u32];
-                    curves.extend(o.curves.iter().flatten().map(|v| v.to_bits()));
-                    lists.extend(&o.lists);
-                    // A path large on the target draws in runs of cells about `CELL` px across,
-                    // where the transform keeps its scale everywhere.
-                    let cells = match (on.0, matrix.least_scale()) {
-                        (Some([x0, y0, x1, y1]), Some(least)) if (x1 - x0).max(y1 - y0) > CELL => {
-                            let least = least as f32;
-                            let across =
-                                |n: f32| ((n * least / CELL).ceil() as usize).clamp(1, 256);
-                            Some(([across(r.width), across(r.height)], 1.5 / least))
-                        }
-                        _ => None,
-                    };
-                    let whole = [slug::Run {
-                        rect: o.bounds,
-                        solid: false,
-                    }];
-                    let parts: &[slug::Run] = match cells {
-                        Some((cells, margin)) => {
-                            let at = (cells, margin.to_bits(), *even_odd);
-                            if kept.runs.as_ref().is_none_or(|(k, _)| *k != at) {
-                                let _span = crate::perf::span("path.runs");
-                                let runs = o.runs(cells, margin, *even_odd);
-                                kept.runs = Some((at, runs));
-                            }
-                            kept.runs.as_ref().map_or(&[], |(_, r)| r)
-                        }
-                        None => &whole,
-                    };
-                    let i = (plan.glyphs.len() / GLYPH) as u32;
-                    let [u, v] = o.band_scale();
-                    let bands = o.bands[0] | o.bands[1] << 16;
-                    for part in parts {
-                        let flags = u8::from(*even_odd) | u8::from(part.solid) << 1;
-                        let floats = [0.0, 0.0, 1.0, f32::from(flags)]
-                            .into_iter()
-                            .chain(o.bounds);
-                        let floats = floats.chain([u, v, 0.0, 0.0]);
-                        plan.glyphs.extend(floats.map(f32::to_bits));
-                        plan.placed.push(plan.glyphs.len());
-                        plan.glyphs.extend([first[0], first[1], bands, transform]);
-                        plan.glyphs.extend(color.map(f32::to_bits));
-                        plan.glyphs.extend(part.rect.map(f32::to_bits));
-                    }
-                    let n = parts.len() as u32;
-                    extend(runs, Run::Glyphs(i..i + n));
                 }
                 Item::Transform { matrix: m, items } => {
                     let m = matrix.times(*m);
@@ -2224,6 +2251,8 @@ const CELL: f32 = 32.0;
 struct Kept {
     outline: slug::Outline,
     runs: Option<(Grid, Vec<slug::Run>)>,
+    /// Curve and band offsets in the current prepare's buffers, shared by every instance.
+    uploaded: Option<[u32; 2]>,
     used: bool,
 }
 

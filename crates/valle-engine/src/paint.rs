@@ -74,6 +74,8 @@ use borders::{corner, fit, grown, inner, inner_shadow, lines, outer_shadow, outs
 pub enum Item {
     /// Independently transformed rectangle instances, in painting order, sharing a draw run.
     Rects(Vec<RectInstance>),
+    /// One path drawn in row order with independent transforms, colors and fill rules.
+    Paths { path: Path, rows: Vec<PathInstance> },
     /// A rectangle with its corners rounded by `radii`, which fit in it.
     Rect {
         rect: Rect,
@@ -188,6 +190,13 @@ pub struct RectInstance {
     pub radii: Radii,
     pub color: [f32; 4],
     pub matrix: Matrix,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PathInstance {
+    pub matrix: Matrix,
+    pub color: [f32; 4],
+    pub even_odd: bool,
 }
 
 /// A filter on an image.

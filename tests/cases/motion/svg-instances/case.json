@@ -1,0 +1,9 @@
+{
+  "spec": "docs/motion.md",
+  "assertion": "Repeated circles and ellipses preserve paint order, inherited colors and alpha, percentage radii, strokes, transforms and scoped clocks through shared instance tables.",
+  "at": [0, 0.5, 1.25, 1.75],
+  "valle": {
+    "reason": "Captured before SVG instance tables and visually reviewed. The unchanged TSX must produce identical pixels after batching.",
+    "maxDifference": 0
+  }
+}

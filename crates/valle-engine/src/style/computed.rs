@@ -89,6 +89,7 @@ pub enum Join {
 pub struct Style {
     /// A compact row table instead of separate layout/style nodes for repeated leaf boxes.
     pub instances: Option<Rc<Vec<super::instances::Row>>>,
+    pub svg_instances: Option<Rc<Vec<super::instances::svg::Row>>>,
     pub layout: taffy::Style,
     /// Where a flex or grid item goes among its siblings, which `layout::ordered` sorts by.
     pub order: i32,
@@ -267,6 +268,7 @@ impl Style {
     pub fn lays_out_as(&self, other: &Style) -> bool {
         let Style {
             instances: _,
+            svg_instances: _,
             layout,
             order,
             source,
@@ -684,6 +686,7 @@ pub(super) fn compute(
     };
     Ok(Style {
         instances: None,
+        svg_instances: None,
         layout,
         order: d.order,
         z_index: d.z_index,

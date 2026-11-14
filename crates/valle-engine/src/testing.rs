@@ -194,6 +194,10 @@ pub(crate) mod paint {
                 Item::Image { image, .. } => format!("image {image}"),
                 Item::Glyphs { color, .. } => format!("text {}", name(*color)),
                 Item::Path { color, .. } => format!("path {}", name(*color)),
+                Item::Paths { rows, .. } => format!(
+                    "paths {:?}",
+                    rows.iter().map(|r| name(r.color)).collect::<Vec<_>>()
+                ),
                 Item::Mask { mask, items } => format!("mask {:?} {:?}", names(mask), names(items)),
                 Item::Group {
                     opacity,

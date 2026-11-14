@@ -693,7 +693,7 @@ const MEET: Fit = Fit {
 };
 
 /// A number of user units, or a string of one, in px, or a percentage.
-fn length(v: &V) -> Result<Length, String> {
+pub(crate) fn length(v: &V) -> Result<Length, String> {
     let s = match v {
         V::Num(x) if x.is_finite() => {
             return Ok(Length {

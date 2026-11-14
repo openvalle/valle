@@ -1,13 +1,25 @@
-//! Packs repeated absolute leaf boxes before their variant enters style and layout.
+//! Packs repeated leaf boxes and restores individual nodes where a scene observes them.
 
-use crate::template::{Error, Instances, Kind, Op, Part, Piece, Prop, Template, V};
+use crate::template::{Error, Instances, Kind, Op, Part, Piece, Prop, Tag, Template, V};
 use std::rc::Rc;
 
 /// Pack consecutive sibling leaves from the same JSX site. The original expression program
 /// and guards remain, including expressions that can fail before a value reaches a row.
 pub(crate) fn pack(t: &mut Template) -> Result<(), Error> {
     if !t.pictures.is_empty() || t.program.ops.iter().any(|op| matches!(op, Op::Bounds(..))) {
-        return expand(t);
+        return expand(t, |_| true);
+    }
+    // SVG references inspect their subtrees; ordinary box tables remain independent of them.
+    if t.nodes.iter().any(|n| {
+        matches!(
+            n.kind,
+            Kind::Svg {
+                tag: Tag::Use | Tag::Defs | Tag::ClipPath | Tag::Mask | Tag::Symbol | Tag::Marker,
+                ..
+            }
+        )
+    }) {
+        expand(t, |kind| matches!(kind, Kind::Svg { .. }))?;
     }
     // A 3D scene sorts individual planes. A table must not hide those planes from its sorter.
     if t.nodes.iter().any(|n| {
@@ -18,7 +30,7 @@ pub(crate) fn pack(t: &mut Template) -> Result<(), Error> {
                 c.contains("perspective") || c.contains("preserve-3d") || c.contains("transform-3d")
             })
     }) {
-        return expand(t);
+        return expand(t, |_| true);
     }
     let mut numeric = Vec::with_capacity(t.program.ops.len());
     for op in &t.program.ops {
@@ -204,7 +216,7 @@ pub(crate) fn pack(t: &mut Template) -> Result<(), Error> {
 
 /// Restore independent nodes where their keys or 3D planes are observable. Expressions still
 /// come from the shared formula, but retain the ordinary layout and painting path.
-fn expand(t: &mut Template) -> Result<(), Error> {
+fn expand(t: &mut Template, select: impl Fn(&Kind) -> bool) -> Result<(), Error> {
     if t.instances.is_empty() {
         return Ok(());
     }
@@ -219,7 +231,7 @@ fn expand(t: &mut Template) -> Result<(), Error> {
         if let Some((_, table)) = t
             .instances
             .iter()
-            .find(|(n, b)| *n as usize == i && b.formula.is_some())
+            .find(|(n, b)| *n as usize == i && b.formula.is_some() && select(&node.kind))
         {
             let f = table.formula.as_ref().unwrap();
             for row in &table.rows {
@@ -234,9 +246,31 @@ fn expand(t: &mut Template) -> Result<(), Error> {
                     local.push(v.clone());
                 }
                 mapped.extend(&f.imports);
-                local.resize(mapped.len(), V::Num(0.0));
+                let mut dynamic = vec![false; local.len()];
+                for &e in &f.imports {
+                    let fixed = match &t.program.ops[e as usize] {
+                        Op::Const(v) => Some(v.clone()),
+                        _ => None,
+                    };
+                    dynamic.push(fixed.is_none());
+                    local.push(fixed.unwrap_or(V::Num(0.0)));
+                }
                 for op in f.program.ops.iter().skip(mapped.len()) {
-                    local.push(crate::eval::value(op, &local, clock)?);
+                    let mut changes = false;
+                    op.operands(|e| changes |= dynamic[e as usize]);
+                    dynamic.push(changes);
+                    let value = if changes {
+                        V::Num(0.0)
+                    } else {
+                        crate::eval::value(op, &local, clock)
+                            .map_err(|e| format!("{}: TypeError: {e}", node.place()))?
+                    };
+                    local.push(value.clone());
+                    if !changes {
+                        mapped.push(t.program.ops.len() as u32);
+                        t.program.ops.push(Op::Const(value));
+                        continue;
+                    }
                     let at = |i: u32| mapped[i as usize];
                     let op = match op {
                         Op::Const(v) => Op::Const(v.clone()),
@@ -245,6 +279,18 @@ fn expand(t: &mut Template) -> Result<(), Error> {
                         Op::Neg(a) => Op::Neg(at(*a)),
                         Op::Select(a, b, c) => Op::Select(at(*a), at(*b), at(*c)),
                         Op::Math(f, args) => Op::Math(*f, args.iter().map(|e| at(*e)).collect()),
+                        Op::Noise(seed, args) => {
+                            Op::Noise(*seed, args.iter().map(|e| at(*e)).collect())
+                        }
+                        Op::Interp(interp) => {
+                            let mut interp = (**interp).clone();
+                            interp.input = at(interp.input);
+                            for (input, output) in &mut interp.stops {
+                                *input = at(*input);
+                                *output = at(*output);
+                            }
+                            Op::Interp(Rc::new(interp))
+                        }
                         Op::Template(parts) => Op::Template(
                             parts
                                 .iter()
@@ -260,15 +306,22 @@ fn expand(t: &mut Template) -> Result<(), Error> {
                     t.program.ops.push(op);
                 }
                 let mut node = node.clone();
-                node.style = table
+                let fields = table
                     .fields
                     .iter()
                     .cloned()
                     .zip(f.outputs.iter().map(|p| match p {
                         Prop::Const(v) => Prop::Const(v.clone()),
-                        Prop::Expr(e) => Prop::Expr(mapped[*e as usize]),
+                        Prop::Expr(e) => match &t.program.ops[mapped[*e as usize] as usize] {
+                            Op::Const(v) => Prop::Const(v.clone()),
+                            _ => Prop::Expr(mapped[*e as usize]),
+                        },
                     }))
                     .collect();
+                match &mut node.kind {
+                    Kind::Svg { attributes, .. } => *attributes = fields,
+                    _ => node.style = fields,
+                }
                 node.path = f.key.as_ref().map(|p| {
                     let v = match p {
                         Prop::Const(v) => v,
@@ -310,7 +363,8 @@ fn expand(t: &mut Template) -> Result<(), Error> {
     for (n, _) in &mut t.pictures {
         *n = ids[*n as usize].start;
     }
-    t.instances.retain(|(_, b)| b.formula.is_none());
+    t.instances
+        .retain(|(i, b)| b.formula.is_none() || !select(&t.nodes[*i as usize].kind));
     for (n, _) in &mut t.instances {
         *n = ids[*n as usize].start;
     }
