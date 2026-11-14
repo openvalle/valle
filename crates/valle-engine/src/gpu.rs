@@ -1048,6 +1048,7 @@ impl<'a> Renderer<'a> {
         };
         let at = (transform, mapping);
         let mut atlas = (Vec::new(), Vec::new());
+        let planning = crate::perf::span("draw.plan");
         if letterbox {
             let rect = Rect {
                 x: 0.0,
@@ -1065,6 +1066,8 @@ impl<'a> Renderer<'a> {
             self.plan(items, 0, at, faces, &mut plan, &mut atlas)?;
         }
         let gpu = self.gpu;
+        drop(planning);
+        let uploading = crate::perf::span("draw.upload");
         let device = &gpu.device;
         let mut encoder = device.create_command_encoder(&Default::default());
 
@@ -1132,6 +1135,8 @@ impl<'a> Renderer<'a> {
         }
         crate::perf::gauge("passes", plan.steps.len() as u64);
         crate::perf::gauge("layers", plan.targets as u64);
+        drop(uploading);
+        let _encoding = crate::perf::span("draw.encode");
         self.encode(&mut encoder, &plan);
         Ok(encoder)
     }
@@ -1404,15 +1409,24 @@ impl<'a> Renderer<'a> {
                     // An outline of 1 px a unit, y up, as glyph outlines are, kept while frames
                     // draw the same path.
                     let tolerance = TOLERANCE / (matrix.radius_scale() as f32).max(1e-6);
-                    let key = path_key(path, tolerance);
+                    let key = {
+                        let _span = crate::perf::span("path.key");
+                        path_key(path, tolerance)
+                    };
                     let kept = match self.paths.get_mut(&key) {
                         Some(kept) => kept,
                         None => {
+                            let quads = crate::perf::span("path.quads");
                             let contours: Vec<Vec<Curve>> = (path.quads(tolerance).into_iter())
                                 .map(|c| c.into_iter().map(|q| q.map(|[x, y]| [x, -y])).collect())
                                 .collect();
+                            drop(quads);
+                            let outline = {
+                                let _span = crate::perf::span("path.encode");
+                                slug::encode(1.0, &contours)
+                            };
                             let kept = Kept {
-                                outline: slug::encode(1.0, &contours),
+                                outline,
                                 runs: None,
                                 used: false,
                             };
@@ -1456,6 +1470,7 @@ impl<'a> Renderer<'a> {
                         Some((cells, margin)) => {
                             let at = (cells, margin.to_bits(), *even_odd);
                             if kept.runs.as_ref().is_none_or(|(k, _)| *k != at) {
+                                let _span = crate::perf::span("path.runs");
                                 let runs = o.runs(cells, margin, *even_odd);
                                 kept.runs = Some((at, runs));
                             }

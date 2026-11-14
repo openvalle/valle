@@ -212,9 +212,6 @@ impl Outline {
         // within the box of its own control points, as a whole curve's box holds much it is not
         // near.
         let mut near = vec![false; rows * columns];
-        let cell = |v: f32, lines: &[f32]| {
-            lines.partition_point(|&l| l <= v).clamp(1, lines.len() - 1) - 1
-        };
         let size = ((x1 - x0) / columns as f32).min((y1 - y0) / rows as f32);
         // Each curve once, though it is in every band it crosses.
         let mut seen = vec![false; self.curves.len()];
@@ -302,6 +299,21 @@ impl Outline {
     }
 }
 
+/// The cell containing `v` in a uniform grid, clamped at either end. The estimate avoids a
+/// search for each curve piece; the actual edges settle rounding at a shared boundary.
+fn cell(v: f32, lines: &[f32]) -> usize {
+    let n = lines.len() - 1;
+    let scale = n as f32 / (lines[n] - lines[0]);
+    let mut i = (((v - lines[0]) * scale).floor() as usize).min(n - 1);
+    while i > 0 && lines[i] > v {
+        i -= 1;
+    }
+    while i + 1 < n && lines[i + 1] <= v {
+        i += 1;
+    }
+    i
+}
+
 /// Where curve `c` crosses the line at `y`, and which way, 1 up or -1 down: each part of it that
 /// goes one way counted from its lower end up to before its upper end, so that a crossing where
 /// two curves meet counts once, and a vertex the line only touches not at all.
@@ -315,11 +327,13 @@ fn crossings(c: [[f32; 2]; 3], y: f32, out: &mut Vec<(f32, i32)>) {
     };
     // Its parts each way: split where y turns.
     let turn = if a != 0.0 { -b / (2.0 * a) } else { -1.0 };
-    let mut ends = vec![0.0];
-    if turn > 0.0 && turn < 1.0 {
-        ends.push(turn);
-    }
-    ends.push(1.0);
+    let ends = [0.0, turn, 1.0];
+    let whole = [0.0, 1.0];
+    let ends = if turn > 0.0 && turn < 1.0 {
+        &ends[..]
+    } else {
+        &whole[..]
+    };
     for w in ends.windows(2) {
         let [t0, t1] = [w[0], w[1]];
         let [ya, yb] = [at(t0, 1), at(t1, 1)];
@@ -396,16 +410,22 @@ pub fn encode(em: f32, contours: &[Vec<Curve>]) -> Outline {
     // after, left to right.
     let mut flat: Vec<(f32, u32)> = Vec::new();
     let mut spans: Vec<(usize, usize)> = Vec::new();
+    let mut entries = Vec::new();
     // Horizontal bands cut y and sort by x; vertical ones cut x and sort by y.
     for (cut, list) in [(1, &horizontal), (0, &vertical)] {
         let sort = 1 - cut;
         let n = out.bands[1 - cut] as usize;
         let mut diff = vec![0i64; n + 1];
-        for &(c, _) in list {
+        // Count and fill from the same ranges, without finding each curve's bands twice.
+        entries.clear();
+        entries.reserve(list.len());
+        for &(c, texel) in list {
             let lo = c[0][cut].min(c[1][cut]).min(c[2][cut]);
             let hi = c[0][cut].max(c[1][cut]).max(c[2][cut]);
             let first = out.band(cut, lo - BAND_MARGIN);
             let last = out.band(cut, hi + BAND_MARGIN);
+            let reach = c[0][sort].max(c[1][sort]).max(c[2][sort]);
+            entries.push((reach, texel, first, last));
             diff[first] += 1;
             diff[last + 1] -= 1;
         }
@@ -422,12 +442,7 @@ pub fn encode(em: f32, contours: &[Vec<Curve>]) -> Outline {
         let base = flat.len();
         flat.resize(base + total, (0.0, 0));
         let mut at = starts.clone();
-        for &(c, texel) in list {
-            let lo = c[0][cut].min(c[1][cut]).min(c[2][cut]);
-            let hi = c[0][cut].max(c[1][cut]).max(c[2][cut]);
-            let reach = c[0][sort].max(c[1][sort]).max(c[2][sort]);
-            let first = out.band(cut, lo - BAND_MARGIN);
-            let last = out.band(cut, hi + BAND_MARGIN);
+        for &(reach, texel, first, last) in &entries {
             for band in first..=last {
                 flat[base + at[band]] = (reach, texel);
                 at[band] += 1;
@@ -435,7 +450,8 @@ pub fn encode(em: f32, contours: &[Vec<Curve>]) -> Outline {
         }
         for band in 0..n {
             let (from, to) = (base + starts[band], base + starts[band + 1]);
-            flat[from..to].sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+            // A texel breaks every tie, so unstable sorting preserves the exact order.
+            flat[from..to].sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
             spans.push((from, to));
         }
     }
@@ -705,6 +721,22 @@ mod tests {
     }
 
     #[test]
+    fn bands_order_equal_reaches_by_texel_across_contours() {
+        let contours = [1.0, 2.0, 3.0, 4.0, 5.0].map(|x| {
+            vec![
+                [[-x, 0.0], [10.0, 10.0], [0.0, 20.0]],
+                [[0.0, 20.0], [-20.0, 10.0], [-x, 0.0]],
+            ]
+        });
+        let o = encode(1.0, &contours);
+        // Every curve spans every horizontal band; all outward curves have the same right
+        // reach, as do all returning curves. Contour end texels must never enter a band.
+        for b in 0..o.bands[0] as usize {
+            assert_eq!(o.listed(b), &[0, 3, 6, 9, 12, 1, 4, 7, 10, 13]);
+        }
+    }
+
+    #[test]
     fn spaces_have_no_curves_and_weights_change_the_outline() {
         let o = of(' ');
         assert!(o.curves.is_empty() && o.lists.is_empty());
@@ -758,6 +790,35 @@ mod tests {
         assert_eq!(coverage(&o, [x0 + 20.0, mid], ppu), 0.5);
         assert_eq!(coverage(&o, [(x0 + x1) / 2.0, mid], ppu), 0.0);
         assert_eq!(coverage(&o, [x0 - 15.0, y1 + 15.0], ppu), 1.0);
+    }
+
+    #[test]
+    fn grid_cells_own_their_left_edge_even_when_edges_round_together() {
+        for (lo, hi) in [
+            (0.0f32, 1.0f32),
+            (-397.7, 251.3),
+            (0.001, 0.001_001),
+            (1_000_000.0, 1_000_000.25),
+        ] {
+            for n in [1, 3, 16, 31, 256] {
+                let lines: Vec<f32> = (0..=n)
+                    .map(|i| {
+                        if i == n {
+                            hi
+                        } else {
+                            lo + (hi - lo) * i as f32 / n as f32
+                        }
+                    })
+                    .collect();
+                let values = [f32::NEG_INFINITY, f32::INFINITY, f32::NAN]
+                    .into_iter()
+                    .chain(lines.iter().flat_map(|&v| [v.next_down(), v, v.next_up()]));
+                for v in values {
+                    let expected = lines.partition_point(|&l| l <= v).clamp(1, n) - 1;
+                    assert_eq!(cell(v, &lines), expected, "{lo}..{hi}, {n} cells, {v}");
+                }
+            }
+        }
     }
 
     #[test]

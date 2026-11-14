@@ -1060,6 +1060,7 @@ const DOT: f64 = 1e-3;
 /// shows as its caps, a square one along the x axis, as Chrome draws them. `None` for a stroke
 /// that draws nothing.
 pub fn stroke(path: &Path, pen: &Pen, scale: f64) -> Option<Path> {
+    let _span = crate::perf::span("path.stroke");
     let s = scale.max(1e-9);
     let mut els = bez(path, s);
     // In px: user units, or those of the path length.
