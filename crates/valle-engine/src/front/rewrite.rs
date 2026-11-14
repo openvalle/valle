@@ -1077,6 +1077,20 @@ impl Collector {
 }
 
 impl<'a> Visit<'a> for Collector {
+    fn visit_function(&mut self, f: &Function<'a>, flags: ScopeFlags) {
+        if let Some(helper) = instances::helper(f) {
+            self.close(
+                f.span.end,
+                format!(
+                    ";__pure({}, () => {});",
+                    f.id.as_ref().unwrap().name,
+                    helper.environment()
+                ),
+            );
+        }
+        walk::walk_function(self, f, flags);
+    }
+
     fn visit_expression(&mut self, e: &Expression<'a>) {
         let view_child = std::mem::take(&mut self.view_child);
         match e {
@@ -1198,12 +1212,8 @@ impl<'a> Visit<'a> for Collector {
                             arg.span().end,
                             c.span.end,
                             format!(
-                                ", () => [Math, View{}], {}, {site})",
-                                captures
-                                    .captures
-                                    .iter()
-                                    .map(|s| format!(", {s}"))
-                                    .collect::<String>(),
+                                ", () => {}, {}, {site})",
+                                captures.environment(),
                                 serde_json::to_string(&captures.fields)
                                     .expect("property names serialize")
                             ),
@@ -1221,7 +1231,8 @@ impl<'a> Visit<'a> for Collector {
                 }
                 Expression::Identifier(h) if h.name == "__h" && !c.arguments.is_empty() => {
                     self.element_site(h.span, c);
-                    let view = matches!(c.arguments[0].as_expression(), Some(Expression::Identifier(i)) if i.name == "View");
+                    let view = matches!(c.arguments[0].as_expression(), Some(Expression::Identifier(i)) if i.name == "View")
+                        || matches!(c.arguments[0].as_expression(), Some(Expression::StringLiteral(s)) if matches!(s.value.as_str(), Some("svg" | "g")));
                     for (i, arg) in c.arguments.iter().enumerate() {
                         self.view_child = view && i >= 2 && arg.as_expression().is_some();
                         self.visit_argument(arg);

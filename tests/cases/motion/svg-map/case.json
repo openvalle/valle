@@ -1,0 +1,9 @@
+{
+  "spec": "docs/motion.md",
+  "assertion": "Pure SVG maps preserve independent path order, row keys, gradients, dashes, markers and clipping while sharing their callback trace. Captured sample arrays and scalar helpers retain ordinary JavaScript results across forward and backward seeks.",
+  "at": [0, 0.5, 1.25, 1.75],
+  "valle": {
+    "reason": "Captured from the engine before SVG map sharing and visually reviewed; the same standard TSX is compared exactly after optimization.",
+    "maxDifference": 0
+  }
+}

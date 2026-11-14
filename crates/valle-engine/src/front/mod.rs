@@ -1114,6 +1114,101 @@ mod tests {
     }
 
     #[test]
+    fn svg_maps_share_tracing_and_keep_original_coordinate_templates() {
+        big_stack(|| {
+            let source = include_str!("../../../../tests/cases/motion/svg-map/scene.motion.tsx");
+            let mut f = scene(&source.replacen(
+                "export const composition =",
+                "const fixtureComposition =",
+                1,
+            ));
+            let frame = at(&mut f, "0.5");
+            let rewritten = rewrite::rewrite("s.motion.tsx", source, 0).unwrap();
+            assert!(rewritten.code.contains("__map(ROWS"));
+            assert!(rewritten.code.contains("__pure(envelope"));
+            assert!(frame.template.nodes.iter().any(|n| {
+                matches!(&n.kind, Kind::Svg { tag: Tag::Path, geometry: Some(parts), .. }
+                    if parts.iter().any(|p| matches!(p, Part::Expr(_))))
+            }));
+            assert!(
+                !frame
+                    .template
+                    .program
+                    .ops
+                    .iter()
+                    .any(|op| matches!(op, Op::Template(_)))
+            );
+            for time in ["1.75", "0", "1.25", "0.5"] {
+                at(&mut f, time);
+            }
+            assert_eq!(f.traces(), 1);
+        });
+    }
+
+    #[test]
+    fn svg_map_imports_reuse_equivalent_global_expressions() {
+        big_stack(|| {
+            let mut f = scene(
+                "export default function Scene(){const {seconds:t}=useCurrentTime();return <svg>{[0,1,2].map(i=><path d={`M${i},${t*2}L${i+1},${t*2}`}/>)}</svg>}",
+            );
+            let frame = at(&mut f, "0.5");
+            let imports = frame
+                .template
+                .program
+                .ops
+                .iter()
+                .filter(|op| matches!(op, Op::Bin(crate::template::Bin::Mul, ..)))
+                .count();
+            assert_eq!(imports, 1, "all rows reuse the same time expression");
+        });
+    }
+
+    #[test]
+    fn svg_maps_preserve_impure_helpers_iterators_and_row_decisions() {
+        big_stack(|| {
+            for (setup, work, expected) in [
+                (
+                    "function helper(x){calls++;return x;}",
+                    "const x=helper(i);",
+                    "3",
+                ),
+                (
+                    "function helper(x){return x*2;} helper=x=>{calls++;return x;};",
+                    "const x=helper(i);",
+                    "3",
+                ),
+                (
+                    "const samples=[0,1];Object.defineProperty(samples,1,{get(){calls++;return 1;}});",
+                    "let x=0;for(const u of samples){x+=u;}",
+                    "3",
+                ),
+                (
+                    "const samples=[0,1];Object.defineProperty(samples,Symbol.iterator,{value:function*(){calls++;yield 1;}});",
+                    "let x=0;for(const u of samples){x+=u;}",
+                    "3",
+                ),
+                (
+                    "const Math={sin(x){calls++;return x;}};",
+                    "const x=Math.sin(i);",
+                    "3",
+                ),
+                ("", "const x=i===0?interpolate(0,[0,1-i],[0,1]):i;", "0"),
+            ] {
+                let mut f = scene(&format!(
+                    r#"
+                    export default function Scene() {{
+                      let calls=0; {setup}
+                      return <View><svg>{{[0,1,2].map((i)=>{{{work} return <circle cx={{x}} cy={{10}} r={{2}}/>;}})}}</svg><Text>{{calls}}</Text></View>;
+                    }}
+                "#
+                ));
+                let frame = at(&mut f, "0");
+                assert_eq!(texts(&frame), [expected], "{setup}");
+            }
+        });
+    }
+
+    #[test]
     fn shared_map_fallback_keeps_array_and_callback_semantics() {
         big_stack(|| {
             for (setup, body, expected) in [

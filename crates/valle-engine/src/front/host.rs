@@ -95,6 +95,26 @@ pub(super) fn install_host<'js>(
         )?,
     )?;
     let table = clips.clone();
+    let row_builder = builder.clone();
+    let row_clips = clips.clone();
+    host.set(
+        "recordRow",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, kernel: usize, imports: Vec<u32>, data: Array<'js>| {
+                let values = data
+                    .iter::<Value>()
+                    .map(|v| v.map_err(|e| e.to_string()).and_then(|v| scalar(&v)))
+                    .collect::<Result<Vec<_>, _>>()
+                    .and_then(|data| {
+                        row_builder
+                            .borrow_mut()
+                            .row(kernel, &imports, data, &row_clips)
+                    });
+                values.map_err(|e| Exception::throw_type(&ctx, &e))
+            },
+        )?,
+    )?;
     host.set(
         "record",
         Function::new(

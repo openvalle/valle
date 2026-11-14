@@ -30,6 +30,7 @@
   const nativeFrom = Array.from;
   const nativeMap = Array.prototype.map;
   const nativeMath = Math;
+  const pureHelpers = new WeakMap();
   const BATCH = Symbol("instance table");
   const stringify = JSON.stringify;
   const parse = JSON.parse;
@@ -114,15 +115,22 @@
         row ||= a.row;
       }
     }
-    if (!late) return new T(op, args, evaluate(op, args), false, row);
-    // While tracing a box measures 0; what fails on such boxes waits for layout as NaN.
     let v;
-    try {
-      v = evaluate(op, args);
-    } catch {
-      v = NaN;
+    if (!late) v = evaluate(op, args);
+    else {
+      // While tracing a box measures 0; what fails there waits for layout as NaN.
+      try {
+        v = evaluate(op, args);
+      } catch {
+        v = NaN;
+      }
     }
-    return new T(op, args, v, true, row);
+    const t = new T(op, args, v, late, row);
+    if (G.checks && row && op.startsWith("interpolate|")) {
+      G.checks.push(t);
+      G.rowBranch ||= G.when.some(([c]) => c.row);
+    }
+    return t;
   }
 
   const plain = (x) => {
@@ -494,8 +502,51 @@
     return o[name](...args);
   }
 
-  // Only the compiler's proven-pure, direct View-child callbacks reach this path. A row
-  // contains scalars, never getters, sparse indices or objects with user-defined coercion.
+  // Helpers are registered only after their bodies pass the compiler's purity check.
+  function __pure(f, environment) {
+    pureHelpers.set(f, environment);
+  }
+
+  function scalarArray(a) {
+    if (!isArray(a) || getPrototypeOf(a) !== Array.prototype) return false;
+    const own = getOwnPropertyDescriptors(a);
+    if (
+      Object.getOwnPropertySymbols(own).length ||
+      keys(own).some((k) => k !== "length" && !/^(0|[1-9][0-9]*)$/.test(k))
+    )
+      return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!own[i] || !("value" in own[i]) || !scalar(own[i].value) || isT(own[i].value))
+        return false;
+    }
+    return true;
+  }
+
+  function pureEnvironment(environment, visiting = new Set()) {
+    const [math, , values, arrays, functions] = environment;
+    if (
+      math !== nativeMath ||
+      !values.every((v) => scalar(v) && (!(v instanceof T) || (!v.late && !v.row))) ||
+      !arrays.every(scalarArray)
+    )
+      return false;
+    return functions.every((f) => {
+      if (f === interpolate || f === noise1d || f === noise2d) return true;
+      if (!pureHelpers.has(f) || visiting.has(f)) return false;
+      visiting.add(f);
+      let valid;
+      try {
+        valid = pureEnvironment(pureHelpers.get(f)(), visiting);
+      } catch {
+        valid = false;
+      }
+      visiting.delete(f);
+      return valid;
+    });
+  }
+
+  // Only proven-pure callbacks reach this path. Rows and captured loop arrays have no getters
+  // or user-defined coercion. Structure and classes stay fixed; keys depend only on row data.
   function __map(source, callback, captures, reads, at) {
     const fallback = () => __call(source, "map", at, callback);
     if (!isArray(source) || getPrototypeOf(source) !== Array.prototype || source.length < 2)
@@ -512,12 +563,11 @@
     } catch {
       return fallback();
     }
-    if (
-      captured[0] !== nativeMath ||
-      captured[1] !== "View" ||
-      !captured.slice(2).every((v) => scalar(v) && (!(v instanceof T) || (!v.late && !v.row)))
-    )
-      return fallback();
+    if (!pureEnvironment(captured)) return fallback();
+    const svg = ["path", "polyline", "polygon", "circle", "ellipse", "line", "rect"].includes(
+      captured[1],
+    );
+    if (!svg && captured[1] !== "View") return fallback();
     const first = own[0]?.value;
     const object = plain(first);
     const fields = object ? keys(getOwnPropertyDescriptors(first)) : null;
@@ -548,10 +598,20 @@
       ? Object.fromEntries(fields.map((k, i) => [k, parameters[i]]))
       : parameters[0];
     let element;
+    const previousChecks = G.checks;
+    const previousBranch = G.rowBranch;
+    let rowBranch = false;
+    G.rowBranch = false;
+    const checks = [];
+    G.checks = checks;
     try {
       element = callback(item, parameters[parameters.length - 1]);
     } catch {
       element = null;
+    } finally {
+      rowBranch = G.rowBranch;
+      G.rowBranch = previousBranch;
+      G.checks = previousChecks;
     }
     const props = element?.props;
     const style = props?.style;
@@ -572,27 +632,38 @@
     ]);
     const rowOnly = (v) =>
       !(v instanceof T) || (v.row && (v.op === "row" || v.args.every(rowOnly)));
-    const valid =
+    const svgValid =
+      svg &&
       element?.__el &&
-      element.type === "View" &&
+      element.type === captured[1] &&
       element.children.length === 0 &&
       plain(props) &&
-      keys(props).every((k) => ["key", "className", "style"].includes(k)) &&
-      (props.className === undefined || props.className === "absolute") &&
-      plain(style) &&
-      keys(style).every((k) => allowed.has(k)) &&
-      (style.position === "absolute" ||
-        (style.position === undefined && props.className === "absolute")) &&
-      ["width", "height"].every(
-        (k) =>
-          typeof style[k] === "number" &&
-          Number.isFinite(style[k]) &&
-          style[k] >= 0 &&
-          style[k] <= 33554431,
-      ) &&
-      ["left", "top"].every((k) => numeric(style[k])) &&
       (props.key === undefined || (scalar(props.key) && rowOnly(props.key))) &&
-      G.guards.length === saved[2];
+      !(props.className instanceof T) &&
+      (G.ops - saved[0]) * rows.length + saved[0] <= MAX_OPS;
+    const valid =
+      (svgValid ||
+        (element?.__el &&
+          element.type === "View" &&
+          element.children.length === 0 &&
+          plain(props) &&
+          keys(props).every((k) => ["key", "className", "style"].includes(k)) &&
+          (props.className === undefined || props.className === "absolute") &&
+          plain(style) &&
+          keys(style).every((k) => allowed.has(k)) &&
+          (style.position === "absolute" ||
+            (style.position === undefined && props.className === "absolute")) &&
+          ["width", "height"].every(
+            (k) =>
+              typeof style[k] === "number" &&
+              Number.isFinite(style[k]) &&
+              style[k] >= 0 &&
+              style[k] <= 33554431,
+          ) &&
+          ["left", "top"].every((k) => numeric(style[k])) &&
+          (props.key === undefined || (scalar(props.key) && rowOnly(props.key))))) &&
+      G.guards.length === saved[2] &&
+      !rowBranch;
     if (!valid) {
       [G.ops, nextValue, G.guards.length, G.joinTemplates] = saved;
       return fallback();
@@ -601,7 +672,10 @@
       [BATCH]: true,
       element,
       rows,
-      style: styleOf({ position: "absolute", ...style }, "View", element.site),
+      checks,
+      svg,
+      at,
+      style: svg ? [] : styleOf({ position: "absolute", ...style }, "View", element.site),
     };
   }
 
@@ -2301,6 +2375,16 @@
     if (x === null || x === undefined || typeof x === "boolean") return;
     if (isArray(x)) return x.forEach((y) => render(y, out, at));
     if (x[BATCH]) {
+      if (x.svg) {
+        const { type, props, children, site } = x.element;
+        svgElement(type, { ...props, key: undefined }, children, out, site);
+        G.nodes += x.rows.length - 1;
+        if (G.nodes > MAX_NODES) fail(at, "a frame has more than " + MAX_NODES + " elements");
+        const n = out[out.length - 1];
+        n.batch = x;
+        n.prefix = G.keys.join("/");
+        return;
+      }
       G.nodes += x.rows.length;
       if (G.nodes > MAX_NODES) fail(at, "a frame has more than " + MAX_NODES + " elements");
       if (G.svg > 0) fail(at, "<View> cannot be inside an <svg>");
@@ -2445,10 +2529,11 @@
       return ids[root[TRACE_INDEX]];
     }
     const ref = (x) => (x instanceof T ? id(x) : { c: constant(x) });
-    function batch(n) {
+    function batch(n, roots = n.batch.style.map(([, v]) => v)) {
       const b = n.batch;
       const globals = [],
         globalSlots = new Map(),
+        importSlots = new Map(),
         dataSlots = new Map(),
         order = [],
         seen = new Set();
@@ -2456,15 +2541,20 @@
         if (!(t instanceof T) || seen.has(t)) return;
         seen.add(t);
         if (!t.row) {
-          globalSlots.set(t, globals.length);
-          globals.push(t);
+          const e = id(t);
+          if (!importSlots.has(e)) {
+            importSlots.set(e, globals.length);
+            globals.push(e);
+          }
+          globalSlots.set(t, importSlots.get(e));
           return;
         }
         if (t.op === "row" && !dataSlots.has(t.args[0])) dataSlots.set(t.args[0], dataSlots.size);
-        for (const a of t.args) visit(a);
+        for (const a of operands(t)) visit(a);
         if (t.op !== "row") order.push(t);
       }
-      for (const [, v] of b.style) visit(v);
+      for (const v of roots) visit(v);
+      for (const v of b.checks) visit(v);
       visit(b.element.props.key);
       const data = dataSlots.size;
       const kernel = host.kernel(data + globals.length);
@@ -2481,7 +2571,7 @@
           host.recordKernel(
             kernel,
             t.op,
-            t.args.map((a) =>
+            operands(t).map((a) =>
               a instanceof T ? index(a) : t.op === "template" ? { text: a.text } : { c: a },
             ),
           ),
@@ -2491,15 +2581,74 @@
       const slots = [...dataSlots.keys()];
       return {
         kernel,
-        imports: globals.map(id),
+        imports: globals,
         rows: b.rows.map((r) => slots.map((slot) => constant(r[slot]))),
+        ...(b.svg ? { data: b.rows.map((r) => slots.map((slot) => r[slot])), ref } : {}),
         fields: b.style.map(([k, v]) => [k, ref(v)]),
         key: b.element.props.key === undefined ? null : ref(b.element.props.key),
         prefix: n.prefix,
       };
     }
+    function shape(n) {
+      for (const [k, v] of n.attributes) {
+        const parts =
+          (k === "d" || k === "points") && v instanceof T && v.op === "template"
+            ? operands(v)
+            : null;
+        const syntax = k === "d" ? /^[ML0-9eE+.,\s-]*$/ : /^[0-9eE+.,\s-]*$/;
+        if (parts && parts.every((p) => p instanceof T || syntax.test(p.text))) return [k, parts];
+      }
+      return [null, null];
+    }
+
+    function rowValue(t, row) {
+      if (!(t instanceof T)) return t;
+      if (t.op === "row") return row[t.args[0]];
+      if (!t.row) return t.v;
+      return evaluate(
+        t.op,
+        operands(t).map((a) => rowValue(a, row)),
+      );
+    }
+
+    function svgRows(n) {
+      const [coordinate, parts] = shape(n);
+      const attributes = n.attributes.filter(([k]) => k !== coordinate);
+      const roots = [...n.style, ...attributes].map(([, v]) => v);
+      if (parts) roots.push(...parts);
+      const table = batch(n, roots);
+      return table.data.map((data, row) => {
+        let indices;
+        try {
+          indices = host.recordRow(table.kernel, table.imports, data);
+        } catch (error) {
+          error.site = n.batch.at;
+          throw error;
+        }
+        const ref = (v) => {
+          const p = table.ref(v);
+          return typeof p === "number" ? indices[p] : p;
+        };
+        const key = n.batch.element.props.key;
+        const name = key === undefined ? null : String(rowValue(key, n.batch.rows[row]));
+        const out = {
+          type: n.type,
+          tag: n.tag,
+          path: name === null ? null : n.prefix ? n.prefix + "/" + name : name,
+          classes: n.classes,
+          style: n.style.map(([k, v]) => [k, ref(v)]),
+          attributes: attributes.map(([k, v]) => [k, ref(v)]),
+          children: [],
+          site: n.site >= 0 ? n.site : null,
+        };
+        if (parts) out.geometry = parts.map((p) => (p instanceof T ? ref(p) : { c: p.text }));
+        nodes.push(out);
+        return nodes.length - 1;
+      });
+    }
     const nodes = [];
     function node(n) {
+      if (n.batch?.svg) return svgRows(n);
       const out = {
         type: n.type,
         path: n.path,
@@ -2531,23 +2680,13 @@
       }
       if ("tag" in n) {
         out.tag = n.tag;
-        out.attributes = [];
-        for (const [k, v] of n.attributes) {
-          // Keep the authored string's pieces until geometry consumes them. A private
-          // template need not become a string in every frame just to be parsed again.
-          const parts =
-            (k === "d" || k === "points") && v instanceof T && v.op === "template"
-              ? operands(v)
-              : null;
-          const syntax = k === "d" ? /^[ML0-9eE+.,\s-]*$/ : /^[0-9eE+.,\s-]*$/;
-          if (parts && parts.every((p) => p instanceof T || syntax.test(p.text))) {
-            out.geometry = parts.map((p) => (p instanceof T ? ref(p) : { c: p.text }));
-          } else {
-            out.attributes.push([k, ref(v)]);
-          }
-        }
+        const [coordinate, parts] = shape(n);
+        out.attributes = n.attributes
+          .filter(([k]) => k !== coordinate)
+          .map(([k, v]) => [k, ref(v)]);
+        if (parts) out.geometry = parts.map((p) => (p instanceof T ? ref(p) : { c: p.text }));
       }
-      out.children = n.children.map(node);
+      out.children = n.children.flatMap(node);
       if ("content" in n) {
         // Its children are its Spans, in the order its content has them.
         let k = 0;
@@ -2567,7 +2706,7 @@
       kind: g.kind,
       at: g.at,
     }));
-    const top = roots.map(node);
+    const top = roots.flatMap(node);
     return { nodes, roots: top, guards: checks };
   }
 
@@ -2869,6 +3008,7 @@
     __idx,
     __call,
     __map,
+    __pure,
     __spread,
     __h,
     __hs,

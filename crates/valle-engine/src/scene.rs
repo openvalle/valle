@@ -876,6 +876,77 @@ mod tests {
     }
 
     #[test]
+    fn svg_map_shapes_styles_and_curved_strings_keep_ordinary_results() {
+        big_stack(|| {
+            for (tag, attributes) in [
+                ("path", "d={`M0,0Q${i+t},20 30,10`}"),
+                ("polyline", "points={`0,0 ${i+t},20 30,10`}"),
+                ("polygon", "points={`0,0 ${i+t},20 30,10`}"),
+                ("circle", "cx={10+i+t} cy={10} r={5}"),
+                ("ellipse", "cx={10+i+t} cy={10} rx={5} ry={3}"),
+                ("line", "x1={i+t} y1={0} x2={30} y2={20}"),
+                ("rect", "x={i+t} y={0} width={10} height={20} rx={2}"),
+            ] {
+                let source = format!(
+                    "export const composition={{width:160,height:100,fps:4,duration:2}};export default function Scene(){{const {{seconds:t}}=useCurrentTime();return <svg width={{160}} height={{100}}><g stroke='blue' strokeWidth={{2}}>{{[0,20,40].map(i=><{tag} key={{i}} {attributes} fill='red' transform={{`translate(${{i}},10)`}} style={{{{opacity:0.5+0.2*Math.sin(t+i)}}}}/>)}}</g></svg>;}}"
+                );
+                let fallback = source.replace("map(i=>", "map((i,index,all)=>");
+                let load = |s: &str| {
+                    Scene::load(
+                        "s.motion.tsx",
+                        &|p| (p == "s.motion.tsx").then(|| s.as_bytes().to_vec()),
+                        &Inputs::default(),
+                        fonts(),
+                    )
+                    .unwrap()
+                };
+                let mut shared = load(&source);
+                let mut ordinary = load(&fallback);
+                for time in ["0.5", "1.75", "0"] {
+                    let at = Tick::parse_seconds(time).unwrap();
+                    assert_eq!(
+                        shared.frame(at).unwrap().items,
+                        ordinary.frame(at).unwrap().items,
+                        "{tag} at {time}"
+                    );
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn shared_svg_maps_match_independent_callbacks_when_seeking() {
+        big_stack(|| {
+            let source = include_str!("../../../tests/cases/motion/svg-map/scene.motion.tsx");
+            // A third callback parameter deliberately keeps the ordinary map path.
+            let fallback = source
+                .replace("map((row) =>", "map((row, index, all) =>")
+                .replace("map((i) =>", "map((i, index, all) =>");
+            let load = |source: &str| {
+                Scene::load(
+                    "s.motion.tsx",
+                    &|p| (p == "s.motion.tsx").then(|| source.as_bytes().to_vec()),
+                    &Inputs::default(),
+                    fonts(),
+                )
+                .unwrap()
+            };
+            let mut shared = load(source);
+            let mut ordinary = load(&fallback);
+            for time in ["0", "0.5", "1.75", "0.25", "1.25", "0"] {
+                let at = Tick::parse_seconds(time).unwrap();
+                let a = shared.frame(at).unwrap();
+                let b = ordinary.frame(at).unwrap();
+                assert_eq!(a.items, b.items, "at {time}");
+                assert_eq!(
+                    a.template.nodes.iter().map(|n| &n.path).collect::<Vec<_>>(),
+                    b.template.nodes.iter().map(|n| &n.path).collect::<Vec<_>>()
+                );
+            }
+        });
+    }
+
+    #[test]
     fn svg_templates_preserve_paths_points_and_layout_when_seeking() {
         big_stack(|| {
             let source = indoc! {r#"

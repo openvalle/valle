@@ -297,6 +297,32 @@ mod tests {
     }
 
     #[test]
+    fn svg_map_rows_keep_unused_errors_and_later_invalid_geometry() {
+        run(|| {
+            // The invalid second row must still fail even though the interpolation is unused.
+            let body = "export default function Scene(){return <svg>{[0,1].map(i=>{const unused=interpolate(0,[0,1-i],[0,1]);return <circle cx={i} cy={0} r={1}/>;})}</svg>;}";
+            let error = scene(body).into_checker().check(at("0")).unwrap_err();
+            assert!(error.contains("increase"), "{error}");
+            let fallback = body.replace("map(i=>", "map((i,index,all)=>");
+            assert!(error.starts_with("s.motion.tsx:1:"), "{error}");
+            let ordinary = scene(&fallback).into_checker().check(at("0")).unwrap_err();
+            assert_eq!(
+                error.split("TypeError: ").nth(1).unwrap().lines().next(),
+                ordinary.split("TypeError: ").nth(1).unwrap().lines().next()
+            );
+
+            let body = "export default function Scene(){const {seconds:t}=useCurrentTime();return <svg>{[0,1].map(i=><path d={`M0,0L${i},${1/(1-t*i)}`}/>)}</svg>;}";
+            let mut checker = scene(body).into_checker();
+            assert_eq!(checker.check_frames(0, 89).unwrap(), 0);
+            checker.check(at("0.5")).unwrap();
+            let error = checker.check(at("1")).unwrap_err();
+            assert!(error.contains("Infinity"), "{error}");
+            assert_eq!(error, scene(body).frame(at("1")).unwrap_err());
+            checker.check(at("0")).unwrap();
+        });
+    }
+
+    #[test]
     fn svg_templates_keep_standard_inputs_and_later_errors() {
         run(|| {
             for tag in ["polyline", "polygon"] {
@@ -339,6 +365,21 @@ mod tests {
     }
 
     #[test]
+    fn shared_svg_maps_keep_interval_proofs_for_style_motion() {
+        run(|| {
+            let body = "export default function Scene(){const {seconds:t}=useCurrentTime();return <svg>{[0,20,40].map(i=><circle cx={i+10} cy={10} r={5} style={{opacity:0.5+0.5*Math.sin(t+i)}}/>)}</svg>}";
+            for source in [
+                body.to_string(),
+                body.replace("map(i=>", "map((i,index,array)=>"),
+            ] {
+                let mut checker = scene(&source).into_checker();
+                assert_eq!(checker.check_frames(0, 89).unwrap(), 89);
+                assert_eq!(checker.traces().0, 1);
+            }
+        });
+    }
+
+    #[test]
     fn interval_and_sampled_checks_report_the_same_errors() {
         run(|| {
             for body in [
@@ -353,6 +394,8 @@ mod tests {
                 "export default function Scene(){const {seconds:t}=useCurrentTime();if(Math.floor(t)%2)return <View style={{height:20}}/>;return <View style={{width:10}}/>}",
                 "export default function Scene(){const {seconds:t}=useCurrentTime();return <View>{[1,2].map(p=><View style={{position:'absolute',left:p*10,top:0,width:8,height:8,opacity:1/(p-t)}}/>)}</View>}",
                 "export default function Scene(){const {seconds:t}=useCurrentTime();return <View>{[1,2].map(p=><View style={{position:'absolute',left:p*10,top:0,width:8,height:8,translate:`-${p-t}px 0px`}}/>)}</View>}",
+                "export default function Scene(){const {seconds:t}=useCurrentTime();return <svg>{[1,2].map(p=><circle cx={p*10} cy={10} r={5} style={{opacity:1/(p-t)}}/>)}</svg>}",
+                "export default function Scene(){const {seconds:t}=useCurrentTime();return <svg>{[1,2].map(p=><circle cx={p*10} cy={10} r={5} style={{opacity:t<p?'0.5':'broken'}}/>)}</svg>}",
             ] {
                 let mut plain = scene(body).into_checker();
                 let mut ranged = scene(body).into_checker();

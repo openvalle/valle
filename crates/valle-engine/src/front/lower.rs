@@ -23,7 +23,7 @@ use crate::time::{Rate, Speed, Tick};
 use crate::transition;
 
 /// An operand of an op by name: an earlier expression, or literal text of a template.
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Arg {
     Expr(u32),
     Text(Rc<str>),
@@ -44,9 +44,97 @@ pub(super) struct Builder {
     constants: HashMap<ConstantKey, u32>,
     expressions: HashMap<(String, Vec<Arg>), u32>,
     pub(super) kernels: Vec<Builder>,
+    shared: HashMap<usize, Rc<RowProgram>>,
+}
+
+/// One traced callback, reused when compiling each row into the ordinary frame program.
+struct RowProgram {
+    program: Program,
+    expressions: Vec<Option<(String, Vec<Arg>)>>,
 }
 
 impl Builder {
+    /// Instantiate the shared callback in Rust, folding row constants and interning repeated
+    /// expressions. The frame evaluator sees ordinary ops, without per-row indirection.
+    pub(super) fn row(
+        &mut self,
+        kernel: usize,
+        imports: &[u32],
+        data: Vec<V>,
+        clips: &Clips,
+    ) -> Result<Vec<u32>, Error> {
+        let body = self.kernels.get(kernel).ok_or("unknown instance program")?;
+        let slots = data.len() + imports.len();
+        if slots > body.program.ops.len()
+            || imports
+                .iter()
+                .any(|&i| i as usize >= self.program.ops.len())
+        {
+            return Err("invalid instance inputs".into());
+        }
+        let body = self
+            .shared
+            .entry(kernel)
+            .or_insert_with(|| {
+                let mut expressions = vec![None; body.program.ops.len()];
+                for (expression, &i) in &body.expressions {
+                    expressions[i as usize] = Some(expression.clone());
+                }
+                Rc::new(RowProgram {
+                    program: body.program.clone(),
+                    expressions,
+                })
+            })
+            .clone();
+        let mut indices: Vec<_> = data.iter().cloned().map(|v| self.constant(v)).collect();
+        indices.extend_from_slice(imports);
+        let mut local = data;
+        let mut dynamic = vec![false; local.len()];
+        for &e in imports {
+            let fixed = match &self.program.ops[e as usize] {
+                Op::Const(v) => Some(v.clone()),
+                _ => None,
+            };
+            dynamic.push(fixed.is_none());
+            local.push(fixed.unwrap_or(V::Num(0.0)));
+        }
+        for (i, op) in body.program.ops.iter().enumerate().skip(slots) {
+            let mut changes = false;
+            op.operands(|e| changes |= dynamic[e as usize]);
+            dynamic.push(changes);
+            let v = if changes {
+                V::Num(0.0)
+            } else {
+                crate::eval::value(
+                    op,
+                    &local,
+                    crate::eval::Clock {
+                        seconds: 0.0,
+                        progress: 0.0,
+                    },
+                )?
+            };
+            let e = if changes {
+                let (name, args) = body.expressions[i]
+                    .as_ref()
+                    .ok_or("missing instance expression")?;
+                let args = args
+                    .iter()
+                    .map(|a| match a {
+                        Arg::Expr(e) => Arg::Expr(indices[*e as usize]),
+                        Arg::Text(s) => Arg::Text(s.clone()),
+                    })
+                    .collect();
+                self.push(name.clone(), args, clips)?
+            } else {
+                self.constant(v.clone())
+            };
+            indices.push(e);
+            local.push(v);
+        }
+        Ok(indices)
+    }
+
     pub(super) fn kernel(&mut self, slots: usize) -> u32 {
         let mut kernel = Self::default();
         kernel.program.ops.resize(slots, Op::Const(V::Num(0.0)));
@@ -888,6 +976,52 @@ mod tests {
         )
         .unwrap();
         assert!(!t.holds(&later));
+    }
+
+    #[test]
+    fn svg_rows_fold_constants_and_reuse_global_expressions() {
+        let mut b = Builder::default();
+        let time = push(&mut b, "seconds", vec![]);
+        let kernel = b.kernel(2) as usize;
+        let one = b.kernels[kernel].constant(V::Num(1.0));
+        let divided = push(
+            &mut b.kernels[kernel],
+            "div",
+            vec![Arg::Expr(one), Arg::Expr(0)],
+        );
+        let output = push(
+            &mut b.kernels[kernel],
+            "add",
+            vec![Arg::Expr(divided), Arg::Expr(1)],
+        );
+        let negative = b
+            .row(kernel, &[time], vec![V::Num(-0.0)], &Clips::new())
+            .unwrap();
+        let positive = b
+            .row(kernel, &[time], vec![V::Num(0.0)], &Clips::new())
+            .unwrap();
+        let repeated = b
+            .row(kernel, &[time], vec![V::Num(0.0)], &Clips::new())
+            .unwrap();
+        assert_eq!(positive, repeated);
+        assert_ne!(positive[0], negative[0]);
+        assert_eq!(positive[1], time);
+        let values = crate::eval::run(
+            &b.finish(),
+            crate::eval::Clock {
+                seconds: 0.5,
+                progress: 0.5,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            values[negative[output as usize] as usize],
+            V::Num(f64::NEG_INFINITY)
+        );
+        assert_eq!(
+            values[positive[output as usize] as usize],
+            V::Num(f64::INFINITY)
+        );
     }
 
     #[test]
