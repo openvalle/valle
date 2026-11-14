@@ -26,7 +26,18 @@ pub struct Path(pub Vec<Segment>);
 impl Path {
     /// An exact geometry key, independent of its paint and placement.
     pub(crate) fn key(&self) -> Vec<u32> {
+        self.key_with(None)
+    }
+
+    /// An exact key for the quadratic contours. Only a cubic's subdivision count depends on
+    /// tolerance; changes that keep those counts produce the same curves, bit for bit.
+    pub(crate) fn quad_key(&self, tolerance: f32) -> Vec<u32> {
+        self.key_with(Some(tolerance))
+    }
+
+    fn key_with(&self, tolerance: Option<f32>) -> Vec<u32> {
         let mut key = Vec::with_capacity(self.0.len() * 3);
+        let (mut start, mut at) = ([0.0; 2], [0.0; 2]);
         for segment in &self.0 {
             let (tag, points): (u32, &[[f32; 2]]) = match segment {
                 Segment::Move(a) => (0, std::slice::from_ref(a)),
@@ -37,6 +48,20 @@ impl Path {
             };
             key.push(tag);
             key.extend(points.iter().flatten().map(|v| v.to_bits()));
+            if let Some(tolerance) = tolerance {
+                match *segment {
+                    Segment::Move(p) => {
+                        start = p;
+                        at = p;
+                    }
+                    Segment::Line(p) | Segment::Quad(_, p) => at = p,
+                    Segment::Cubic(a, b, p) => {
+                        key.push(cubic_steps([at, a, b, p], tolerance) as u32);
+                        at = p;
+                    }
+                    Segment::Close => at = start,
+                }
+            }
         }
         key
     }
@@ -105,16 +130,27 @@ fn mid(a: Point, b: Point) -> Point {
     [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5]
 }
 
+/// The subdivision decision shared by curve generation and its cache key.
+fn cubic_steps(points: [Point; 4], tolerance: f32) -> usize {
+    let [p0, p1, p2, p3] = points.map(|p| p.map(f64::from));
+    let d = [0, 1].map(|k| p3[k] - 3.0 * p2[k] + 3.0 * p1[k] - p0[k]);
+    let far = 3f64.sqrt() / 36.0 * d[0].hypot(d[1]);
+    let ratio = far / f64::from(tolerance);
+    if ratio <= 1.0 {
+        1
+    } else {
+        ratio.cbrt().ceil().clamp(1.0, 64.0) as usize
+    }
+}
+
 /// A cubic curve as quadratic curves no further than `tolerance` from it: as many pieces of it,
 /// one for each even step of its parameter, each with the piece's ends and its control point
 /// halfway between where the piece's two cubic control points would put it. One such curve is at
 /// most √3/36 of the cubic's third difference from it, and a piece's difference is the whole's
 /// over the cube of how many there are.
 pub fn cubic(points: [Point; 4], tolerance: f32, out: &mut Vec<Curve>) {
+    let n = cubic_steps(points, tolerance);
     let [p0, p1, p2, p3] = points.map(|p| p.map(f64::from));
-    let d = [0, 1].map(|k| p3[k] - 3.0 * p2[k] + 3.0 * p1[k] - p0[k]);
-    let far = 3f64.sqrt() / 36.0 * d[0].hypot(d[1]);
-    let n = (far / f64::from(tolerance)).cbrt().ceil().clamp(1.0, 64.0);
     let at = |t: f64| -> [f64; 2] {
         let s = 1.0 - t;
         std::array::from_fn(|k| {
@@ -132,14 +168,14 @@ pub fn cubic(points: [Point; 4], tolerance: f32, out: &mut Vec<Curve>) {
                 + t * t * (p3[k] - p2[k]))
         })
     };
-    let h = 1.0 / n;
+    let h = 1.0 / n as f64;
     let mut start = points[0];
-    for i in 0..n as usize {
+    for i in 0..n {
         let (t0, t1) = (i as f64 * h, (i + 1) as f64 * h);
         let (a, b) = (at(t0), at(t1));
         let (ta, tb) = (tangent(t0), tangent(t1));
         let c = [0, 1].map(|k| ((2.0 * (a[k] + b[k]) + h * (ta[k] - tb[k])) / 4.0) as f32);
-        let end = match i + 1 == n as usize {
+        let end = match i + 1 == n {
             true => points[3],
             false => b.map(|v| v as f32),
         };
@@ -792,6 +828,49 @@ mod tests {
             ]
         );
         assert_eq!(p.moved([1.0, 2.0]).0[0], Move([1.0, 2.0]));
+    }
+
+    #[test]
+    fn quadratic_keys_ignore_tolerance_only_when_subdivisions_match() {
+        let lines = parse("M0 0 L10 20 Q30 40 50 0 Z").unwrap();
+        assert_eq!(lines.quad_key(0.001), lines.quad_key(100.0));
+        let curve = parse("M0 0 C0 100 100 -100 100 0 Z").unwrap();
+        assert_eq!(curve.quad_key(1.0), curve.quad_key(0.99));
+        assert_ne!(curve.quad_key(1.0), curve.quad_key(100.0));
+        assert_ne!(curve.quad_key(1.0), curve.moved([0.25, 0.0]).quad_key(1.0));
+    }
+
+    #[test]
+    fn quadratic_cache_keys_preserve_curve_bits_at_subdivision_boundaries() {
+        use std::collections::HashMap;
+
+        let mut tolerances = vec![f32::INFINITY, 0.0, 1e-8, 1.0, 0.99];
+        // The first cubic's split thresholds, including the floats on either side. The
+        // additional contours exercise current-point changes at closes and moves.
+        let far = 3f64.sqrt() / 36.0 * 200f64.hypot(600.0);
+        for n in 1..=64 {
+            let t = (far / f64::from(n).powi(3)) as f32;
+            tolerances.extend([t.next_down(), t, t.next_up()]);
+        }
+        let path = parse(
+            "M0 0 C0 100 100 -100 100 0 Z C20 30 -10 40 0 0 \
+             M40 50 L45 60 Q50 80 70 50 C65 30 40 20 40 50",
+        )
+        .unwrap();
+        let mut seen = HashMap::new();
+        let mut reused = 0;
+        for tolerance in tolerances {
+            let mut bits = Vec::new();
+            for contour in path.quads(tolerance) {
+                bits.push(contour.len() as u32);
+                bits.extend(contour.iter().flatten().flatten().map(|v| v.to_bits()));
+            }
+            if let Some(previous) = seen.insert(path.quad_key(tolerance), bits.clone()) {
+                assert_eq!(previous, bits, "tolerance {tolerance}");
+                reused += 1;
+            }
+        }
+        assert!(reused > 50, "the boundary cases must actually reuse keys");
     }
 
     #[test]

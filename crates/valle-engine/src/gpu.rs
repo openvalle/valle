@@ -27,7 +27,7 @@ use wgpu::util::DeviceExt;
 use crate::image::Image;
 use crate::layout::Rect;
 use crate::paint::{Geometry, Item, Matrix, Radii, SQUARE, Spread, Tiles};
-use crate::path::{Curve, Path};
+use crate::path::Curve;
 use crate::shader::Program;
 use crate::slug;
 use crate::style::Blend;
@@ -1411,7 +1411,7 @@ impl<'a> Renderer<'a> {
                     let tolerance = TOLERANCE / (matrix.radius_scale() as f32).max(1e-6);
                     let key = {
                         let _span = crate::perf::span("path.key");
-                        path_key(path, tolerance)
+                        path.quad_key(tolerance)
                     };
                     let kept = match self.paths.get_mut(&key) {
                         Some(kept) => kept,
@@ -2231,13 +2231,6 @@ struct Kept {
 /// fills by even-odd.
 type Grid = ([usize; 2], u32, bool);
 
-/// What a path's outline is made of, exactly: its segments and the tolerance it is flattened to.
-fn path_key(path: &Path, tolerance: f32) -> Vec<u32> {
-    let mut key = path.key();
-    key.push(tolerance.to_bits());
-    key
-}
-
 /// A free texture from the pool of layer textures, or a new one.
 fn take(gpu: &Gpu, pool: &mut Vec<Surface>, free: &mut Vec<usize>, size: [u32; 2]) -> usize {
     free.pop().unwrap_or_else(|| {
@@ -2308,5 +2301,55 @@ fn extend(runs: &mut Vec<Run>, next: Run) {
             r.end = n.end;
         }
         _ => runs.push(next),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cached_paths_match_fresh_pixels_across_scale_and_fill_changes() {
+        if !std::env::var("VALLE_TEST_LAYERS")
+            .unwrap_or_default()
+            .split(',')
+            .any(|v| v == "gpu")
+        {
+            return;
+        }
+        let gpu = valle_native::gpu::adapter(None)
+            .and_then(|a| Gpu::with(a.adapter))
+            .unwrap();
+        let path = crate::path::parse(
+            "M1 0 A1 1 0 1 1 -1 0 A1 1 0 1 1 1 0 Z \
+             M0.5 0 A0.5 0.5 0 1 1 -0.5 0 A0.5 0.5 0 1 1 0.5 0 Z",
+        )
+        .unwrap();
+        let mut cached = Renderer::new(&gpu, 192, 192);
+        let mut fresh = Renderer::new(&gpu, 192, 192);
+        for (i, scale) in [8.0, 8.01, 48.0, 13.0, 7.99, 48.0, 8.0]
+            .into_iter()
+            .enumerate()
+        {
+            let items = [Item::Transform {
+                matrix: Matrix::affine([scale, 0.0, scale * 0.15, scale * 0.8, 96.0, 96.0]),
+                items: vec![Item::Path {
+                    path: path.clone(),
+                    even_odd: i % 2 == 0,
+                    color: [0.1, 0.5, 0.8, 1.0],
+                }],
+            }];
+            fresh.paths.clear();
+            let a = cached.render(&items, &[], &[], &[]).unwrap();
+            let b = fresh.render(&items, &[], &[], &[]).unwrap();
+            assert_eq!(a, b, "scale {scale}, frame {i}");
+            if i == 1 {
+                assert_eq!(cached.paths.len(), 1, "nearby scales share exact geometry");
+            }
+        }
+        for _ in 0..2 {
+            cached.render(&[], &[], &[], &[]).unwrap();
+        }
+        assert!(cached.paths.is_empty(), "unused geometry is still released");
     }
 }
