@@ -628,7 +628,7 @@ impl Reader<'_> {
 
 /// An elliptical arc from `from` to `to` (SVG 2, B.2.4) as cubic curves, each a quarter turn at
 /// most: radii too small to reach grow until they do, and a radius of 0 makes it a line.
-fn arc(
+pub(crate) fn arc(
     out: &mut Vec<Segment>,
     from: Point,
     radii: [f32; 2],

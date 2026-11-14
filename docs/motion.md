@@ -190,6 +190,30 @@ group. The outer SVG isolates its contents from the page. CSS filter functions u
 SVG user units and follow the element's transform; `filter: "url(#id)"` and SVG
 `<filter>`/`<fe*>` definitions are not implemented.
 
+### Responsive curve clipping
+
+`clipPath: "shape(…)"` describes curves in CSS lengths, percentages and `calc()`.
+Unlike `path()`, percentages follow the chosen reference box when its size changes.
+The shape begins with `from` and a position, then comma-separated commands:
+`move`, `line`, `hline`, `vline`, `curve`, `smooth`, `arc` and `close`.
+Use `to` for absolute coordinates and `by` for relative lengths. A `curve` takes
+one quadratic control point or two cubic controls separated by `/`, after `with`.
+Controls can explicitly use `from start`, `from end` or `from origin`.
+
+```tsx
+<View style={{
+  width: 240, height: 140, background: "royalblue",
+  clipPath: "shape(from 0 30%, curve to 100% 30% with 25% 0 / 75% 60%, line to 100% 100%, line to 0 100%, close)",
+}} />
+```
+
+`arc to … of …` takes one or two radii, optional `cw`/`ccw`, `large`/`small`,
+and `rotate <angle>`. A single percentage radius uses the box's normalized diagonal;
+two use its width and height. Prefix `evenodd` before `from` for holes. Append
+`padding-box` or `content-box` to change the reference box; the default is
+`border-box`. Animate the string's numeric values or the element's dimensions with
+the usual time expressions. This implements clipping, not `shape-outside` text flow.
+
 ### Vertical text
 
 On `Text`, set `writingMode: "vertical-rl"` (columns run right to left) or

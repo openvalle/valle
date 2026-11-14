@@ -1,0 +1,137 @@
+{
+  "size": [610, 290],
+  "sources": {
+    "tests/baselines/browser/css/mask/shape/scene.html": "b79befa4d9e0cbd40b20a69e143dc0b22cb3e9674b9347e30aad9600cbe134a5"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "bubble",
+        "border": {
+          "x": 10,
+          "y": 10,
+          "width": 180,
+          "height": 115
+        },
+        "padding": {
+          "x": 10,
+          "y": 10,
+          "width": 180,
+          "height": 115
+        },
+        "content": {
+          "x": 10,
+          "y": 10,
+          "width": 180,
+          "height": 115
+        }
+      },
+      {
+        "key": "small",
+        "border": {
+          "x": 210,
+          "y": 10,
+          "width": 130,
+          "height": 85
+        },
+        "padding": {
+          "x": 210,
+          "y": 10,
+          "width": 130,
+          "height": 85
+        },
+        "content": {
+          "x": 210,
+          "y": 10,
+          "width": 130,
+          "height": 85
+        }
+      },
+      {
+        "key": "hole",
+        "border": {
+          "x": 410,
+          "y": 10,
+          "width": 180,
+          "height": 115
+        },
+        "padding": {
+          "x": 410,
+          "y": 10,
+          "width": 180,
+          "height": 115
+        },
+        "content": {
+          "x": 410,
+          "y": 10,
+          "width": 180,
+          "height": 115
+        }
+      },
+      {
+        "key": "wave",
+        "border": {
+          "x": 10,
+          "y": 155,
+          "width": 180,
+          "height": 115
+        },
+        "padding": {
+          "x": 10,
+          "y": 155,
+          "width": 180,
+          "height": 115
+        },
+        "content": {
+          "x": 10,
+          "y": 155,
+          "width": 180,
+          "height": 115
+        }
+      },
+      {
+        "key": "arc",
+        "border": {
+          "x": 204.89524841308594,
+          "y": 137.39381408691406,
+          "width": 190.2095184326172,
+          "height": 140.2123565673828
+        },
+        "padding": {
+          "x": 204.89524841308594,
+          "y": 137.39381408691406,
+          "width": 190.2095184326172,
+          "height": 140.2123565673828
+        },
+        "content": {
+          "x": 204.89524841308594,
+          "y": 137.39381408691406,
+          "width": 190.2095184326172,
+          "height": 140.2123565673828
+        }
+      },
+      {
+        "key": "content",
+        "border": {
+          "x": 410,
+          "y": 155,
+          "width": 180,
+          "height": 115
+        },
+        "padding": {
+          "x": 416,
+          "y": 161,
+          "width": 168,
+          "height": 103
+        },
+        "content": {
+          "x": 428,
+          "y": 173,
+          "width": 144,
+          "height": 79
+        }
+      }
+    ],
+    "lines": []
+  }
+}

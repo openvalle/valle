@@ -732,7 +732,7 @@ pub(super) fn compute(
         transform_origin_z: d.transform_origin_z.px(u, 0.0),
         transform_box: d.transform_box,
         motion: d.offset_path.as_ref().map(|(path, area)| offset::Motion {
-            path: path.computed(u),
+            path: path.computed(u, font.writing),
             area: *area,
             distance: d.offset_distance.calc(u),
             along: d.offset_rotate.0,
@@ -756,7 +756,7 @@ pub(super) fn compute(
             .collect(),
         motion_auto: d.motion_blur == Some(None),
         backdrop: d.backdrop.iter().map(|f| f.computed(u, color)).collect(),
-        clip: d.clip.as_ref().map(|c| c.computed(u)),
+        clip: d.clip.as_ref().map(|c| c.computed(u, font.writing)),
         masks: match d
             .masks
             .images

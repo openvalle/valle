@@ -1,12 +1,15 @@
 //! `clip-path`: the part of a box that shows, a basic shape in one of its boxes, or the box
 //! itself with its corners rounded.
 
+mod commands;
+pub use commands::Commands;
+
 use super::background::{Area, area};
-use super::css;
 use super::declaration::{CENTER, SPREAD, ZERO, radii};
 use super::math::Calc;
 use super::position::{Offset, position};
 use super::units::{Accept, Len, RADIUS, Units, length_text};
+use super::{WritingMode, css};
 use crate::path::{self, Path};
 use crate::template::V;
 
@@ -38,6 +41,8 @@ pub enum Shape<P = Calc> {
     Polygon { even_odd: bool, points: Vec<[P; 2]> },
     /// A path in px from the box's top left, filled as a polygon is.
     Path { even_odd: bool, path: Path },
+    /// CSS shape() commands retain percentages and computed lengths until paint.
+    Commands { even_odd: bool, path: Commands<P> },
 }
 
 /// Out to the side of the box nearest the center or farthest from it, or a length.
@@ -49,16 +54,16 @@ pub enum Radius<P = Calc> {
 }
 
 impl Clip<Len> {
-    pub(super) fn computed(&self, u: Units) -> Clip {
+    pub(super) fn computed(&self, u: Units, writing: WritingMode) -> Clip {
         Clip {
-            shape: self.shape.as_ref().map(|s| s.computed(u)),
+            shape: self.shape.as_ref().map(|s| s.computed(u, writing)),
             area: self.area,
         }
     }
 }
 
 impl Shape<Len> {
-    pub(super) fn computed(&self, u: Units) -> Shape {
+    pub(super) fn computed(&self, u: Units, writing: WritingMode) -> Shape {
         let calc = |l: &Len| l.calc(u);
         let radius = |r: &Radius<Len>| match r {
             Radius::ClosestSide => Radius::ClosestSide,
@@ -83,6 +88,10 @@ impl Shape<Len> {
                 even_odd: *even_odd,
                 points: points.iter().map(|p| p.each_ref().map(calc)).collect(),
             },
+            Shape::Commands { even_odd, path } => Shape::Commands {
+                even_odd: *even_odd,
+                path: path.computed(u, writing),
+            },
             Shape::Path { even_odd, path } => Shape::Path {
                 even_odd: *even_odd,
                 path: path.clone(),
@@ -99,7 +108,7 @@ const LENGTH: Accept = Accept {
     sizing: &[],
 };
 
-const SHAPES: &str = "inset(), circle(), ellipse(), polygon() or path()";
+const SHAPES: &str = "inset(), circle(), ellipse(), polygon(), path() or shape()";
 
 /// `clip-path`: `none`, or a basic shape, a box (`border-box`, `padding-box` or `content-box`)
 /// or both in either order. Path data is case-sensitive, so `s` is as written.
@@ -132,6 +141,9 @@ pub(super) fn clip(s: &str) -> Result<Option<Clip<Len>>, String> {
             "circle" => round(&lower, false),
             "ellipse" => round(&lower, true),
             "polygon" => polygon(&lower),
+            "shape" => {
+                commands::parse(&lower).map(|(even_odd, path)| Shape::Commands { even_odd, path })
+            }
             "path" => path_of(args).map(|(even_odd, path)| Shape::Path { even_odd, path }),
             _ => return Err(format!("{name}() is not a basic shape: {SHAPES}")),
         };

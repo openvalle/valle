@@ -393,6 +393,9 @@ fn outline(shape: Option<&Shape>, r: Rect, radii: Radii, around: Option<Point>) 
             let pieces = (points.iter().zip(next)).map(|(&a, &b)| Piece::Line([a, b]));
             vec![(points[0], pieces.collect(), true)]
         }
+        Some(Shape::Commands { path, .. }) => {
+            contours(&path.path([r.width, r.height]).moved([r.x, r.y]))
+        }
         Some(Shape::Path { path, .. }) => contours(&path.moved([r.x, r.y])),
     }
 }

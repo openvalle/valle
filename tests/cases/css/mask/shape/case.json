@@ -1,0 +1,120 @@
+{
+  "spec": "https://drafts.csswg.org/css-shapes-1/#shape-function",
+  "assertion": "CSS shape() resolves responsive lengths, relative and absolute curves, reflected controls, arcs and evenodd subpaths in the selected reference box before transforms.",
+  "at": [0],
+  "browser": {
+    "selected": "webkit",
+    "reason": "Reviewed all three browser images and native/difference captures. Shape geometry agrees, including relative control origins, the transformed arc, the content-box clip and the hole. WebKit has the closest edge rasterization; differences are confined to antialiased contours and one-level rounding. Numeric path tests separately verify each command and percentage resolution.",
+    "pixels": {
+      "maxDifference": 50,
+      "maxPixels": 1800
+    }
+  },
+  "layout": [
+    {
+      "key": "bubble",
+      "border": {
+        "x": 10,
+        "y": 10,
+        "width": 180,
+        "height": 115
+      },
+      "padding": {
+        "x": 10,
+        "y": 10,
+        "width": 180,
+        "height": 115
+      },
+      "content": {
+        "x": 10,
+        "y": 10,
+        "width": 180,
+        "height": 115
+      }
+    },
+    {
+      "key": "small",
+      "border": {
+        "x": 210,
+        "y": 10,
+        "width": 130,
+        "height": 85
+      },
+      "padding": {
+        "x": 210,
+        "y": 10,
+        "width": 130,
+        "height": 85
+      },
+      "content": {
+        "x": 210,
+        "y": 10,
+        "width": 130,
+        "height": 85
+      }
+    },
+    {
+      "key": "hole",
+      "border": {
+        "x": 410,
+        "y": 10,
+        "width": 180,
+        "height": 115
+      },
+      "padding": {
+        "x": 410,
+        "y": 10,
+        "width": 180,
+        "height": 115
+      },
+      "content": {
+        "x": 410,
+        "y": 10,
+        "width": 180,
+        "height": 115
+      }
+    },
+    {
+      "key": "wave",
+      "border": {
+        "x": 10,
+        "y": 155,
+        "width": 180,
+        "height": 115
+      },
+      "padding": {
+        "x": 10,
+        "y": 155,
+        "width": 180,
+        "height": 115
+      },
+      "content": {
+        "x": 10,
+        "y": 155,
+        "width": 180,
+        "height": 115
+      }
+    },
+    {
+      "key": "content",
+      "border": {
+        "x": 410,
+        "y": 155,
+        "width": 180,
+        "height": 115
+      },
+      "padding": {
+        "x": 416,
+        "y": 161,
+        "width": 168,
+        "height": 103
+      },
+      "content": {
+        "x": 428,
+        "y": 173,
+        "width": 144,
+        "height": 79
+      }
+    }
+  ]
+}

@@ -61,6 +61,10 @@ pub(super) fn mask(shape: Option<&Shape>, r: Rect, radii: Radii) -> Option<Item>
                 .collect();
             Some(filled(Path(segments), even_odd))
         }
+        Some(Shape::Commands { even_odd, path }) => Some(filled(
+            path.path([r.width, r.height]).moved([r.x, r.y]),
+            even_odd,
+        )),
         Some(Shape::Path { even_odd, path }) => Some(filled(path.moved([r.x, r.y]), even_odd)),
     }
 }

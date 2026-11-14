@@ -3,11 +3,11 @@
 //! `offset-position`, where a ray starts.
 
 use super::background::{Area, area};
-use super::css;
 use super::math::{self, Calc};
 use super::position::{Offset, position};
 use super::shape::{self, Shape};
 use super::units::{Accept, Len, Units, length_text};
+use super::{WritingMode, css};
 use crate::path::Path;
 
 /// A box's motion path, its lengths `P` (declared, then px and fractions of what they are of).
@@ -70,7 +70,7 @@ pub enum Start<P = Calc> {
 }
 
 impl Route<Len> {
-    pub(super) fn computed(&self, u: Units) -> Route {
+    pub(super) fn computed(&self, u: Units, writing: WritingMode) -> Route {
         let at = |at: &[Offset<Len>; 2]| at.each_ref().map(|o| o.computed(u));
         match self {
             Route::Path(p) => Route::Path(p.clone()),
@@ -80,7 +80,7 @@ impl Route<Len> {
                 at: a.as_ref().map(at),
             },
             Route::Shape { shape, at } => Route::Shape {
-                shape: shape.as_ref().map(|s| s.computed(u)),
+                shape: shape.as_ref().map(|s| s.computed(u, writing)),
                 at: *at,
             },
         }

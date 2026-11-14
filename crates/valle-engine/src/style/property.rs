@@ -1309,7 +1309,7 @@ mod tests {
             (
                 "clipPath",
                 text("margin-box"),
-                "margin-box is not a basic shape, inset(), circle(), ellipse(), polygon() or path(), \
+                "margin-box is not a basic shape, inset(), circle(), ellipse(), polygon(), path() or shape(), \
              or a box, border-box, padding-box or content-box",
             ),
             (
@@ -1320,7 +1320,7 @@ mod tests {
             (
                 "clipPath",
                 text("rect(0 1px 1px 0)"),
-                "rect() is not a basic shape: inset(), circle(), ellipse(), polygon() or path()",
+                "rect() is not a basic shape: inset(), circle(), ellipse(), polygon(), path() or shape()",
             ),
             (
                 "clipPath",
