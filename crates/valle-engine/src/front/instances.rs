@@ -319,7 +319,7 @@ fn expand(t: &mut Template, select: impl Fn(&Kind) -> bool) -> Result<(), Error>
                     }))
                     .collect();
                 match &mut node.kind {
-                    Kind::Svg { attributes, .. } => *attributes = fields,
+                    Kind::Svg { attributes, .. } => attributes.extend(fields),
                     _ => node.style = fields,
                 }
                 node.path = f.key.as_ref().map(|p| {

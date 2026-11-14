@@ -2617,15 +2617,40 @@
       const roots = [...n.style, ...attributes].map(([, v]) => v);
       if (parts) roots.push(...parts);
       const table = batch(n, roots);
-      // Keep simple repeated ellipses as rows through style and drawing. References and
+      // Keep simple repeated shapes as rows through style and drawing. References and
       // observable keys are expanded by the Rust binder when the surrounding scene needs them.
-      const geometry = n.tag === "circle" ? ["cx", "cy", "r"] : ["cx", "cy", "rx", "ry"];
-      const fields = new Set([...geometry, "fill", "fillOpacity", "fillRule", "opacity", "color"]);
+      const geometry = {
+        circle: ["cx", "cy", "r"],
+        ellipse: ["cx", "cy", "rx", "ry"],
+        rect: ["x", "y", "width", "height", "rx", "ry"],
+        line: ["x1", "y1", "x2", "y2"],
+      }[n.tag];
+      const fields = new Set([
+        ...(geometry ?? []),
+        "fill",
+        "fillOpacity",
+        "fillRule",
+        "opacity",
+        "color",
+        "stroke",
+        "strokeOpacity",
+      ]);
+      const fixed = new Set([
+        "strokeWidth",
+        "strokeLinecap",
+        "strokeLinejoin",
+        "strokeMiterlimit",
+        "strokeDasharray",
+        "strokeDashoffset",
+        "paintOrder",
+        "transform",
+        "pathLength",
+      ]);
       if (
-        ["circle", "ellipse"].includes(n.tag) &&
+        geometry &&
         n.style.length === 0 &&
         n.classes.length === 0 &&
-        attributes.every(([k]) => fields.has(k))
+        attributes.every(([k, v]) => fields.has(k) || (fixed.has(k) && !(v instanceof T)))
       ) {
         const { data: _data, ref: reference, ...instances } = table;
         nodes.push({
@@ -2634,10 +2659,13 @@
           path: null,
           classes: [],
           style: [],
-          attributes: [],
+          attributes: attributes.filter(([k]) => !fields.has(k)).map(([k, v]) => [k, ref(v)]),
           children: [],
           site: n.site >= 0 ? n.site : null,
-          instances: { ...instances, fields: attributes.map(([k, v]) => [k, reference(v)]) },
+          instances: {
+            ...instances,
+            fields: attributes.filter(([k]) => fields.has(k)).map(([k, v]) => [k, reference(v)]),
+          },
         });
         return [nodes.length - 1];
       }

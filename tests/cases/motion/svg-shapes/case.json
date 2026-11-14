@@ -1,0 +1,9 @@
+{
+  "spec": "docs/motion.md",
+  "assertion": "Repeated rectangles and lines preserve rounded geometry, percentage lengths, inherited and row-specific paints, alpha, dashes, pathLength and transforms through shared instance tables.",
+  "at": [0, 0.5, 1.25, 1.75],
+  "valle": {
+    "reason": "Captured with 219a1879 before rectangle and line instance tables, and visually reviewed. Batching must preserve the existing pixels.",
+    "maxDifference": 0
+  }
+}

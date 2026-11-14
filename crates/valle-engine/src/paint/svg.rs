@@ -115,9 +115,14 @@ impl<'a> Drawing<'a> {
             if !s.visible || s.layout.display == Display::None {
                 return;
             }
-            if matches!(s.stroke.paint, Paint::None)
+            if matches!(
+                c.element,
+                Element::Shape(svg::Shape::Circle { .. } | svg::Shape::Ellipse { .. })
+            ) && c.transform.is_none()
                 && rows.iter().all(|r| {
-                    r.opacity == 1.0 && !matches!(r.fill.as_ref().unwrap_or(&s.fill), Paint::Url(_))
+                    matches!(r.stroke.as_ref().unwrap_or(&s.stroke.paint), Paint::None)
+                        && r.opacity == 1.0
+                        && !matches!(r.fill.as_ref().unwrap_or(&s.fill), Paint::Url(_))
                 })
             {
                 let rows: Vec<_> = rows
@@ -161,10 +166,15 @@ impl<'a> Drawing<'a> {
                 style.even_odd = row.even_odd.unwrap_or(s.even_odd);
                 style.color = row.color.unwrap_or(s.color);
                 style.opacity = row.opacity;
+                style
+                    .stroke
+                    .paint
+                    .clone_from(row.stroke.as_ref().unwrap_or(&s.stroke.paint));
+                style.stroke.opacity = row.stroke_opacity.unwrap_or(s.stroke.opacity);
                 let shape = svg::Computed {
                     element: Element::Shape(row.shape.clone()),
-                    transform: None,
-                    path_length: None,
+                    transform: c.transform,
+                    path_length: c.path_length,
                     id: None,
                 };
                 self.draw_element(i, size, matrix, out, copy, (&style, &shape));

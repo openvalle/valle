@@ -29,6 +29,14 @@ impl Length {
     pub fn resolve(self, basis: f64) -> f64 {
         self.units + self.percent / 100.0 * basis
     }
+
+    pub(crate) fn nonnegative(self, name: &str) -> Result<Self, String> {
+        if self.units < 0.0 || self.percent < 0.0 {
+            Err(format!("{name} is negative"))
+        } else {
+            Ok(self)
+        }
+    }
 }
 
 /// How a viewBox fits its viewport (`preserveAspectRatio`): stretched to it (`align` `None`), or
@@ -587,10 +595,8 @@ pub fn computed(
             tag.name()
         ));
     }
-    let negative = |name: &str, l: Option<Length>| match l {
-        Some(l) if l.units < 0.0 || l.percent < 0.0 => Err(format!("{name} is negative")),
-        _ => Ok(()),
-    };
+    let negative =
+        |name: &str, l: Option<Length>| l.map(|l| l.nonnegative(name)).transpose().map(|_| ());
     match &element {
         Element::Shape(Shape::Circle { r, .. }) => negative("r", Some(*r))?,
         Element::Shape(Shape::Ellipse { r, .. }) => {
