@@ -72,6 +72,8 @@ use borders::{corner, fit, grown, inner, inner_shadow, lines, outer_shadow, outs
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
+    /// Independently transformed rectangle instances, in painting order, sharing a draw run.
+    Rects(Vec<RectInstance>),
     /// A rectangle with its corners rounded by `radii`, which fit in it.
     Rect {
         rect: Rect,
@@ -178,6 +180,14 @@ pub enum Item {
         inside: bool,
         items: Vec<Item>,
     },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RectInstance {
+    pub rect: Rect,
+    pub radii: Radii,
+    pub color: [f32; 4],
+    pub matrix: Matrix,
 }
 
 /// A filter on an image.
@@ -996,6 +1006,54 @@ impl Painter<'_> {
     /// context, in its transform if it has one and a layer if `grouped`, or a positioned box.
     fn layer(&self, d: usize, out: &mut Drawn) {
         let s = &self.styles[d];
+        if let Some(rows) = &s.instances {
+            if !s.visible {
+                return;
+            }
+            let origin = self.layout.boxes[d].border;
+            let mut style = s.clone();
+            let mut instances = Vec::with_capacity(rows.len());
+            for row in rows.iter() {
+                let border = Rect {
+                    x: origin.x + row.rect.x,
+                    y: origin.y + row.rect.y,
+                    ..row.rect
+                };
+                let rect = snap(border);
+                if rect.width <= 0.0
+                    || rect.height <= 0.0
+                    || row.opacity <= 0.0
+                    || row.color[3] <= 0.0
+                {
+                    continue;
+                }
+                style.transform.clone_from(&row.transform);
+                style.individual = row.individual;
+                style.transform_origin = row.origin.clone();
+                style.transform_origin_z = row.origin_z;
+                let matrix = transform(&style, border, None, None)
+                    .unwrap_or(Matrix4::IDENTITY)
+                    .flatten();
+                if matrix.inverse().is_none() {
+                    continue;
+                }
+                let radii = row
+                    .radii
+                    .each_ref()
+                    .map(|[x, y]| corner([x.resolve(border.width), y.resolve(border.height)]));
+                let color = work(row.color).map(|c| c * row.opacity as f32);
+                instances.push(RectInstance {
+                    rect,
+                    radii: fit(radii, rect),
+                    color,
+                    matrix,
+                });
+            }
+            if !instances.is_empty() {
+                out.push((self.clips[d].last().copied(), Item::Rects(instances)));
+            }
+            return;
+        }
         let mut blend = s.blend;
         if self.in_scene(d) {
             // It paints with its scene.

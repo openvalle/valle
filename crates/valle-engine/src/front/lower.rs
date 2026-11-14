@@ -669,13 +669,16 @@ pub fn variant(
             at: place(&g.at),
         });
     }
-    Ok(Template {
+    let mut template = Template {
         program,
         nodes,
         roots,
         guards,
         pictures,
-    })
+        instances: Vec::new(),
+    };
+    super::instances::pack(&mut template);
+    Ok(template)
 }
 
 #[cfg(test)]

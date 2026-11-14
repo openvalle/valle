@@ -1207,6 +1207,27 @@ impl<'a> Renderer<'a> {
                 _ => {}
             }
             match item {
+                Item::Rects(rows) => {
+                    let first = (plan.rects.len() / RECT) as u32;
+                    for row in rows {
+                        let m = matrix.times(row.matrix);
+                        let Some(t) = plan.transform(m) else {
+                            continue;
+                        };
+                        plan.reach = plan.reach.union(Reach::of(m, row.rect));
+                        let words = xywh(row.rect)
+                            .into_iter()
+                            .chain(row.radii.iter().flatten().copied())
+                            .chain([0.0; 12])
+                            .chain([row.color; 4].into_iter().flatten());
+                        plan.rects.extend(words.map(f32::to_bits));
+                        plan.rects.extend([t, 0, 0, 0]);
+                    }
+                    let end = (plan.rects.len() / RECT) as u32;
+                    if end > first {
+                        extend(runs, Run::Rects(first..end));
+                    }
+                }
                 Item::Rect { .. } | Item::Ring { .. } => {
                     // A fill is a ring whose inside has no size.
                     let (rect, radii, inside, inner_radii, colors) = match item {

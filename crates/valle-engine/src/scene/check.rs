@@ -74,6 +74,9 @@ impl Plan {
                 }
             }
         }
+        for (_, table) in &template.instances {
+            table.rows.iter().flatten().for_each(&mut prop);
+        }
         inputs.sort_unstable();
         inputs.dedup();
         Self {

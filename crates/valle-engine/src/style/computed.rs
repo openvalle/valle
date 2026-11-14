@@ -87,6 +87,8 @@ pub enum Join {
 /// A node's computed style.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Style {
+    /// A compact row table instead of separate layout/style nodes for repeated leaf boxes.
+    pub instances: Option<Rc<Vec<super::instances::Row>>>,
     pub layout: taffy::Style,
     /// Where a flex or grid item goes among its siblings, which `layout::ordered` sorts by.
     pub order: i32,
@@ -264,6 +266,7 @@ impl Style {
     /// takes a side.
     pub fn lays_out_as(&self, other: &Style) -> bool {
         let Style {
+            instances: _,
             layout,
             order,
             source,
@@ -680,6 +683,7 @@ pub(super) fn compute(
         ..taffy::Style::DEFAULT
     };
     Ok(Style {
+        instances: None,
         layout,
         order: d.order,
         z_index: d.z_index,

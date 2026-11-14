@@ -17,6 +17,7 @@ pub mod filter;
 mod font;
 pub mod gradient;
 mod grid;
+pub mod instances;
 pub mod math;
 pub mod offset;
 pub mod position;

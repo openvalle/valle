@@ -11,6 +11,7 @@
 
 pub mod controls;
 mod host;
+mod instances;
 mod loader;
 mod lower;
 mod rewrite;

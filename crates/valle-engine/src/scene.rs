@@ -601,6 +601,7 @@ impl Typesetter {
             props.push(("textAlign".into(), Prop::Const(V::Str(align.into()))));
         }
         let template = Template {
+            instances: Vec::new(),
             program: Program::default(),
             nodes: vec![Node {
                 kind: Kind::Text {

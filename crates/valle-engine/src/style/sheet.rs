@@ -82,6 +82,7 @@ impl Shading {
 
 /// A variant's styles, bound once; `compute` gives each frame's.
 pub struct Sheet {
+    instances: Vec<Option<super::instances::Table>>,
     pub(super) nodes: Vec<Bound>,
     /// Each node's parent, a mask's source's the mask. Parents come before their children.
     pub(super) parents: Vec<Option<u32>>,
@@ -169,6 +170,18 @@ impl Sheet {
             .map(|(node, classes)| bind(node, classes, &late))
             .collect::<Result<_, _>>()?;
         Ok(Sheet {
+            instances: (0..n)
+                .map(|i| {
+                    template
+                        .instances
+                        .iter()
+                        .find(|(node, _)| *node as usize == i)
+                        .map(|(_, table)| {
+                            super::instances::Table::new(table, template.nodes[i].place())
+                        })
+                        .transpose()
+                })
+                .collect::<Result<_, _>>()?,
             nodes,
             parents,
             ends,
@@ -272,6 +285,11 @@ impl Sheet {
 
     /// Calls `f` with each expression the styles of `nodes` read.
     pub fn reads(&self, nodes: &[usize], mut f: impl FnMut(u32)) {
+        for &i in nodes {
+            if let Some(table) = &self.instances[i] {
+                table.reads(&mut f);
+            }
+        }
         let mut prop = |p: &Prop| {
             if let Prop::Expr(e) = p {
                 f(*e);
@@ -394,6 +412,9 @@ impl Sheet {
         if let Some(s) = &b.shader {
             let shaded = s.computed(frame);
             style.shader = Some(shaded.map_err(|e| format!("{}: {} {e}", b.place, s.tag))?);
+        }
+        if let Some(table) = &self.instances[i] {
+            style.instances = Some(table.compute(frame.values, &style, frame.canvas)?);
         }
         Ok(style)
     }

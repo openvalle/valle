@@ -184,6 +184,10 @@ pub(crate) mod paint {
         items
             .iter()
             .map(|item| match item {
+                Item::Rects(rows) => format!(
+                    "rects {:?}",
+                    rows.iter().map(|r| name(r.color)).collect::<Vec<_>>()
+                ),
                 Item::Rect { color, .. } => name(*color),
                 Item::Ring { colors, .. } => format!("ring {}", name(colors[0])),
                 Item::Gradient { ramp, .. } => format!("gradient of {}", ramp.segments.len()),
