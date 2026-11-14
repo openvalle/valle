@@ -230,6 +230,7 @@ pub(super) enum Field {
     Stroke,
     StrokeOpacity,
     StrokeWidth,
+    VectorEffect,
     StrokeLinecap,
     StrokeLinejoin,
     StrokeMiterlimit,
@@ -312,7 +313,7 @@ pub(super) enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 259] = [
+const FIELDS: [(&str, Field); 260] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -621,6 +622,7 @@ const FIELDS: [(&str, Field); 259] = [
     ("stroke", Field::Stroke),
     ("strokeOpacity", Field::StrokeOpacity),
     ("strokeWidth", Field::StrokeWidth),
+    ("vectorEffect", Field::VectorEffect),
     ("strokeLinecap", Field::StrokeLinecap),
     ("strokeLinejoin", Field::StrokeLinejoin),
     ("strokeMiterlimit", Field::StrokeMiterlimit),
@@ -724,6 +726,7 @@ impl Field {
                 | Field::PaintOrder
                 | Field::Stroke
                 | Field::StrokeOpacity
+                | Field::VectorEffect
                 | Field::StrokeWidth
                 | Field::StrokeLinecap
                 | Field::StrokeLinejoin

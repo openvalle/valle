@@ -170,6 +170,11 @@ Not supported: CSS variables (use JavaScript constants), `@keyframes` and CSS tr
 (animate with values over time), `position: fixed`/`sticky`, hover and other states. An
 unsupported property or class is an error that says so.
 
+`vectorEffect="non-scaling-stroke"` keeps stroke widths and dash lengths in the outer
+SVG viewport units through SVG transforms and viewBox scaling. It is not inherited:
+set it on each shape. Ordinary CSS transforms outside the SVG still transform the
+complete SVG image. `none` restores normal scaling.
+
 SVG shapes and groups accept CSS `transform`, `translate`, `rotate`, `scale`,
 `transformOrigin` and `transformBox`. CSS `transform` overrides the SVG `transform`
 attribute, including `"none"`. SVG child elements default to an origin of `0 0`.

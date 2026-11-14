@@ -164,6 +164,8 @@ pub struct Style {
     pub fill_opacity: f64,
     pub even_odd: bool,
     pub stroke: Stroke,
+    /// Non-inherited SVG stroke geometry computed in the viewport, before outer CSS transforms.
+    pub non_scaling_stroke: bool,
     /// A gradient stop's color, a color or `currentColor`, and its opacity.
     pub stop_color: Paint,
     pub stop_opacity: f64,
@@ -319,6 +321,7 @@ impl Style {
             fill_opacity: _,
             even_odd: _,
             stroke: _,
+            non_scaling_stroke: _,
             stop_color: _,
             stop_opacity: _,
             clip_ref: _,
@@ -762,6 +765,7 @@ pub(super) fn compute(
         fill_opacity: d.fill_opacity.unwrap_or(fill_opacity),
         even_odd: d.even_odd.unwrap_or(even_odd),
         stroke,
+        non_scaling_stroke: d.non_scaling_stroke,
         stop_color: d.stop_color.clone().unwrap_or(Paint::Color(color::BLACK)),
         stop_opacity: d.stop_opacity.unwrap_or(1.0),
         clip_ref: d.clip_ref.clone(),

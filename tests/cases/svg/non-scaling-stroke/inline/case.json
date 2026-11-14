@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/coords.html#VectorEffects",
+  "assertion": "Non-scaling strokes keep viewport width and dash lengths through viewBox, anisotropic transforms and use; vector-effect is not inherited and CSS overrides presentation attributes.",
+  "at": [0],
+  "browser": {
+    "selected": "webkit",
+    "reason": "All three browsers agree on fixed stroke widths, pathLength dash calibration, non-inheritance and use placement. WebKit is closest at round caps and curved antialiased edges (704 changed edge pixels, maximum 33 channels); straight edges match exactly. Reviewed native and three-browser images.",
+    "pixels": {
+      "maxDifference": 36,
+      "maxPixels": 720
+    }
+  }
+}

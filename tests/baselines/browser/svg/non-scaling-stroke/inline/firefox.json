@@ -1,0 +1,10 @@
+{
+  "size": [320, 200],
+  "sources": {
+    "tests/baselines/browser/svg/non-scaling-stroke/inline/scene.html": "8742aefca5197a879148acc1ca515892fa3df07ec9cdcd9d6a315daf261e361d"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

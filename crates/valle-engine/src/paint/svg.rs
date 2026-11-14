@@ -185,6 +185,25 @@ impl<'a> Drawing<'a> {
         self.draw_element(i, size, matrix, out, copy, (s, c));
     }
 
+    /// Construct the stroke in viewport units, then return it to the path's user space so
+    /// its paint servers, clips and filters continue to use the same coordinate system.
+    fn stroke(&self, path: &Path, pen: &svg::Pen, matrix: Matrix, fixed: bool) -> Option<Path> {
+        if !fixed {
+            return self.cache.stroke(path, pen, matrix.radius_scale());
+        }
+        let inverse = matrix.inverse()?;
+        let mut pen = pen.clone();
+        if let Some(length) = pen.path_length.take() {
+            let k = svg::arclen(&svg::bez(path, 1.0)) / length;
+            pen.dashes.iter_mut().for_each(|dash| *dash *= k);
+            pen.dash_offset *= k;
+        }
+        let path = path.mapped(|p| matrix.apply(p));
+        self.cache
+            .stroke(&path, &pen, 1.0)
+            .map(|p| p.mapped(|q| inverse.apply(q)))
+    }
+
     fn draw_element(
         &self,
         i: usize,
@@ -256,7 +275,7 @@ impl<'a> Drawing<'a> {
                             path_length: c.path_length,
                         };
                         let outline = (pen.width > 0.0)
-                            .then(|| self.cache.stroke(&path, &pen, scale))
+                            .then(|| self.stroke(&path, &pen, matrix, s.non_scaling_stroke))
                             .flatten()?;
                         let cover = svg::bounds(&outline);
                         painted(outline, false, paint, cover, scale)
@@ -970,6 +989,45 @@ mod tests {
     use crate::front::Inputs;
     use crate::scene::Scene;
     use crate::time::Tick;
+
+    #[test]
+    fn non_scaling_strokes_use_viewport_geometry_without_inheritance() {
+        let doc = Document::parse(
+            indoc::indoc! {r#"<svg xmlns="http://www.w3.org/2000/svg">
+          <g vector-effect="non-scaling-stroke"><path id="normal" d="M0 0H10" />
+            <path id="fixed" d="M0 0H10" vector-effect="non-scaling-stroke" />
+          </g></svg>"#},
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let cache = Cache::default();
+        let drawing = Drawing::new(&doc.template, &doc.styles, &[], &cache);
+        assert!(!doc.styles[drawing.ids["normal"]].non_scaling_stroke);
+        assert!(doc.styles[drawing.ids["fixed"]].non_scaling_stroke);
+        let path = crate::path::parse("M0 0H10").unwrap();
+        let pen = svg::Pen {
+            width: 4.0,
+            cap: crate::style::Cap::Butt,
+            join: crate::style::Join::Miter,
+            miter_limit: 4.0,
+            dashes: vec![],
+            dash_offset: 0.0,
+            path_length: None,
+        };
+        let matrix = Matrix::affine([3.0, 0.0, 0.0, 2.0, 5.0, 20.0]);
+        for (fixed, expected) in [
+            (true, [5.0, 18.0, 30.0, 4.0]),
+            (false, [5.0, 16.0, 30.0, 8.0]),
+        ] {
+            let stroke = drawing.stroke(&path, &pen, matrix, fixed).unwrap();
+            assert_eq!(svg::bounds(&stroke.mapped(|p| matrix.apply(p))), expected);
+        }
+        assert!(
+            drawing
+                .stroke(&path, &pen, Matrix::scale(0.0), true)
+                .is_none()
+        );
+    }
 
     #[test]
     fn svg_effects_keep_filter_inside_mask_and_opacity() {

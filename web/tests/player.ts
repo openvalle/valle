@@ -20,6 +20,8 @@ const CASES: {
   props?: Record<string, unknown>;
   pixels?: { maxDifference: number; maxPixels: number };
 }[] = [
+  { entry: "tests/cases/svg/non-scaling-stroke/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
+  { entry: "tests/cases/svg/non-scaling-stroke/file/scene.motion.tsx", frames: [0] },
   { entry: "examples/hello.motion.tsx", frames: [0, 60] },
   { entry: "tests/cases/svg/css-transforms/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/css-transforms/file/scene.motion.tsx", frames: [0] },

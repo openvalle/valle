@@ -68,7 +68,11 @@ impl Path {
 
     /// The path moved by `by`.
     pub fn moved(&self, by: Point) -> Path {
-        let p = |q: Point| [q[0] + by[0], q[1] + by[1]];
+        self.mapped(|q| [q[0] + by[0], q[1] + by[1]])
+    }
+
+    /// Map every control point, preserving the command structure.
+    pub fn mapped(&self, p: impl Fn(Point) -> Point) -> Path {
         Path(
             (self.0.iter())
                 .map(|s| match *s {

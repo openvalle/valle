@@ -1,0 +1,64 @@
+<!doctype html><meta charset="utf-8" /><title>SVG non-scaling-stroke</title
+><style>
+  body {
+    margin: 0;
+  }
+  #canvas {
+    width: 320px;
+    height: 200px;
+    background: white;
+  }
+  svg,
+  img {
+    display: block;
+  }
+</style>
+<div id="canvas">
+  <svg xmlns="http://www.w3.org/2000/svg" width="320" height="200" viewBox="0 0 160 100">
+    <defs>
+      <linearGradient id="ink">
+        <stop stop-color="#3366cc" />
+        <stop offset="1" stop-color="#dd3355" />
+      </linearGradient>
+      <path
+        id="line"
+        d="M0 0L30 0"
+        fill="none"
+        stroke="#008977"
+        stroke-width="4"
+        vector-effect="non-scaling-stroke"
+      />
+    </defs>
+    <g fill="none" stroke="#254566" stroke-width="4">
+      <path d="M10 12L65 12L65 30" />
+      <path d="M90 12L145 12L145 30" vector-effect="non-scaling-stroke" />
+      <g transform="translate(10 50) scale(1.7 .65)">
+        <path
+          d="M0 0C10 -25 25 25 36 0"
+          stroke="url(#ink)"
+          vector-effect="non-scaling-stroke"
+          stroke-linecap="round"
+          stroke-dasharray="6 4"
+        />
+      </g>
+      <path
+        d="M90 44L145 44"
+        vector-effect="non-scaling-stroke"
+        stroke-dasharray="8 4"
+        pathLength="55"
+      />
+      <path
+        d="M90 55L145 55"
+        vector-effect="non-scaling-stroke"
+        stroke-linecap="round"
+        stroke-dasharray="0 9"
+      />
+      <g vector-effect="non-scaling-stroke">
+        <path d="M10 77L65 77" />
+        <path d="M10 89L65 89" style="vector-effect: non-scaling-stroke" />
+      </g>
+      <use href="#line" x="95" y="78" transform="skewX(8)" />
+      <path d="M95 90L145 90" vector-effect="non-scaling-stroke" style="vector-effect: none" />
+    </g>
+  </svg>
+</div>

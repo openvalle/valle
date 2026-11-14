@@ -166,6 +166,7 @@ pub(super) struct Declared {
     pub(super) svg_stroke: Option<Paint>,
     pub(super) stroke_opacity: Option<f64>,
     pub(super) stroke_width: Option<Len>,
+    pub(super) non_scaling_stroke: bool,
     pub(super) cap: Option<Cap>,
     pub(super) join: Option<Join>,
     pub(super) miter_limit: Option<f64>,
@@ -296,6 +297,7 @@ impl Default for Declared {
             svg_stroke: None,
             stroke_opacity: None,
             stroke_width: None,
+            non_scaling_stroke: false,
             cap: None,
             join: None,
             miter_limit: None,
@@ -1246,6 +1248,9 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::Stroke if inherits(v) => d.svg_stroke = None,
         F::Stroke => d.svg_stroke = Some(paint(v)?),
         F::StrokeOpacity => d.stroke_opacity = Some(alpha(v)?),
+        F::VectorEffect => {
+            d.non_scaling_stroke = keyword(v, &[("none", false), ("non-scaling-stroke", true)])?
+        }
         F::StrokeWidth => d.stroke_width = Some(svg_length(v, false)?),
         F::StrokeLinecap => {
             let caps = [

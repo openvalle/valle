@@ -183,7 +183,7 @@ pub struct Computed {
 
 /// Presentation attributes: style properties of the same name, which the element's style
 /// overrides. Every SVG element takes them.
-const PRESENTATION: [&str; 27] = [
+const PRESENTATION: [&str; 28] = [
     "fill",
     "fillOpacity",
     "fillRule",
@@ -191,6 +191,7 @@ const PRESENTATION: [&str; 27] = [
     "stroke",
     "strokeOpacity",
     "strokeWidth",
+    "vectorEffect",
     "strokeLinecap",
     "strokeLinejoin",
     "strokeMiterlimit",
@@ -1152,7 +1153,7 @@ fn dotted(path: &BezPath, dots: bool) -> BezPath {
 }
 
 /// `path` in kurbo's terms, `s` times as big.
-fn bez(path: &Path, s: f64) -> BezPath {
+pub(crate) fn bez(path: &Path, s: f64) -> BezPath {
     let to = |p: Point| kurbo::Point::new(f64::from(p[0]) * s, f64::from(p[1]) * s);
     (path.0.iter())
         .map(|segment| match *segment {
@@ -1283,7 +1284,7 @@ pub fn gradient(
 }
 
 /// A path's length.
-fn arclen(path: &BezPath) -> f64 {
+pub(crate) fn arclen(path: &BezPath) -> f64 {
     path.segments().map(|s| s.arclen(ACCURACY)).sum()
 }
 

@@ -1,0 +1,11 @@
+{
+  "size": [320, 200],
+  "sources": {
+    "tests/baselines/browser/svg/non-scaling-stroke/file/scene.html": "12a0de28a99d6b5422090cdf1a25d4298d4af1fb4251c7026be7d46d211f3154",
+    "tests/cases/svg/non-scaling-stroke/file/source.svg": "7d708dde8110ca5922c08e04495027b31d0c1f42d93c57eef06f1c0d811392af"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

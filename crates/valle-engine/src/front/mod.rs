@@ -2362,10 +2362,6 @@ mod tests {
                     "an <svg> inside an <svg> is not supported yet",
                 ),
                 (
-                    "<svg><path vectorEffect=\"non-scaling-stroke\" /></svg>",
-                    "<path> vectorEffect is not supported yet",
-                ),
-                (
                     "<svg><path fill-rule=\"evenodd\" /></svg>",
                     "write fillRule, not fill-rule",
                 ),

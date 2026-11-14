@@ -475,8 +475,6 @@ mod tests {
             e.starts_with("2:3: <foreignObject> is not supported: "),
             "{e}"
         );
-        let e = svg(r#"<circle r="2" vector-effect="non-scaling-stroke" />"#);
-        assert_eq!(e, "2:3: <circle> vector-effect is not supported yet");
         let e = svg("<svg />");
         assert_eq!(e, "2:3: an <svg> inside an <svg> is not supported yet");
         let e = svg("<clipPath><g /></clipPath>");
