@@ -530,38 +530,85 @@ impl Sheet {
     ) -> Result<(), Error> {
         const DEEPEST: usize = 8;
         const MOST: usize = 100_000;
-        let Some(svg::Element::Use { href, .. }) = style.svg.as_deref().map(|c| &c.element) else {
-            return Ok(());
-        };
         let place = &self.nodes[u].place;
         let tag = |i: usize| self.nodes[i].svg.as_ref().map(|g| g.tag);
-        let Some(&r) = ids.get(href) else {
-            return Err(format!("{place}: <use> href: #{href} names no element"));
+        let (r, pattern) = match style.svg.as_deref().map(|c| &c.element) {
+            Some(svg::Element::Use { href, .. }) => {
+                let r = ids
+                    .get(href)
+                    .copied()
+                    .ok_or_else(|| format!("{place}: <use> href: #{href} names no element"))?;
+                (r, false)
+            }
+            Some(svg::Element::Pattern(p)) if self.ends[u] as usize == u + 1 => {
+                let mut next = p.href.clone();
+                let mut visited = vec![u];
+                let mut source = None;
+                while let Some(id) = next {
+                    let Some(&n) = ids.get(&id) else {
+                        break;
+                    };
+                    if visited.contains(&n) {
+                        break;
+                    }
+                    visited.push(n);
+                    let Some(g) = &self.nodes[n].svg else {
+                        break;
+                    };
+                    let c = g.computed(frame)?;
+                    let svg::Element::Pattern(p) = &c.element else {
+                        break;
+                    };
+                    if self.ends[n] as usize > n + 1 {
+                        source = Some(n);
+                        break;
+                    }
+                    next = p.href.clone();
+                }
+                let Some(r) = source else {
+                    return Ok(());
+                };
+                (r, true)
+            }
+            _ => return Ok(()),
         };
-        let copies = matches!(
-            tag(r),
-            Some(
-                Tag::G
-                    | Tag::Text
-                    | Tag::Path
-                    | Tag::Circle
-                    | Tag::Ellipse
-                    | Tag::Rect
-                    | Tag::Line
-                    | Tag::Polyline
-                    | Tag::Polygon
-                    | Tag::Use
-                    | Tag::Symbol
-                    | Tag::Image
-            )
-        );
+        let copies = pattern
+            || matches!(
+                tag(r),
+                Some(
+                    Tag::G
+                        | Tag::Text
+                        | Tag::Path
+                        | Tag::Circle
+                        | Tag::Ellipse
+                        | Tag::Rect
+                        | Tag::Line
+                        | Tag::Polyline
+                        | Tag::Polygon
+                        | Tag::Use
+                        | Tag::Symbol
+                        | Tag::Image
+                )
+            );
         if !copies {
+            let href = match &style.svg.as_deref().unwrap().element {
+                svg::Element::Use { href, .. } => &**href,
+                _ => "",
+            };
             let name = tag(r).map_or("", Tag::name);
             return Err(format!(
                 "{place}: <use> href: #{href} names a <{name}>, which a <use> does not copy"
             ));
         }
         let end = self.ends[r] as usize;
+        let href = style
+            .svg
+            .as_deref()
+            .and_then(|c| match &c.element {
+                svg::Element::Use { href, .. } => Some(&**href),
+                _ => None,
+            })
+            .unwrap_or("");
         if (r..end).contains(&u) {
             return Err(format!(
                 "{place}: <use> href: #{href} holds the <use>, which would copy itself"
@@ -580,6 +627,12 @@ impl Sheet {
         }
         let mut styles: Vec<Style> = Vec::with_capacity(end - r);
         for n in r..end {
+            if pattern && n == r {
+                let mut root = style.clone();
+                root.instance = None;
+                styles.push(root);
+                continue;
+            }
             let parent = match self.parents[n] {
                 Some(p) if n > r => &styles[p as usize - r],
                 _ => &*style,
@@ -587,7 +640,7 @@ impl Sheet {
             let s = self.style(n, Some(parent), frame, 0)?;
             styles.push(s);
         }
-        for (k, s) in styles.iter_mut().enumerate() {
+        for (k, s) in styles.iter_mut().enumerate().skip(usize::from(pattern)) {
             self.instantiate(r + k, s, ids, frame, depth + 1, copied)?;
         }
         style.instance = Some(Rc::new(Instance { root: r, styles }));

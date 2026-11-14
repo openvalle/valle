@@ -209,6 +209,7 @@ pub(crate) mod paint {
                     blend,
                     items,
                 } => format!("group {opacity} {blend:?} {:?}", names(items)),
+                Item::Pattern { items, .. } => format!("pattern {:?}", names(items)),
                 Item::Clip { items, .. } => format!("clip {:?}", names(items)),
                 Item::Transform { items, .. } => format!("transform {:?}", names(items)),
                 Item::Cut { items, .. } => format!("cut {:?}", names(items)),

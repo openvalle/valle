@@ -211,13 +211,8 @@ pub fn shape(
             }
             for &root in &roots {
                 if (instance.root..instance.root + instance.styles.len()).contains(&root) {
-                    subtree(
-                        template,
-                        &mut copied,
-                        text,
-                        root,
-                        units(template, styles, root, &viewport),
-                    )?;
+                    let size = units(template, &copied, root, &viewport);
+                    subtree(template, &mut copied, text, root, size)?;
                 }
             }
             let mut instance = (*instance).clone();
@@ -254,9 +249,41 @@ fn units(
         .find(|(_, n)| n.children.contains(&(at as u32)))
     {
         if let Some(c) = styles[i].svg.as_deref() {
-            match c.element {
+            match &c.element {
                 Element::Svg { view_box, .. } | Element::Symbol { view_box, .. } => {
                     return view_box.map_or_else(|| viewport(i), |[_, _, w, h]| [w, h]);
+                }
+                Element::Pattern(p) => {
+                    let mut pattern = p;
+                    let mut seen = vec![i];
+                    let mut view_box = p.view_box;
+                    let mut content_user = p.content_user_space;
+                    while let Some(href) = &pattern.href {
+                        let Some((n, c)) = styles.iter().enumerate().find_map(|(n, s)| {
+                            s.svg
+                                .as_deref()
+                                .filter(|c| c.id.as_deref() == Some(href))
+                                .map(|c| (n, c))
+                        }) else {
+                            break;
+                        };
+                        if seen.contains(&n) {
+                            break;
+                        }
+                        seen.push(n);
+                        let Element::Pattern(p) = &c.element else {
+                            break;
+                        };
+                        view_box = view_box.or(p.view_box);
+                        content_user = content_user.or(p.content_user_space);
+                        pattern = p;
+                    }
+                    if let Some([_, _, w, h]) = view_box {
+                        return [w, h];
+                    }
+                    if content_user == Some(false) {
+                        return [1.0; 2];
+                    }
                 }
                 _ => {}
             }

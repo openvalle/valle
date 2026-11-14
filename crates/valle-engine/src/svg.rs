@@ -99,6 +99,7 @@ pub enum Element {
     Shape(Shape),
     Defs,
     Gradient(Gradient),
+    Pattern(Pattern),
     /// A gradient's stop, at an offset from 0 to 1.
     Stop(f64),
     /// A clip path: the shapes in it, in user units of the element it clips, or without
@@ -176,6 +177,18 @@ pub struct Gradient {
     pub user_space: Option<bool>,
     pub transform: Option<Matrix>,
     pub spread: Option<Spread>,
+}
+
+/// A pattern's optional attributes, inherited along local href references before defaults.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Pattern {
+    pub href: Option<Rc<str>>,
+    pub region: [Option<Length>; 4],
+    pub user_space: Option<bool>,
+    pub content_user_space: Option<bool>,
+    pub transform: Option<Matrix>,
+    pub view_box: Option<[f64; 4]>,
+    pub fit: Option<Fit>,
 }
 
 /// An element as its attributes have it at a frame.
@@ -275,6 +288,19 @@ fn own(tag: Tag) -> &'static [&'static str] {
     match tag {
         Tag::Svg => &["width", "height", "viewBox", "preserveAspectRatio"],
         Tag::G | Tag::Defs => &[],
+        Tag::Pattern => &[
+            "x",
+            "y",
+            "width",
+            "height",
+            "patternUnits",
+            "patternContentUnits",
+            "patternTransform",
+            "viewBox",
+            "preserveAspectRatio",
+            "href",
+            "xlinkHref",
+        ],
         Tag::Text | Tag::Tspan => &["x", "y", "dx", "dy", "rotate", "textLength", "lengthAdjust"],
         Tag::TextPath => &[
             "href",
@@ -368,7 +394,9 @@ pub fn holds(tag: Tag) -> Holds {
         Tag::Polygon,
     ];
     match tag {
-        Tag::Svg | Tag::G | Tag::Defs | Tag::Mask | Tag::Symbol | Tag::Marker => Holds::Any,
+        Tag::Svg | Tag::G | Tag::Defs | Tag::Mask | Tag::Symbol | Tag::Marker | Tag::Pattern => {
+            Holds::Any
+        }
         Tag::LinearGradient | Tag::RadialGradient => Holds::Only(&[Tag::Stop], "<stop>s"),
         Tag::ClipPath => Holds::Only(&SHAPES, "shapes"),
         Tag::Text | Tag::Tspan => Holds::Only(
@@ -510,6 +538,34 @@ pub fn computed(
                 closed: tag == Tag::Polygon,
             },
         }),
+        Tag::Pattern => {
+            let mut region = [None; 4];
+            for (slot, name) in region.iter_mut().zip(["x", "y", "width", "height"]) {
+                *slot = get(name).map(self::length).transpose()?;
+                if matches!(name, "width" | "height")
+                    && let Some(v) = slot
+                {
+                    v.nonnegative(name)?;
+                }
+            }
+            Element::Pattern(Pattern {
+                href: href()?,
+                region,
+                user_space: text("patternUnits")
+                    .map(|v| units(&v).map_err(at("patternUnits")))
+                    .transpose()?,
+                content_user_space: text("patternContentUnits")
+                    .map(|v| units(&v).map_err(at("patternContentUnits")))
+                    .transpose()?,
+                transform: text("patternTransform")
+                    .map(|v| self::transform(&v).map_err(at("patternTransform")))
+                    .transpose()?,
+                view_box: fitting()?.0,
+                fit: text("preserveAspectRatio")
+                    .map(|v| fit(&v).map_err(at("preserveAspectRatio")))
+                    .transpose()?,
+            })
+        }
         Tag::Defs => Element::Defs,
         Tag::LinearGradient | Tag::RadialGradient => {
             let radial = tag == Tag::RadialGradient;

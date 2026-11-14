@@ -190,6 +190,24 @@ group. The outer SVG isolates its contents from the page. CSS filter functions u
 SVG user units and follow the element's transform; `filter: "url(#id)"` and SVG
 `<filter>`/`<fe*>` definitions are not implemented.
 
+### SVG patterns
+
+Use `<pattern id="dots" width={20} height={20} patternUnits="userSpaceOnUse">`
+inside `<defs>`, then `fill="url(#dots)"` or `stroke="url(#dots)"`. Its children
+are ordinary SVG shapes, groups or text. Tiles repeat only across the painted shape.
+
+`x`, `y`, `width` and `height` describe one tile. `patternUnits` defaults to
+`"objectBoundingBox"` (fractions of the painted shape); `"userSpaceOnUse"` uses SVG
+user units. `patternContentUnits` defaults to `"userSpaceOnUse"` and can use
+`"objectBoundingBox"`. A `viewBox` and `preserveAspectRatio` fit the contents into
+the tile and override `patternContentUnits`. `patternTransform` transforms the
+whole repeated pattern. `href="#anotherPattern"` inherits missing attributes and,
+when empty, copies its children with the referencing pattern's inherited styles.
+Zero-sized tiles paint nothing; local reference cycles terminate without painting.
+Tiles clip their contents at the tile edges. The renderer rasterizes each tile once at
+its displayed density and wraps sampling across its edges; the tile texture is bounded
+by the output canvas size. Very large tiles can therefore lose fine detail.
+
 ### SVG text
 
 `<text>` sets a baseline position with `x` and `y`; `<tspan>` changes its font or

@@ -1415,6 +1415,86 @@ impl<'a> Renderer<'a> {
                         .extend([spread, space, shape, transform, first, count, 0, 0]);
                     extend(runs, Run::Gradients(i..i + 1));
                 }
+                Item::Pattern {
+                    rect,
+                    matrix: pattern,
+                    region: [x, y, w, h],
+                    opacity,
+                    items,
+                } => {
+                    if !runs.is_empty() {
+                        plan.steps.push(Step::Draw {
+                            target,
+                            runs: std::mem::take(runs),
+                        });
+                    }
+                    let pattern = matrix.times(*pattern);
+                    let Some(t) = plan.transform(pattern) else {
+                        continue;
+                    };
+                    // Rasterize a tile once at its displayed density. A layer is canvas-sized;
+                    // very large tiles fit that surface rather than allocating unbounded textures.
+                    let density = pattern.radius_scale();
+                    let pixels = [w, h].map(|v| (v * density).ceil().max(1.0));
+                    let pixels = [
+                        pixels[0].min(self.size[0] as f64),
+                        pixels[1].min(self.size[1] as f64),
+                    ];
+                    let tile_matrix =
+                        Matrix::affine([pixels[0] / w, 0.0, 0.0, pixels[1] / h, 0.0, 0.0]);
+                    let Some(tile_at) = plan.transform(tile_matrix) else {
+                        continue;
+                    };
+                    let layer = plan.layer();
+                    let seen = std::mem::replace(
+                        &mut plan.seen,
+                        Seen {
+                            here: Under {
+                                root: layer,
+                                open: Vec::new(),
+                            },
+                            group: Under {
+                                root: layer,
+                                open: Vec::new(),
+                            },
+                        },
+                    );
+                    self.reach(items, layer, (tile_at, tile_matrix), faces, plan, atlas)?;
+                    plan.seen = seen;
+                    let parameters = [
+                        t as f32,
+                        *x as f32,
+                        *y as f32,
+                        *w as f32,
+                        *h as f32,
+                        pixels[0] as f32,
+                        pixels[1] as f32,
+                    ];
+                    let repeated = plan.effect(layer, 7.0, &parameters);
+                    let reach = Reach::of(matrix, *rect).grown(1.0);
+                    plan.bounds[repeated] = reach;
+                    plan.reach = plan.reach.union(reach);
+                    let [width, height] = self.size.map(|s| s as f32);
+                    let at = plan.words(
+                        [
+                            *opacity,
+                            0.0,
+                            0.0,
+                            0.0,
+                            -1.0,
+                            -1.0,
+                            width + 2.0,
+                            height + 2.0,
+                        ]
+                        .into_iter()
+                        .chain([0.0; 12]),
+                    );
+                    plan.steps.push(Step::Composite {
+                        target,
+                        layer: repeated,
+                        at,
+                    });
+                }
                 Item::Image {
                     rect,
                     radii,

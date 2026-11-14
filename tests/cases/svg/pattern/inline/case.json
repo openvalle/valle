@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/pservers.html#Patterns",
+  "assertion": "Patterns repeat vector contents in user and object bounding box coordinates, fit a viewBox, transform and inherit referenced tiles, and paint fills and strokes.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Three browsers agree on tile geometry, offsets, viewBox letterboxing and stroke coverage. Reviewed actual and difference images: 2447 changed pixels lie on shape contours, maximum 40 channels. Explicit child fill avoids the documented SVG 2 shadow-inheritance browser discrepancy.",
+    "pixels": {
+      "maxDifference": 42,
+      "maxPixels": 2500
+    }
+  }
+}

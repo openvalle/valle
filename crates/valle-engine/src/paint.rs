@@ -132,6 +132,15 @@ pub enum Item {
         blend: Blend,
         items: Vec<Item>,
     },
+    /// One SVG pattern tile, repeated over `rect` in the space of `matrix`. Tile edges
+    /// wrap during sampling, so adjacent tiles do not acquire antialiasing seams.
+    Pattern {
+        rect: Rect,
+        matrix: Matrix,
+        region: [f64; 4],
+        opacity: f32,
+        items: Vec<Item>,
+    },
     /// Items in px that `matrix` takes to the px around them.
     Transform { matrix: Matrix, items: Vec<Item> },
     /// Items drawn as one image through `filters`, one after another, onto what is under them.

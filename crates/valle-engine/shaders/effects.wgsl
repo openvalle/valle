@@ -200,9 +200,26 @@ fn light(p: vec2f, threshold: f32, knee: f32, intensity: f32) -> vec4f {
   return vec4f(lit * intensity, min(max(lit.r, max(lit.g, lit.b)), 1.0));
 }
 
+// Tile texels wrap independently on both axes, including the bilinear footprint
+// across a tile boundary. Clipping each repeated vector tile would leave AA seams.
+fn pattern_texel(p: vec2<i32>, size: vec2<i32>) -> vec4f {
+  return texel(((p % size) + size) % size);
+}
+
+fn pattern(p: vec2f, t: u32, origin: vec2f, extent: vec2f, size: vec2f) -> vec4f {
+  let q = (local(p, t) - origin) / extent * size - 0.5;
+  let f = floor(q);
+  let a = vec2<i32>(f);
+  let b = vec2<i32>(size);
+  let top = mix(pattern_texel(a, b), pattern_texel(a + vec2<i32>(1, 0), b), q.x - f.x);
+  let bottom = mix(pattern_texel(a + vec2<i32>(0, 1), b), pattern_texel(a + vec2<i32>(1, 1), b), q.x - f.x);
+  return mix(top, bottom, q.y - f.y);
+}
+
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let e = effects[in.index];
   let kind = u32(e.head.x);
+  if (kind == 7u) { return pattern(in.pos.xy, u32(e.head.y), e.head.zw, e.more[0].xy, e.more[0].zw); }
   if (kind == 1u) {
     return lens(in.pos.xy, u32(e.head.y), e.head.zw, e.more[0]);
   }

@@ -1,0 +1,44 @@
+<!doctype html><meta charset="utf-8" /><title>SVG pattern</title
+><style>
+  body {
+    margin: 0;
+  }
+  #canvas {
+    width: 300px;
+    height: 210px;
+    background: white;
+  }
+  svg,
+  img {
+    display: block;
+  }
+</style>
+<div id="canvas">
+  <svg xmlns="http://www.w3.org/2000/svg" width="300" height="210" viewBox="0 0 300 210">
+    <defs>
+      <pattern id="p" width="20" height="20" patternUnits="userSpaceOnUse">
+        <rect width="20" height="20" fill="#e0f2fe" />
+        <circle cx="10" cy="10" r="5" fill="#0284c7" />
+      </pattern>
+      <pattern id="offset" href="#p" x="7" y="3" patternTransform="rotate(15)" />
+      <pattern id="bbox" width="0.25" height="0.5" patternContentUnits="objectBoundingBox">
+        <rect width="0.25" height="0.5" fill="#fef3c7" />
+        <circle cx="0.125" cy="0.25" r="0.06" fill="#d97706" />
+      </pattern>
+      <pattern id="vb" width="0.25" height="0.5" viewBox="0 0 10 10">
+        <path d="M0 0H10V10H0Z" fill="#dcfce7" />
+        <path d="M0 0L10 10M10 0L0 10" stroke="#16a34a" stroke-width="2" />
+      </pattern>
+      <pattern id="inherit" width="18" height="18" patternUnits="userSpaceOnUse" fill="#ef4444">
+        <rect width="8" height="8" fill="#7c3aed" />
+      </pattern>
+      <pattern id="copy" href="#inherit" fill="#7c3aed" />
+    </defs>
+    <rect x="10" y="10" width="80" height="80" fill="url(#p)" />
+    <rect x="110" y="10" width="80" height="80" fill="url(#offset)" />
+    <rect x="210" y="10" width="80" height="80" fill="url(#bbox)" />
+    <rect x="10" y="110" width="80" height="80" fill="url(#vb)" />
+    <circle cx="150" cy="150" r="32" fill="none" stroke="url(#p)" stroke-width="14" />
+    <rect x="210" y="110" width="80" height="80" fill="url(#copy)" fill-opacity="0.7" />
+  </svg>
+</div>

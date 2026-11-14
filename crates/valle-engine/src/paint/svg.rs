@@ -268,7 +268,7 @@ impl<'a> Drawing<'a> {
                 let length = |l: &Calc| f64::from(l.resolve(diagonal));
                 let width = length(&k.width);
                 let mut stroke = self
-                    .paint(&k.paint, k.opacity, s, size, bbox)
+                    .paint(&k.paint, k.opacity, s, size, bbox, matrix)
                     .and_then(|paint| {
                         let pen = svg::Pen {
                             width,
@@ -286,7 +286,7 @@ impl<'a> Drawing<'a> {
                         painted(outline, false, paint, cover, scale)
                     });
                 let mut markers = self.markers(s, shape, &path, width, size, matrix);
-                let fill = self.paint(&s.fill, s.fill_opacity, s, size, bbox);
+                let fill = self.paint(&s.fill, s.fill_opacity, s, size, bbox, matrix);
                 let mut fill = fill.and_then(|f| {
                     // Solid ellipses share one outline. Their center and radii belong to their
                     // transform, so a dot field does not encode a new path at every position.
@@ -338,6 +338,7 @@ impl<'a> Drawing<'a> {
             | Element::Shape(_)
             | Element::Image { .. }
             | Element::Defs
+            | Element::Pattern(_)
             | Element::Gradient(_)
             | Element::Stop(_)
             | Element::ClipPath { .. }
@@ -878,12 +879,21 @@ impl<'a> Drawing<'a> {
         s: &Style,
         size: [f64; 2],
         bbox: [f64; 4],
+        parent: Matrix,
     ) -> Option<Fill> {
         let mut color = match paint {
             Paint::None => return None,
             Paint::Color(c) => *c,
             Paint::CurrentColor => s.color,
             Paint::Url(id) => {
+                if self.ids.get(&**id).is_some_and(|&n| {
+                    matches!(
+                        self.styles[n].svg.as_deref().map(|s| &s.element),
+                        Some(Element::Pattern(_))
+                    )
+                }) {
+                    return self.pattern(id, size, bbox, parent, opacity);
+                }
                 let (mut ramp, matrix) = self.gradient(id, size, bbox)?;
                 let colors = ramp.segments.iter_mut().flat_map(|s| &mut s.colors);
                 colors.for_each(|c| c[3] *= opacity as f32);
@@ -893,6 +903,105 @@ impl<'a> Drawing<'a> {
         };
         color[3] *= opacity;
         (color[3] > 0.0).then(|| Fill::Color(work(color)))
+    }
+
+    /// Resolve one pattern tile; only the tiles intersecting a painted path are repeated.
+    fn pattern(
+        &self,
+        id: &str,
+        size: [f64; 2],
+        bbox: [f64; 4],
+        parent: Matrix,
+        opacity: f64,
+    ) -> Option<Fill> {
+        let &root = self.ids.get(id)?;
+        if self.resources.borrow().contains(&root) {
+            return None;
+        }
+        let (mut next, mut visited, mut children) = (Some(root), Vec::new(), None);
+        let mut p = svg::Pattern::default();
+        while let Some(n) = next {
+            if visited.contains(&n) {
+                break;
+            }
+            visited.push(n);
+            let Element::Pattern(from) = &self.styles[n].svg.as_deref()?.element else {
+                break;
+            };
+            for k in 0..4 {
+                p.region[k] = p.region[k].or(from.region[k]);
+            }
+            p.user_space = p.user_space.or(from.user_space);
+            p.content_user_space = p.content_user_space.or(from.content_user_space);
+            p.transform = p.transform.or(from.transform);
+            p.view_box = p.view_box.or(from.view_box);
+            p.fit = p.fit.or(from.fit);
+            if children.is_none() && !self.template.nodes[n].children.is_empty() {
+                children = Some(n);
+            }
+            next = from.href.as_ref().and_then(|h| self.ids.get(&**h).copied());
+        }
+        let children = children?;
+        let user = p.user_space.unwrap_or(false);
+        let content_user = p.content_user_space.unwrap_or(true);
+        let basis = if user { size } else { [1.0; 2] };
+        let [x, y, w, h] =
+            std::array::from_fn(|k| p.region[k].unwrap_or_default().resolve(basis[k % 2]));
+        if w <= 0.0 || h <= 0.0 || (!user || !content_user) && (bbox[2] <= 0.0 || bbox[3] <= 0.0) {
+            return None;
+        }
+        let base = if user {
+            Matrix::IDENTITY
+        } else {
+            svg::fractions(bbox)
+        };
+        let matrix = base.times(p.transform.unwrap_or(Matrix::IDENTITY));
+        let (content, units) = if let Some(b) = p.view_box {
+            if b[2] <= 0.0 || b[3] <= 0.0 {
+                return None;
+            }
+            let fit = p.fit.unwrap_or(svg::Fit {
+                align: Some([0.5; 2]),
+                slice: false,
+            });
+            (svg::viewport(b, fit, [w, h]), [b[2], b[3]])
+        } else {
+            let scales = match (user, content_user) {
+                (true, false) => [bbox[2], bbox[3]],
+                (false, true) => [1.0 / bbox[2], 1.0 / bbox[3]],
+                _ => [1.0; 2],
+            };
+            (
+                Matrix::affine([scales[0], 0.0, 0.0, scales[1], 0.0, 0.0]),
+                if content_user { size } else { [1.0; 2] },
+            )
+        };
+        let mut items = Vec::new();
+        let copy = self.styles[root].instance.as_deref();
+        self.resources.borrow_mut().push(root);
+        for &child in &self.template.nodes[children].children {
+            self.element(
+                child as usize,
+                units,
+                parent.times(matrix).times(content),
+                &mut items,
+                copy,
+            );
+        }
+        self.resources.borrow_mut().pop();
+        if items.is_empty() {
+            return None;
+        }
+        let tile = Item::Transform {
+            matrix: content,
+            items,
+        };
+        Some(Fill::Pattern {
+            tile: Box::new(tile),
+            matrix,
+            region: [x, y, w, h],
+            opacity: opacity as f32,
+        })
     }
 
     /// Gradient `id` over a shape's bounding box `bbox`, in a viewport `size` user units big,
@@ -966,6 +1075,12 @@ fn rect([x, y, width, height]: [f64; 4]) -> Rect {
 enum Fill {
     Color([f32; 4]),
     Ramp(Ramp, Matrix),
+    Pattern {
+        tile: Box<Item>,
+        matrix: Matrix,
+        region: [f64; 4],
+        opacity: f32,
+    },
 }
 
 /// `path` filled with `fill`: a ramp over the path's bounding box `cover`, in the space it is
@@ -980,6 +1095,27 @@ fn painted(path: Path, even_odd: bool, fill: Fill, cover: [f64; 4], scale: f64) 
             });
         }
         Fill::Ramp(ramp, matrix) => (ramp, matrix),
+        Fill::Pattern {
+            tile,
+            matrix,
+            region: [x, y, w, h],
+            opacity,
+        } => {
+            return Some(Item::Mask {
+                mask: vec![Item::Path {
+                    path,
+                    even_odd,
+                    color: [1.0; 4],
+                }],
+                items: vec![Item::Pattern {
+                    rect: rect(cover),
+                    matrix,
+                    region: [x, y, w, h],
+                    opacity,
+                    items: vec![*tile],
+                }],
+            });
+        }
     };
     let margin = 2.0 / scale.max(1e-9);
     let [x, y, w, h] = cover;
@@ -1023,6 +1159,94 @@ mod tests {
     use crate::front::Inputs;
     use crate::scene::Scene;
     use crate::time::Tick;
+
+    #[test]
+    fn pattern_tiles_follow_geometry_on_backward_seeks() {
+        let source = indoc::indoc! {r##"
+            export const composition = { width: 120, height: 80, fps: 4, duration: 2 };
+            export default function Scene() {
+              const { seconds } = useCurrentTime();
+              return <svg width={120} height={80}><defs>
+                <pattern id="p" patternUnits="userSpaceOnUse" width={10+seconds*5} height={20}
+                  patternTransform={`rotate(${seconds*30})`}>
+                  <circle cx={5} cy={10} r={3} fill="red"/>
+                </pattern></defs><rect width={120} height={80} fill="url(#p)"/></svg>;
+            }
+        "##};
+        let load = || {
+            Scene::load(
+                "pattern.motion.tsx",
+                &|_| Some(source.as_bytes().to_vec()),
+                &Inputs::default(),
+                crate::testing::fonts(),
+            )
+            .unwrap()
+        };
+        let mut scene = load();
+        for frame in [0, 5, 2, 7, 0] {
+            let at = Tick::from_seconds(frame as f64 / 4.0).unwrap();
+            assert_eq!(
+                scene.frame(at).unwrap().items,
+                load().frame(at).unwrap().items
+            );
+        }
+    }
+
+    #[test]
+    fn patterns_resolve_coordinates_references_and_cycles() {
+        let xml = indoc::indoc! {r##"<svg xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <pattern id="base" width="0.25" height="0.5" patternContentUnits="objectBoundingBox"><rect width="0.1" height="0.2"/></pattern>
+            <pattern id="copy" href="#base" fill="red" x="0.1" patternTransform="translate(0.2 0)"/>
+            <pattern id="empty" width="0" height="1"><rect width="1" height="1"/></pattern>
+            <pattern id="a" href="#b"/><pattern id="b" href="#a"/>
+            <pattern id="recursive" width="10" height="10" patternUnits="userSpaceOnUse"><rect width="10" height="10" fill="url(#recursive)"/></pattern>
+          </defs>
+        </svg>"##};
+        let doc = Document::parse(xml, &mut Vec::new()).unwrap();
+        let cache = Cache::default();
+        let drawing = Drawing::new(&doc.template, &doc.styles, &[], &cache);
+        let instance = doc.styles[drawing.ids["copy"]].instance.as_ref().unwrap();
+        assert_eq!(
+            instance.styles[1].fill,
+            Paint::Color(color::parse("red").unwrap())
+        );
+        let resolve = |id| {
+            drawing.pattern(
+                id,
+                [300.0, 200.0],
+                [10.0, 20.0, 80.0, 60.0],
+                Matrix::IDENTITY,
+                1.0,
+            )
+        };
+        let Some(Fill::Pattern { matrix, region, .. }) = resolve("copy") else {
+            panic!("missing referenced pattern")
+        };
+        assert!(
+            region
+                .into_iter()
+                .zip([0.1, 0.0, 0.25, 0.5])
+                .all(|(a, b)| (a - b).abs() < 1e-6)
+        );
+        assert!(
+            matrix
+                .apply([0.0, 0.0])
+                .into_iter()
+                .zip([26.0, 20.0])
+                .all(|(a, b)| (a - b).abs() < 1e-5)
+        );
+        assert!(
+            matrix
+                .apply([1.0, 1.0])
+                .into_iter()
+                .zip([106.0, 80.0])
+                .all(|(a, b)| (a - b).abs() < 1e-5)
+        );
+        for id in ["empty", "a", "recursive"] {
+            assert!(resolve(id).is_none(), "{id}");
+        }
+    }
 
     #[test]
     fn non_scaling_strokes_use_viewport_geometry_without_inheritance() {
