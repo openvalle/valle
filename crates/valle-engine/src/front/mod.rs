@@ -854,6 +854,99 @@ mod tests {
     }
 
     #[test]
+    fn traced_operators_keep_signed_zero_and_variant_clocks() {
+        big_stack(|| {
+            let mut f = scene(indoc! {r#"
+                export default function Scene() {
+                  const { seconds: t } = useCurrentTime();
+                  const a = t * 0;
+                  const b = t * -0;
+                  const c = t / 0;
+                  const d = t / -0;
+                  const shared = `${t + 1}:${t + 1}`;
+                  if (t < 1) return <Text>{`${1 / a}|${1 / b}|${c}|${d}|${shared}:early`}</Text>;
+                  return <Text>{`${1 / a}|${1 / b}|${c}|${d}|${shared}:late`}</Text>;
+                }
+            "#});
+            for (time, expected) in [
+                ("0", "Infinity|-Infinity|NaN|NaN|1:1:early"),
+                ("0.5", "Infinity|-Infinity|Infinity|-Infinity|1.5:1.5:early"),
+                ("2", "Infinity|-Infinity|Infinity|-Infinity|3:3:late"),
+                ("0", "Infinity|-Infinity|NaN|NaN|1:1:early"),
+            ] {
+                assert_eq!(texts(&at(&mut f, time)), [expected]);
+            }
+            assert_eq!(f.traces(), 2);
+        });
+    }
+
+    #[test]
+    fn traced_operators_survive_speculative_map_fallback() {
+        big_stack(|| {
+            let mut f = scene(indoc! {r#"
+                export default function Scene() {
+                  const { seconds: t } = useCurrentTime();
+                  return <View>
+                    {[0,1,2].map(i => <View style={{position:'absolute',left:t+i,top:0,width:8,height:8,margin:0}}/>)}
+                    {[0,1,2].map(i => <View style={{position:'absolute',left:t+i,top:20,width:8,height:8}}/>)}
+                    <Text>{`${t+1}:${(t+1)*2}`}</Text>
+                  </View>;
+                }
+            "#});
+            for (time, expected) in [("0", "1:2"), ("1", "2:4"), ("0", "1:2")] {
+                let frame = at(&mut f, time);
+                assert_eq!(texts(&frame), [expected]);
+                let t: f64 = time.parse().unwrap();
+                for i in 0..3 {
+                    assert_eq!(style(&frame, i + 1, "left"), V::Num(t + i as f64));
+                }
+                assert!(
+                    frame
+                        .template
+                        .instances
+                        .iter()
+                        .any(|(_, t)| t.formula.is_some())
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn concrete_trace_operators_match_frame_values_at_numeric_edges() {
+        big_stack(|| {
+            let mut f = scene(indoc! {r#"
+                export default function Scene() {
+                  const { seconds: t } = useCurrentTime();
+                  const values = [-0, 0, -1, 1, 0.1, 5e-324, 1e-300, 1.7976931348623157e308, Infinity, -Infinity, NaN].map(x => x*t);
+                  for (const a of values) for (const b of values) {
+                    // Number() records the concrete traced operand in an exact-value guard.
+                    Number(a+b); Number(a-b); Number(a*b); Number(a/b); Number(a%b);
+                    Number(-a); Number(a<b); Number(a<=b); Number(a>b); Number(a>=b);
+                    Number(a===b); Number(a!==b); Number(a ? b : a);
+                  }
+                  return <Text>ok</Text>;
+                }
+            "#});
+            for time in ["1", "2", "0"] {
+                let frame = at(&mut f, time);
+                let mut checked = 0;
+                for guard in &frame.template.guards {
+                    if let crate::template::Want::Eq(v) = &guard.want {
+                        let actual = &frame.values[guard.expr as usize];
+                        match (actual, v) {
+                            (V::Num(a), V::Num(b)) if a.is_nan() && b.is_nan() => {}
+                            (V::Num(a), V::Num(b)) => assert_eq!(a.to_bits(), b.to_bits()),
+                            _ => assert_eq!(actual, v),
+                        }
+                        checked += 1;
+                    }
+                }
+                assert!(checked >= 1500, "{checked}");
+            }
+        });
+    }
+
+    #[test]
     fn recording_is_cleared_after_serialization_and_lowering_errors() {
         big_stack(|| {
             let mut f = scene(indoc! {r#"

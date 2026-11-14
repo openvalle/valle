@@ -49,17 +49,53 @@
   // ------------------------------------------------------------------------------ traced values
 
   // `late`: known only after layout, as it reads a box (`bounds()`).
-  function T(op, args, v, late) {
+  function T(op, args, v, late, row = false) {
     this[TRACE_INDEX] = nextValue++;
     this.op = op;
     this.args = freeze(args);
     this.v = v;
     this.late = late;
-    this.row = op === "row" || args.some((a) => a instanceof T && a.row);
+    this.row = row;
     freeze(this);
   }
   const isT = (x) => x instanceof T;
   const val = (x) => (x instanceof T ? x.v : x);
+
+  // Basic scalar operators have the same IEEE-754/JavaScript semantics in QuickJS and Rust.
+  // Keep them here while tracing instead of allocating and parsing a host call for each one.
+  // Math (including pow), formatting and checked built-ins still use the shared Rust evaluator.
+  function evaluate(op, args) {
+    switch (op) {
+      case "add":
+        return val(args[0]) + val(args[1]);
+      case "sub":
+        return val(args[0]) - val(args[1]);
+      case "mul":
+        return val(args[0]) * val(args[1]);
+      case "div":
+        return val(args[0]) / val(args[1]);
+      case "rem":
+        return val(args[0]) % val(args[1]);
+      case "neg":
+        return -val(args[0]);
+      case "lt":
+        return val(args[0]) < val(args[1]);
+      case "le":
+        return val(args[0]) <= val(args[1]);
+      case "gt":
+        return val(args[0]) > val(args[1]);
+      case "ge":
+        return val(args[0]) >= val(args[1]);
+      case "eq":
+        return val(args[0]) === val(args[1]);
+      case "ne":
+        return val(args[0]) !== val(args[1]);
+      case "select":
+        return val(args[0]) ? val(args[1]) : val(args[2]);
+      default:
+        return host.op(op, args.map(val));
+    }
+  }
 
   function mk(op, args) {
     if (++G.ops > MAX_OPS) {
@@ -69,16 +105,24 @@
           " values that depend on the time, such as from a loop that adds to one every turn",
       );
     }
-    const late = op.startsWith("bounds|") || args.some((a) => a instanceof T && a.late);
-    if (!late) return new T(op, args, host.op(op, args.map(val)), false);
+    let late = op.startsWith("bounds|");
+    let row = false;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (a instanceof T) {
+        late ||= a.late;
+        row ||= a.row;
+      }
+    }
+    if (!late) return new T(op, args, evaluate(op, args), false, row);
     // While tracing a box measures 0; what fails on such boxes waits for layout as NaN.
     let v;
     try {
-      v = host.op(op, args.map(val));
+      v = evaluate(op, args);
     } catch {
       v = NaN;
     }
-    return new T(op, args, v, true);
+    return new T(op, args, v, true, row);
   }
 
   const plain = (x) => {
@@ -499,7 +543,7 @@
       rows.push([...values, i]);
     }
     const saved = [G.ops, nextValue, G.guards.length, G.joinTemplates];
-    const parameters = rows[0].map((v, i) => new T("row", [i], v, false));
+    const parameters = rows[0].map((v, i) => new T("row", [i], v, false, true));
     const item = object
       ? Object.fromEntries(fields.map((k, i) => [k, parameters[i]]))
       : parameters[0];
