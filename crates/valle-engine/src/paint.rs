@@ -1893,6 +1893,13 @@ impl Painter<'_> {
         if items.is_empty() {
             return;
         }
+        if svg::needs_isolation(&items) {
+            items = vec![Item::Group {
+                opacity: 1.0,
+                blend: Blend::Normal,
+                items,
+            }];
+        }
         let mut item = Item::Transform { matrix, items };
         if self.clipping(i) {
             item = Item::Clip {

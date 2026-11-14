@@ -178,6 +178,13 @@ its own center; `"stroke-box"` includes its stroke, and `"view-box"` uses the SV
 viewport. On SVG children, `"content-box"` means `"fill-box"` and `"border-box"`
 means `"stroke-box"`. Values can be time expressions, just like other styles.
 
+SVG shapes and groups also accept `filter`, `mixBlendMode` and `isolation`. A filter
+processes the whole element/group before its clip path and mask; opacity and blending
+then apply to that result. `isolation: "isolate"` keeps descendant blends inside the
+group. The outer SVG isolates its contents from the page. CSS filter functions use
+SVG user units and follow the element's transform; `filter: "url(#id)"` and SVG
+`<filter>`/`<fe*>` definitions are not implemented.
+
 ## Valle filters
 
 Use these in `style.filter` for the element and its children, or `style.backdropFilter`

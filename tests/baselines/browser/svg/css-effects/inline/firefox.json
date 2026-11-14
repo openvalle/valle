@@ -1,0 +1,10 @@
+{
+  "size": [320, 220],
+  "sources": {
+    "tests/baselines/browser/svg/css-effects/inline/scene.html": "f27c6b08fb593c36ff584769b476da5892c59b9ac48913fe4fc0f55b5571354e"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

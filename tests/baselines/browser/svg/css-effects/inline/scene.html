@@ -1,0 +1,52 @@
+<!doctype html><meta charset="utf-8" /><title>SVG css-effects</title
+><style>
+  body {
+    margin: 0;
+  }
+  #canvas {
+    width: 320px;
+    height: 220px;
+    background: #dae9dd;
+  }
+  svg,
+  img {
+    display: block;
+  }
+</style>
+<div id="canvas">
+  <svg xmlns="http://www.w3.org/2000/svg" width="320" height="220" viewBox="0 0 320 220">
+    <defs>
+      <clipPath id="clip"><rect x="205" y="115" width="80" height="75" rx="12" /></clipPath>
+      <mask id="mask" maskUnits="userSpaceOnUse" x="205" y="115" width="80" height="75">
+        <rect x="205" y="115" width="80" height="75" fill="white" />
+        <circle cx="250" cy="150" r="12" fill="black" />
+      </mask>
+    </defs>
+    <rect x="10" y="10" width="80" height="70" fill="#51b9db" />
+    <g style="mix-blend-mode: multiply">
+      <circle cx="50" cy="45" r="25" fill="#f25f5c" />
+    </g>
+    <rect x="110" y="10" width="80" height="70" fill="#51b9db" />
+    <g style="isolation: isolate">
+      <circle cx="150" cy="45" r="25" fill="#f25f5c" style="mix-blend-mode: multiply" />
+    </g>
+    <circle cx="260" cy="45" r="25" fill="#f25f5c" style="mix-blend-mode: multiply" />
+    <g style="opacity: 0.6; filter: blur(2px)">
+      <rect x="15" y="120" width="35" height="40" fill="#3874cb" />
+      <rect x="35" y="135" width="35" height="40" fill="#e1bc29" style="mix-blend-mode: multiply" />
+    </g>
+    <path
+      d="M115 130L160 115L170 165Z"
+      fill="#a04eb5"
+      style="filter: drop-shadow(4px 6px 2px #28415a) saturate(0.5); transform: translate(0px, 5px)"
+    />
+    <g
+      clip-path="url(#clip)"
+      mask="url(#mask)"
+      style="opacity: 0.7; filter: blur(3px); mix-blend-mode: multiply"
+    >
+      <rect x="195" y="105" width="100" height="90" fill="#58a47e" />
+      <rect x="240" y="130" width="50" height="55" fill="#de7575" />
+    </g>
+  </svg>
+</div>

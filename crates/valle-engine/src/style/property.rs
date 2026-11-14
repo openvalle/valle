@@ -709,7 +709,10 @@ impl Field {
     pub(super) fn drawn_in_svg(self) -> bool {
         matches!(
             self,
-            Field::Transform
+            Field::Filter
+                | Field::MixBlendMode
+                | Field::Isolation
+                | Field::Transform
                 | Field::TransformOrigin
                 | Field::TransformBox
                 | Field::Translate

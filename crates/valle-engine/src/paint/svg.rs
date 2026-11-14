@@ -323,6 +323,13 @@ impl<'a> Drawing<'a> {
         if items.is_empty() {
             return;
         }
+        if !s.filter.is_empty() {
+            let frame = rect(self.bbox(i, size, copy).unwrap_or([0.0; 4]));
+            items = vec![Item::Filter {
+                filters: super::filters(&s.filter, frame),
+                items,
+            }];
+        }
         for (id, clips) in [(&s.mask_ref, false), (&s.clip_ref, true)] {
             let Some(id) = id.as_deref() else {
                 continue;
@@ -339,10 +346,14 @@ impl<'a> Drawing<'a> {
                 items,
             }];
         }
-        if s.opacity < 1.0 {
+        if s.opacity < 1.0
+            || s.blend != Blend::Normal
+            || s.isolate
+            || matches!(c.element, Element::Svg { .. }) && needs_isolation(&items)
+        {
             items = vec![Item::Group {
                 opacity: s.opacity as f32,
-                blend: Blend::Normal,
+                blend: s.blend,
                 items,
             }];
         }
@@ -870,6 +881,18 @@ impl<'a> Drawing<'a> {
     }
 }
 
+/// An outer SVG is an isolated group. Only allocate that layer when a blend can read past
+/// it: filters, masks and existing normal groups already isolate their descendants.
+pub(super) fn needs_isolation(items: &[Item]) -> bool {
+    items.iter().any(|item| match item {
+        Item::Group { blend, .. } => *blend != Blend::Normal,
+        Item::Transform { items, .. } | Item::Clip { items, .. } | Item::Cut { items, .. } => {
+            needs_isolation(items)
+        }
+        _ => false,
+    })
+}
+
 /// The bounding box of `[x, y, width, height]` through `m`.
 fn mapped(m: Matrix, b: [f64; 4]) -> [f64; 4] {
     let r = m.bounds(rect(b));
@@ -947,6 +970,53 @@ mod tests {
     use crate::front::Inputs;
     use crate::scene::Scene;
     use crate::time::Tick;
+
+    #[test]
+    fn svg_effects_keep_filter_inside_mask_and_opacity() {
+        let xml = indoc::indoc! {r#"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80">
+          <defs><clipPath id="c"><rect width="30" height="30" /></clipPath></defs>
+          <g id="effect" opacity="0.5" clip-path="url(#c)"
+             style="filter: blur(2px); mix-blend-mode: multiply; isolation: isolate">
+            <rect width="40" height="40" fill="red" />
+          </g>
+        </svg>"#};
+        let doc = Document::parse(xml, &mut Vec::new()).unwrap();
+        let cache = Cache::default();
+        let drawing = Drawing::new(&doc.template, &doc.styles, &[], &cache);
+        let mut items = Vec::new();
+        drawing.element(
+            drawing.ids["effect"],
+            [80.0; 2],
+            Matrix::IDENTITY,
+            &mut items,
+            None,
+        );
+        let [
+            Item::Group {
+                opacity,
+                blend,
+                items,
+            },
+        ] = items.as_slice()
+        else {
+            panic!("{items:?}")
+        };
+        assert_eq!((*opacity, *blend), (0.5, Blend::Multiply));
+        let [Item::Mask { items, .. }] = items.as_slice() else {
+            panic!("{items:?}")
+        };
+        assert!(matches!(items.as_slice(), [Item::Filter { .. }]));
+        assert!(needs_isolation(&[Item::Group {
+            opacity: 1.0,
+            blend: Blend::Multiply,
+            items: vec![]
+        }]));
+        assert!(!needs_isolation(&[Item::Group {
+            opacity: 1.0,
+            blend: Blend::Normal,
+            items: vec![]
+        }]));
+    }
 
     #[test]
     fn css_transforms_use_svg_reference_boxes_and_override_attributes() {

@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/compositing-1/#isolation",
+  "assertion": "SVG filters operate on the group before clipping and masking; opacity and blending apply to that result. Isolation contains descendant blends and the outer SVG isolates its contents from the page.",
+  "at": [0],
+  "browser": {
+    "selected": "firefox",
+    "reason": "Compositing 1 sections 3.3 and 8.3 define the SVG root as isolated. Firefox follows that interpretation for both input paths; Chrome blends inline SVG with the page, but isolates SVG images. WebKit also differs in SVG CSS filter handling. Reviewed differences from Firefox are filter/alpha rounding (most within 2 channels) and antialiased curved edges, maximum 22 channels. Solid regions and group ordering match.",
+    "pixels": {
+      "maxDifference": 24,
+      "maxPixels": 11400
+    }
+  }
+}
