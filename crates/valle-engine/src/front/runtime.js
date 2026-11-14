@@ -2531,7 +2531,21 @@
       }
       if ("tag" in n) {
         out.tag = n.tag;
-        out.attributes = n.attributes.map(([k, v]) => [k, ref(v)]);
+        out.attributes = [];
+        for (const [k, v] of n.attributes) {
+          // Keep the authored string's pieces until geometry consumes them. A private
+          // template need not become a string in every frame just to be parsed again.
+          const parts =
+            (k === "d" || k === "points") && v instanceof T && v.op === "template"
+              ? operands(v)
+              : null;
+          const syntax = k === "d" ? /^[ML0-9eE+.,\s-]*$/ : /^[0-9eE+.,\s-]*$/;
+          if (parts && parts.every((p) => p instanceof T || syntax.test(p.text))) {
+            out.geometry = parts.map((p) => (p instanceof T ? ref(p) : { c: p.text }));
+          } else {
+            out.attributes.push([k, ref(v)]);
+          }
+        }
       }
       out.children = n.children.map(node);
       if ("content" in n) {

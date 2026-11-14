@@ -2,6 +2,9 @@
 //! viewBox puts them in its box, and the outlines of strokes.
 
 pub mod file;
+mod template;
+
+pub(crate) use template::Template;
 
 use std::rc::Rc;
 
@@ -376,8 +379,12 @@ pub fn tables() -> String {
 }
 
 /// The element `tag` as these attribute values have it; presentation attributes are left to the
-/// style.
-pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String> {
+/// style. A compiled string template can supply the same shape without formatting it first.
+pub fn computed(
+    tag: Tag,
+    attributes: &[(&str, &V)],
+    shape: Option<Result<Shape, String>>,
+) -> Result<Computed, String> {
     let get = |name: &str| (attributes.iter()).find_map(|(n, v)| (*n == name).then_some(*v));
     let length = |name: &str| -> Result<Length, String> {
         get(name).map_or(Ok(Length::default()), |v| self::length(v).map_err(at(name)))
@@ -413,13 +420,16 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
             Element::Svg { view_box, fit }
         }
         Tag::G => Element::G,
-        Tag::Path => {
-            let (path, ends) = match text("d") {
-                Some(d) if !d.trim().is_empty() => path::commands(&d).map_err(at("d"))?,
-                _ => (Path::default(), Vec::new()),
-            };
-            Element::Shape(Shape::Path { path, ends })
-        }
+        Tag::Path => Element::Shape(match shape {
+            Some(shape) => shape?,
+            None => {
+                let (path, ends) = match text("d") {
+                    Some(d) if !d.trim().is_empty() => path::commands(&d).map_err(at("d"))?,
+                    _ => (Path::default(), Vec::new()),
+                };
+                Shape::Path { path, ends }
+            }
+        }),
         Tag::Circle => Element::Shape(Shape::Circle {
             center: [length("cx")?, length("cy")?],
             r: length("r")?,
@@ -439,12 +449,15 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
             length("x2")?,
             length("y2")?,
         ])),
-        Tag::Polyline | Tag::Polygon => Element::Shape(Shape::Points {
-            points: match text("points") {
-                Some(p) => points(&p).map_err(at("points"))?,
-                None => Vec::new(),
+        Tag::Polyline | Tag::Polygon => Element::Shape(match shape {
+            Some(shape) => shape?,
+            None => Shape::Points {
+                points: match text("points") {
+                    Some(p) => points(&p).map_err(at("points"))?,
+                    None => Vec::new(),
+                },
+                closed: tag == Tag::Polygon,
             },
-            closed: tag == Tag::Polygon,
         }),
         Tag::Defs => Element::Defs,
         Tag::LinearGradient | Tag::RadialGradient => {
@@ -1271,7 +1284,7 @@ mod tests {
 
     fn attributes(tag: Tag, list: &[(&str, V)]) -> Result<Computed, String> {
         let list: Vec<(&str, &V)> = list.iter().map(|(n, v)| (*n, v)).collect();
-        computed(tag, &list)
+        computed(tag, &list, None)
     }
 
     fn text(s: &str) -> V {

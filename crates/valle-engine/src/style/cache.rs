@@ -256,6 +256,7 @@ mod tests {
             &[1],
         );
         svg.kind = Kind::Svg {
+            geometry: None,
             tag: Tag::Svg,
             attributes: Vec::new(),
         };
@@ -264,6 +265,7 @@ mod tests {
             &[],
         );
         circle.kind = Kind::Svg {
+            geometry: None,
             tag: Tag::Circle,
             attributes: vec![
                 ("r".into(), Prop::Expr(4)),

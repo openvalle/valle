@@ -14,7 +14,7 @@ use super::{cache, tailwind};
 
 use crate::front::Slot;
 use crate::shader::{self, Program};
-use crate::template::{Error, Kind, Node, Piece, Prop, Tag, Template, V};
+use crate::template::{Error, Kind, Node, Part, Piece, Prop, Tag, Template, V};
 
 /// A `<ShaderLayer>`'s program and its uniforms' values, and its block when none is traced.
 pub(super) struct Shading {
@@ -117,6 +117,7 @@ pub(super) struct Bound {
 pub(super) struct Geometry {
     pub(super) tag: Tag,
     pub(super) attributes: Vec<(Rc<str>, Prop)>,
+    pub(super) template: Option<svg::Template>,
     pub(super) fixed: Option<Rc<svg::Computed>>,
 }
 
@@ -135,7 +136,11 @@ impl Geometry {
                 (&**k, v)
             })
             .collect();
-        let c = svg::computed(self.tag, &list).map_err(|e| format!("<{}> {e}", self.tag.name()))?;
+        let shape = self.template.as_ref()
+            .filter(|g| !g.parts.iter().any(|p| matches!(p, Part::Expr(e) if frame.late.is_some_and(|late| late[*e as usize]))))
+            .map(|g| g.resolve(frame.values));
+        let c = svg::computed(self.tag, &list, shape)
+            .map_err(|e| format!("<{}> {e}", self.tag.name()))?;
         Ok(Rc::new(c))
     }
 }
@@ -300,6 +305,13 @@ impl Sheet {
             b.rest.iter().for_each(|(_, p, ..)| prop(p));
             if let Some(g) = &b.svg {
                 g.attributes.iter().for_each(|(_, p)| prop(p));
+                if let Some(t) = &g.template {
+                    for p in &t.parts {
+                        if let Part::Expr(e) = p {
+                            prop(&Prop::Expr(*e));
+                        }
+                    }
+                }
             }
             if let Some(s) = &b.shader {
                 s.uniforms.iter().flat_map(|(_, v)| v).for_each(&mut prop);
@@ -586,9 +598,13 @@ fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result
     }
     let mut declared = Declared::default();
     let mut rest = Vec::new();
-    let (tag, attributes) = match &node.kind {
-        Kind::Svg { tag, attributes } => (Some(*tag), &attributes[..]),
-        _ => (None, &[][..]),
+    let (tag, attributes, shape_template) = match &node.kind {
+        Kind::Svg {
+            tag,
+            attributes,
+            geometry,
+        } => (Some(*tag), &attributes[..], geometry),
+        _ => (None, &[][..], &None),
     };
     // An <svg> clips what it draws to its box, as Chrome's style for it has it.
     if tag == Some(Tag::Svg) {
@@ -684,11 +700,16 @@ fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result
             let mut g = Geometry {
                 tag,
                 attributes: geometry.cloned().collect(),
+                template: shape_template
+                    .as_ref()
+                    .map(|p| svg::Template::new(tag, p.clone())),
                 fixed: None,
             };
             if g.attributes
                 .iter()
-                .all(|(_, p)| matches!(p, Prop::Const(_)))
+                .map(|(_, p)| p)
+                .all(|p| matches!(p, Prop::Const(_)))
+                && g.template.is_none()
             {
                 let none = Frame {
                     values: &[],
@@ -955,6 +976,7 @@ mod tests {
             view(&[], &[]),
         ];
         let svg = |tag| Kind::Svg {
+            geometry: None,
             tag,
             attributes: Vec::new(),
         };
@@ -1003,6 +1025,7 @@ mod tests {
         let svg =
             |tag, attributes: &[(&str, Prop)], style: &[(&str, Prop)], children: &[u32]| Node {
                 kind: Kind::Svg {
+                    geometry: None,
                     tag,
                     attributes: (attributes.iter())
                         .map(|(k, p)| (Rc::from(*k), p.clone()))
@@ -1073,6 +1096,7 @@ mod tests {
     fn markers_inherit_and_name_marker_elements() {
         let svg = |tag, attributes: &[(&str, Prop)], children: &[u32]| Node {
             kind: Kind::Svg {
+                geometry: None,
                 tag,
                 attributes: (attributes.iter())
                     .map(|(k, p)| (Rc::from(*k), p.clone()))
@@ -1116,6 +1140,7 @@ mod tests {
     fn uses_copy_with_styles_inherited_from_them() {
         let svg = |tag, attributes: &[(&str, Prop)], children: &[u32]| Node {
             kind: Kind::Svg {
+                geometry: None,
                 tag,
                 attributes: (attributes.iter())
                     .map(|(k, p)| (Rc::from(*k), p.clone()))
@@ -1157,6 +1182,7 @@ mod tests {
     fn svg_references_name_clip_paths_and_masks() {
         let svg = |tag, attributes: &[(&str, Prop)], children: &[u32]| Node {
             kind: Kind::Svg {
+                geometry: None,
                 tag,
                 attributes: (attributes.iter())
                     .map(|(k, p)| (Rc::from(*k), p.clone()))

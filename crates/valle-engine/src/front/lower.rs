@@ -389,6 +389,7 @@ struct TracedNode {
     src: Option<String>,
     tag: Option<String>,
     attributes: Option<Vec<(String, Ref)>>,
+    geometry: Option<Vec<Ref>>,
     shader: Option<TracedShader>,
     /// A video's source time, in seconds.
     time: Option<Ref>,
@@ -695,6 +696,18 @@ pub fn variant(
                         .into_iter()
                         .map(|(k, v)| Ok((Rc::from(k), prop(v)?)))
                         .collect::<Result<_, Error>>()?,
+                    geometry: n
+                        .geometry
+                        .map(|v| {
+                            v.into_iter()
+                                .map(|p| match prop(p)? {
+                                    Prop::Expr(e) => Ok(Part::Expr(e)),
+                                    Prop::Const(V::Str(s)) => Ok(Part::Text(s)),
+                                    _ => Err("SVG template literal is not text".into()),
+                                })
+                                .collect::<Result<_, Error>>()
+                        })
+                        .transpose()?,
                 }
             }
             other => return Err(format!("node type {other}")),

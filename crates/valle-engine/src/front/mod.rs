@@ -1259,7 +1259,9 @@ mod tests {
             let frame = at(&mut f, "2");
             let t = &frame.template;
             let element = |i: usize| match &t.nodes[i].kind {
-                Kind::Svg { tag, attributes } => {
+                Kind::Svg {
+                    tag, attributes, ..
+                } => {
                     let values = attributes.iter().map(|(k, p)| (&**k, value(&frame, p)));
                     (*tag, values.collect::<Vec<_>>())
                 }
@@ -1275,6 +1277,65 @@ mod tests {
             assert_eq!(element(2), (Tag::Circle, circle.to_vec()));
             at(&mut f, "3");
             assert_eq!(f.traces(), 1);
+        });
+    }
+
+    #[test]
+    fn svg_templates_keep_numbers_without_formatting_private_strings() {
+        big_stack(|| {
+            let mut f = scene(indoc! {r#"
+                export default function Scene() {
+                  const {seconds:t}=useCurrentTime();
+                  let d='';
+                  for (let i=0;i<3;i++) d+=`${i===0?'M':'L'}${i*10},${t+i}`;
+                  return <svg><path d={d}/><polyline points={`0,0 ${t},20`}/></svg>;
+                }
+            "#});
+            let frame = at(&mut f, "1");
+            assert!(
+                !frame
+                    .template
+                    .program
+                    .ops
+                    .iter()
+                    .any(|op| matches!(op, Op::Template(_)))
+            );
+            assert!(matches!(
+                &frame.template.nodes[1].kind,
+                Kind::Svg {
+                    geometry: Some(_),
+                    ..
+                }
+            ));
+            assert!(matches!(
+                &frame.template.nodes[2].kind,
+                Kind::Svg {
+                    geometry: Some(_),
+                    ..
+                }
+            ));
+            at(&mut f, "2");
+            assert_eq!(f.traces(), 1);
+
+            // Other consumers retain their string value; curves retain the normal parser.
+            let mut shared = scene(indoc! {r#"
+                export default function Scene() {
+                  const {seconds:t}=useCurrentTime();
+                  const d=`M0,0L${t},20`;
+                  return <View><Text>{d}</Text><svg><path d={d}/><path d={`M0,0Q${t},10 20,20`}/></svg></View>;
+                }
+            "#});
+            let frame = at(&mut shared, "2");
+            assert!(
+                frame
+                    .values
+                    .iter()
+                    .any(|v| matches!(v,V::Str(s) if &**s=="M0,0L2,20"))
+            );
+            assert!(matches!(
+                &frame.template.nodes[4].kind,
+                Kind::Svg { geometry: None, .. }
+            ));
         });
     }
 

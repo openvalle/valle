@@ -484,6 +484,16 @@ pub fn numbers(s: &str) -> Option<Vec<f32>> {
     Some(out)
 }
 
+/// One SVG number and its following separator, for compiling fixed string fragments.
+pub(crate) fn number_prefix(s: &str) -> Option<(f32, usize)> {
+    let mut r = Reader {
+        b: s.as_bytes(),
+        i: 0,
+    };
+    let n = r.number()?;
+    Some((n, r.i))
+}
+
 /// SVG path data's characters.
 struct Reader<'a> {
     b: &'a [u8],

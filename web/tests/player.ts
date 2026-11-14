@@ -38,6 +38,7 @@ const CASES: {
   { entry: "examples/launch.motion.tsx", frames: [150] },
   { entry: "tests/cases/motion/spring/scene.motion.tsx", frames: [0, 6, 4, 10] },
   { entry: "tests/cases/motion/noise/scene.motion.tsx", frames: [0, 4, 2] },
+  { entry: "tests/cases/motion/points/scene.motion.tsx", frames: [0, 7, 2, 4, 0] },
   { entry: "tests/cases/motion/particles/scene.motion.tsx", frames: [0, 7, 8, 9] },
   { entry: "examples/09-cards-3d.motion.tsx", frames: [210] },
   { entry: "examples/10-lower-third.motion.tsx", frames: [40] },
@@ -424,6 +425,8 @@ async function main() {
     const kind = entry.endsWith(".timeline.json") ? "timeline" : "motion";
     const bound = props ? ["--props", JSON.stringify(props)] : [];
     for (const frame of frames) {
+      const name = named(entry, frame, props);
+      if (natives.has(name)) continue;
       const png = join(out, `${natives.size}.png`);
       // Decode video with FFmpeg's own decoder: a virtual machine's hardware decoder hands
       // frames over unlike a real one's.
@@ -446,7 +449,7 @@ async function main() {
       if (run.exitCode !== 0) {
         throw new Error(`valle ${kind} render ${entry}: ${run.stderr.toString()}`);
       }
-      natives.set(named(entry, frame, props), png);
+      natives.set(name, png);
     }
   }
   /** Runs the native engine. */

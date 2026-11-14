@@ -1,0 +1,9 @@
+{
+  "spec": "docs/motion.md",
+  "assertion": "Standard SVG coordinate templates preserve their output through animated curves, layout-dependent points, branch changes, gradients, dashes, clipping and markers; seeking does not retain stale geometry.",
+  "at": [0, 0.5, 1, 1.75],
+  "valle": {
+    "reason": "Captured from the pre-change engine with standard SVG strings; the unchanged authoring format is compared pixel-for-pixel after template compilation. Frames visually reviewed.",
+    "maxDifference": 0
+  }
+}

@@ -109,7 +109,16 @@ pub(super) fn candidate(t: &Template) -> bool {
             {
                 return false;
             }
-            Kind::Svg { attributes, .. } if attributes.iter().any(|(_, p)| changing(p)) => {
+            Kind::Svg {
+                attributes,
+                geometry,
+                ..
+            } if attributes.iter().any(|(_, p)| changing(p))
+                || geometry
+                    .iter()
+                    .flatten()
+                    .any(|p| matches!(p, Part::Expr(e) if changes[*e as usize])) =>
+            {
                 return false;
             }
             Kind::Shader { uniforms, .. } if uniforms.iter().flat_map(|(_, p)| p).any(changing) => {

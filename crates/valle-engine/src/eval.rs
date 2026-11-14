@@ -190,33 +190,7 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
             [a, b, c] => f.call(&[num(a), num(b), num(c)]),
             _ => f.call(&args.iter().map(num).collect::<Vec<_>>()),
         }),
-        Op::Template(parts) => {
-            // Reserve once for the literal text and typical scalar representations. This is
-            // a capacity hint, not a length limit: longer numbers and strings still grow it.
-            let capacity = parts
-                .iter()
-                .map(|p| match p {
-                    Part::Text(t) => t.len(),
-                    Part::Expr(i) => match &values[*i as usize] {
-                        V::Num(_) => 24,
-                        V::Bool(_) => 5,
-                        V::Str(s) => s.len(),
-                    },
-                })
-                .sum();
-            let mut s = String::with_capacity(capacity);
-            for p in parts {
-                match p {
-                    Part::Text(t) => s.push_str(t),
-                    Part::Expr(i) => match &values[*i as usize] {
-                        V::Num(n) => js::push_number(&mut s, *n),
-                        V::Bool(b) => s.push_str(if *b { "true" } else { "false" }),
-                        V::Str(t) => s.push_str(t),
-                    },
-                }
-            }
-            V::Str(Rc::from(s))
-        }
+        Op::Template(parts) => V::Str(template(parts, values)),
         Op::Interp(i) => interpolate(i, values)?,
         Op::Stage(input, stage) => V::Num(stage.at(num(input))),
         Op::Table(input, table) => V::Num(table.at(num(input))),
@@ -378,6 +352,35 @@ fn interpolate(i: &Interp, values: &[V]) -> Result<V, Error> {
         })?,
     };
     Ok(V::Str(Rc::from(text)))
+}
+
+/// Format a traced string exactly as JavaScript does, including non-finite numbers.
+pub(crate) fn template(parts: &[Part], values: &[V]) -> Rc<str> {
+    // Reserve once for the literal text and typical scalar representations. This is
+    // a capacity hint, not a length limit: longer numbers and strings still grow it.
+    let capacity = parts
+        .iter()
+        .map(|p| match p {
+            Part::Text(t) => t.len(),
+            Part::Expr(i) => match &values[*i as usize] {
+                V::Num(_) => 24,
+                V::Bool(_) => 5,
+                V::Str(s) => s.len(),
+            },
+        })
+        .sum();
+    let mut s = String::with_capacity(capacity);
+    for p in parts {
+        match p {
+            Part::Text(t) => s.push_str(t),
+            Part::Expr(i) => match &values[*i as usize] {
+                V::Num(n) => js::push_number(&mut s, *n),
+                V::Bool(b) => s.push_str(if *b { "true" } else { "false" }),
+                V::Str(t) => s.push_str(t),
+            },
+        }
+    }
+    Rc::from(s)
 }
 
 #[cfg(test)]

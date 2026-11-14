@@ -184,7 +184,11 @@ fn element(
         out.images.push(image);
     }
     out.nodes.push(Node {
-        kind: Kind::Svg { tag, attributes },
+        kind: Kind::Svg {
+            tag,
+            attributes,
+            geometry: None,
+        },
         path: None,
         classes: Vec::new(),
         style,

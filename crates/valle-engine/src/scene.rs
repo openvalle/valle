@@ -876,6 +876,71 @@ mod tests {
     }
 
     #[test]
+    fn svg_templates_preserve_paths_points_and_layout_when_seeking() {
+        big_stack(|| {
+            let source = indoc! {r#"
+                export const composition = {width:200,height:120,fps:4,duration:2};
+                function formatted(points) {
+                  let text="";
+                  for (const p of points) text += `${p} `;
+                  return text;
+                }
+                export default function Scene() {
+                  const {seconds:t}=useCurrentTime();
+                  const measured=bounds('measure');
+                  const points=[8,16,64,22+t*12,112,60,170,measured.width];
+                  const triangle=t<1 ? [20,90,55,65,90,90] : [30,90,45,72,65,72,80,90];
+                  return <View>
+                    <View key="measure" style={{position:'absolute',width:40+t*12,height:1}}/>
+                    <svg width={200} height={120}>
+                      <defs>
+                        <linearGradient id="ink"><stop stopColor="red"/><stop offset="1" stopColor="blue"/></linearGradient>
+                        <marker id="tip" markerWidth="4" markerHeight="4" refX="2" refY="2" orient="auto">
+                          <polygon points="0,0 4,2 0,4" fill="blue"/>
+                        </marker>
+                      </defs>
+                      <LINE={POINTS} fill="none" stroke="url(#ink)" strokeWidth={3}
+                        strokeLinejoin="round" strokeDasharray="6 2" markerEnd="url(#tip)"/>
+                      <polygon points={TRIANGLE} fill="red" stroke="black" strokeWidth={2}/>
+                      <polyline points={EMPTY} stroke="red"/>
+                      <polyline points={SINGLE} stroke="red"/>
+                    </svg>
+                  </View>;
+                }
+            "#};
+            let scene = |path: bool| {
+                let source = source
+                    .replace("LINE", if path {"path d"} else {"polyline points"})
+                    .replace("POINTS", if path {"`M${points[0]},${points[1]}L${points[2]},${points[3]}L${points[4]},${points[5]}L${points[6]},${points[7]}`"} else {"formatted(points)"})
+                    .replace("TRIANGLE", "formatted(triangle)")
+                    .replace("EMPTY", "''")
+                    .replace("SINGLE", "'10 10'");
+                Scene::load(
+                    "s.motion.tsx",
+                    &|p| (p == "s.motion.tsx").then(|| source.as_bytes().to_vec()),
+                    &Inputs::default(),
+                    fonts(),
+                )
+                .unwrap()
+            };
+            let mut path = scene(true);
+            let mut strings = scene(false);
+            let mut previous = None;
+            for time in ["0", "0.5", "1.5", "0.25", "1", "0"] {
+                let tick = Tick::parse_seconds(time).unwrap();
+                let a = path.frame(tick).unwrap().items;
+                let b = strings.frame(tick).unwrap().items;
+                assert_eq!(a, b, "at {time}s");
+                assert!(!a.is_empty());
+                if let Some(previous) = previous.replace(a.clone()) {
+                    assert_ne!(a, previous);
+                }
+            }
+            assert_eq!(path.traces().0, 2);
+        });
+    }
+
+    #[test]
     fn errors_point_at_the_source() {
         big_stack(|| {
             let mut scene = load(indoc! {"

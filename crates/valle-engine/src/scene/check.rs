@@ -2,6 +2,7 @@
 //! expression, style, resource and layout checks with rendering; it does not memoize JS calls.
 
 use super::*;
+use crate::template::Part;
 
 mod interval;
 
@@ -63,9 +64,18 @@ impl Plan {
                         prop(p);
                     }
                 }
-                Kind::Svg { attributes, .. } => {
+                Kind::Svg {
+                    attributes,
+                    geometry,
+                    ..
+                } => {
                     for (_, p) in attributes {
                         prop(p);
+                    }
+                    for p in geometry.iter().flatten() {
+                        if let Part::Expr(e) = p {
+                            prop(&Prop::Expr(*e));
+                        }
                     }
                 }
                 Kind::Shader { uniforms, .. } => {
@@ -284,6 +294,37 @@ mod tests {
 
     fn at(s: &str) -> Tick {
         Tick::parse_seconds(s).unwrap()
+    }
+
+    #[test]
+    fn svg_templates_keep_standard_inputs_and_later_errors() {
+        run(|| {
+            for tag in ["polyline", "polygon"] {
+                let body = format!(
+                    "export default function Scene() {{ return <svg><{tag} points={{[1,2,3,4]}}/></svg>; }}"
+                );
+                let error = scene(&body).into_checker().check(at("0")).unwrap_err();
+                assert!(
+                    error.contains("points must be a number or a string"),
+                    "{error}"
+                );
+            }
+            for (tag, attribute, text) in [
+                ("polyline", "points", "`0,0 10,${1/(1-t)}`"),
+                ("path", "d", "`M0,0L10,${1/(1-t)}`"),
+            ] {
+                let body = format!(
+                    "export default function Scene() {{ const {{seconds:t}}=useCurrentTime(); return <svg><{tag} {attribute}={{{text}}} stroke='red'/></svg>; }}"
+                );
+                let mut checker = scene(&body).into_checker();
+                assert_eq!(checker.check_frames(0, 89).unwrap(), 0);
+                checker.check(at("0.5")).unwrap();
+                let error = checker.check(at("1")).unwrap_err();
+                assert!(error.contains("Infinity"), "{error}");
+                assert_eq!(error, scene(&body).frame(at("1")).unwrap_err());
+                checker.check(at("0")).unwrap();
+            }
+        });
     }
 
     #[test]

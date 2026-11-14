@@ -618,6 +618,8 @@ pub enum Kind {
     Svg {
         tag: Tag,
         attributes: Vec<(Rc<str>, Prop)>,
+        /// The original `d` or `points` string template, before formatting coordinates.
+        geometry: Option<Vec<Part>>,
     },
 }
 
