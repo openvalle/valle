@@ -538,8 +538,13 @@ pub struct Program {
 impl Program {
     /// Which expressions are late: known only after layout, as they read a box.
     pub fn late(&self) -> Vec<bool> {
+        let _span = crate::perf::span("eval.dependencies");
         let mut late = vec![false; self.ops.len()];
-        for (i, op) in self.ops.iter().enumerate() {
+        // Operands precede their users, so nothing before the first box measurement is late.
+        let Some(first) = self.ops.iter().position(|op| matches!(op, Op::Bounds(..))) else {
+            return late;
+        };
+        for (i, op) in self.ops.iter().enumerate().skip(first) {
             let mut l = matches!(op, Op::Bounds(..));
             op.operands(|j| l |= late[j as usize]);
             late[i] = l;
@@ -838,7 +843,7 @@ mod tests {
 
     #[test]
     fn dependencies_propagate_through_shared_branches_and_templates() {
-        let p = Program {
+        let mut p = Program {
             ops: vec![
                 Op::Seconds,                                                // 0
                 Op::Const(V::Num(2.0)),                                     // 1
@@ -863,6 +868,8 @@ mod tests {
             [true, true, false, true, false, false, false, true]
         );
         assert_eq!(p.reading([]), [false; 8]);
+        p.ops[2] = Op::Const(V::Num(40.0));
+        assert_eq!(p.late(), [false; 8]);
     }
 
     #[test]

@@ -83,6 +83,9 @@ pub fn run(program: &Program, clock: Clock) -> Result<Vec<V>, Error> {
 /// returned prefix identifies its first failed guard; a matching variant still evaluates every
 /// op, including those whose errors must be reported even when nothing draws their result.
 pub fn guarded(template: &Template, clock: Clock) -> Result<Vec<V>, Error> {
+    if template.guards.is_empty() {
+        return run(&template.program, clock);
+    }
     let mut guards = template.guards.iter().map(|g| {
         let end = g
             .when
@@ -149,6 +152,7 @@ pub fn settle(
 
 /// One expression's value over the values of the expressions before it; a box measures 0, as it
 /// does while tracing.
+#[inline(always)]
 pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
     let num = |i: &u32| values[*i as usize].num();
     Ok(match op {
@@ -183,6 +187,14 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
             let pick = if values[*c as usize].truthy() { a } else { b };
             values[*pick as usize].clone()
         }
+        _ => return function(op, values),
+    })
+}
+
+/// Keep the common scalar operations small enough to inline in the evaluation loop.
+fn function(op: &Op, values: &[V]) -> Result<V, Error> {
+    let num = |i: &u32| values[*i as usize].num();
+    Ok(match op {
         Op::Math(f, args) => V::Num(match args.as_slice() {
             [] => f.call(&[]),
             [a] => f.call(&[num(a)]),
@@ -241,6 +253,13 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
             let (x, v) = spring.at(num(input));
             V::Num(if *velocity { v } else { x })
         }
+        Op::Const(_)
+        | Op::Seconds
+        | Op::Progress
+        | Op::Bin(..)
+        | Op::Cmp(..)
+        | Op::Neg(_)
+        | Op::Select(..) => unreachable!("scalar expression handled by value"),
     })
 }
 
@@ -450,6 +469,8 @@ mod tests {
         template.guards[0].want = Want::Eq(V::Num(AT.seconds));
         assert!(guarded(&template, AT).is_err());
         template.guards[0].when = vec![(0, false)];
+        assert!(guarded(&template, AT).is_err());
+        template.guards.clear();
         assert!(guarded(&template, AT).is_err());
     }
 

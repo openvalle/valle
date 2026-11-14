@@ -248,15 +248,24 @@ impl Scene {
             layout: laid,
         } = self.laid(at)?;
         if styles.iter().any(|s| s.motion_auto) {
+            let _span = crate::perf::span("eval.motion");
             self.trails(at, &template, &values, &mut styles, &laid)?;
         }
+        let resources = crate::perf::span("eval.resources");
         self.text.sweep();
         self.show_videos(&template, &values, &styles)?;
         backgrounds(&template, &styles, &self.pictures)?;
+        drop(resources);
+        let painting = crate::perf::span("eval.paint");
         self.paint.sweep();
         let items = self.paint.paint(&template, &styles, &laid, &self.pictures);
         let pictures = self.paint.drawn(&template, &styles, &laid, &self.pictures);
-        let transforms = transforms(&template, &styles, &laid);
+        drop(painting);
+        let transforms = {
+            let _span = crate::perf::span("eval.transforms");
+            transforms(&template, &styles, &laid)
+        };
+        let _retain = crate::perf::span("eval.retain");
         let styles = Rc::new(styles);
         self.retained = Some(RetainedLayout {
             text: text_values(&template, &values).cloned().collect(),
@@ -278,7 +287,10 @@ impl Scene {
 
     /// The variant at `at`, its values, its styles and its layout.
     fn laid(&mut self, at: Tick) -> Result<Laid, Error> {
-        let frame = self.front.frame(at)?;
+        let frame = {
+            let _span = crate::perf::span("eval.values");
+            self.front.frame(at)?
+        };
         self.lay(at, frame.template, frame.values)
     }
 
@@ -290,6 +302,7 @@ impl Scene {
 
     /// Bind a variant and validate its computed styles, before any layout or drawing.
     fn styled(&mut self, template: &Rc<Template>, values: &[V]) -> Result<Vec<Style>, Error> {
+        let _span = crate::perf::span("eval.styles");
         if let Some((previous, sheet, _)) = self.sheets.first_mut()
             && !Rc::ptr_eq(previous, template)
         {
@@ -342,6 +355,7 @@ impl Scene {
         mut values: Vec<V>,
         mut styles: Vec<Style>,
     ) -> Result<Laid, Error> {
+        let _span = crate::perf::span("eval.layout");
         let c = self.front.composition;
         let canvas = [c.width as f32, c.height as f32];
         let (_, sheet, measured) = &self.sheets[0];

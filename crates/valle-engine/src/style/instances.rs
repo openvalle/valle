@@ -35,6 +35,9 @@ struct Formula {
     shared: Rc<InstanceProgram>,
     data: usize,
     dynamic: Vec<bool>,
+    /// Slots restored from each row, and dynamic expressions evaluated in dependency order.
+    fixed: Vec<usize>,
+    steps: Vec<usize>,
 }
 
 struct Bound {
@@ -113,6 +116,10 @@ impl Formula {
             Formula {
                 shared: shared.clone(),
                 data,
+                fixed: (0..dynamic.len()).filter(|&i| !dynamic[i]).collect(),
+                steps: (data + shared.imports.len()..dynamic.len())
+                    .filter(|&i| dynamic[i])
+                    .collect(),
                 dynamic,
             }
         })
@@ -142,29 +149,25 @@ impl Formula {
         }
         Ok(local)
     }
-    fn evaluate(&self, fixed: &Vec<V>, values: &[V], local: &mut Vec<V>) -> Result<(), String> {
-        local.clone_from(fixed);
+    fn evaluate(&self, fixed: &[V], values: &[V], local: &mut Vec<V>) -> Result<(), String> {
+        // Every dynamic slot is assigned below, in dependency order. Copy only the row's
+        // invariant values instead of copying placeholders that would be overwritten.
+        local.resize(fixed.len(), V::Num(0.0));
+        for &i in &self.fixed {
+            local[i].clone_from(&fixed[i]);
+        }
         for (slot, e) in self.shared.imports.iter().enumerate() {
             local[self.data + slot] = values[*e as usize].clone();
         }
-        for (i, op) in self
-            .shared
-            .program
-            .ops
-            .iter()
-            .enumerate()
-            .skip(self.data + self.shared.imports.len())
-        {
-            if self.dynamic[i] {
-                local[i] = crate::eval::value(
-                    op,
-                    local,
-                    crate::eval::Clock {
-                        seconds: 0.0,
-                        progress: 0.0,
-                    },
-                )?;
-            }
+        for &i in &self.steps {
+            local[i] = crate::eval::value(
+                &self.shared.program.ops[i],
+                local,
+                crate::eval::Clock {
+                    seconds: 0.0,
+                    progress: 0.0,
+                },
+            )?;
         }
         Ok(())
     }
@@ -320,6 +323,59 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    #[test]
+    fn reused_formula_values_match_full_evaluation_across_rows_and_times() {
+        use crate::template::{Bin, Cmp, Op, Part, Program};
+        let table = Instances {
+            fields: Vec::new(),
+            rows: vec![
+                vec![Prop::Const(V::Num(2.0)), Prop::Const(V::Str("a".into()))],
+                vec![Prop::Const(V::Num(-3.0)), Prop::Const(V::Str("b".into()))],
+            ],
+            formula: Some(Rc::new(InstanceProgram {
+                program: Program {
+                    ops: vec![
+                        Op::Const(V::Num(0.0)),
+                        Op::Const(V::Str("".into())),
+                        Op::Const(V::Num(0.0)),
+                        Op::Const(V::Num(10.0)),
+                        Op::Bin(Bin::Mul, 0, 3),
+                        Op::Bin(Bin::Add, 4, 2),
+                        Op::Template(vec![Part::Expr(1), Part::Text(":".into()), Part::Expr(5)]),
+                        Op::Cmp(Cmp::Gt, 2, 3),
+                        Op::Select(7, 6, 1),
+                    ],
+                },
+                imports: vec![0],
+                outputs: vec![Prop::Expr(8)],
+                key: None,
+                prefix: "".into(),
+            })),
+        };
+        let formula = Formula::new(&table).unwrap();
+        let fixed: Vec<_> = table
+            .rows
+            .iter()
+            .map(|r| formula.prepare(r).unwrap())
+            .collect();
+        let clock = crate::eval::Clock {
+            seconds: 0.0,
+            progress: 0.0,
+        };
+        let mut local = Vec::new();
+        for (row, time) in [(0, 12.0), (1, 1.0), (0, -4.0), (1, 20.0), (0, 12.0)] {
+            formula
+                .evaluate(&fixed[row], &[V::Num(time)], &mut local)
+                .unwrap();
+            let mut full = formula.shared.program.clone();
+            for (op, value) in full.ops.iter_mut().zip(&fixed[row]).take(2) {
+                *op = Op::Const(value.clone());
+            }
+            full.ops[2] = Op::Const(V::Num(time));
+            assert_eq!(local, crate::eval::run(&full, clock).unwrap());
+        }
     }
 
     #[test]
