@@ -1146,6 +1146,88 @@ mod tests {
     }
 
     #[test]
+    fn svg_maps_keep_static_styles_and_geometry_cached() {
+        big_stack(|| {
+            let source = indoc! {r#"
+                const rows = [{key:'a', x:20, color:'#176bba'}, {key:'b', x:60, color:'#e66a38'}];
+                export default function Scene() {
+                    const { seconds } = useCurrentTime();
+                    return <svg width={100} height={100}>
+                        <g transform={`translate(${seconds} 0)`}>
+                            {rows.map(row => <circle key={row.key} cx={row.x} cy={20} r={8}
+                                fill={row.color} style={{stroke:row.color, strokeWidth:2, opacity:0.5}}/>)}
+                            {rows.map(row => <circle key={`moving-${row.key}`} cx={row.x} cy={60}
+                                r={2+seconds} fill={row.color} style={{stroke:row.color, opacity:seconds/4}}/>)}
+                        </g>
+                    </svg>;
+                }
+            "#};
+            let mut f = scene(source);
+            // A third callback parameter keeps the ordinary JavaScript map as a control.
+            let mut ordinary = scene(&source.replace("row =>", "(row, index, array) =>"));
+            let first = at(&mut f, "0");
+            let control = at(&mut ordinary, "0");
+            let circles: Vec<_> = first
+                .template
+                .nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(i, n)| {
+                    matches!(
+                        n.kind,
+                        Kind::Svg {
+                            tag: Tag::Circle,
+                            ..
+                        }
+                    )
+                    .then_some(i)
+                })
+                .collect();
+            assert_eq!(circles.len(), 4);
+            for &i in &circles[..2] {
+                let node = &first.template.nodes[i];
+                let Kind::Svg { attributes, .. } = &node.kind else {
+                    unreachable!()
+                };
+                assert!(attributes.iter().all(|(_, p)| matches!(p, Prop::Const(_))));
+                assert!(node.style.iter().all(|(_, p)| matches!(p, Prop::Const(_))));
+            }
+            let sheet = crate::style::Sheet::new(&first.template).unwrap();
+            let control = crate::style::Sheet::new(&control.template).unwrap();
+            let initial = sheet
+                .compute(&first.values, true, [320.0, 180.0], &[])
+                .unwrap();
+            for time in ["0.5", "2", "0.25", "0"] {
+                let frame = at(&mut f, time);
+                let expected = at(&mut ordinary, time);
+                assert!(Rc::ptr_eq(&first.template, &frame.template));
+                let styles = sheet
+                    .compute(&frame.values, true, [320.0, 180.0], &[])
+                    .unwrap();
+                assert_eq!(
+                    styles,
+                    control
+                        .compute(&expected.values, true, [320.0, 180.0], &[])
+                        .unwrap()
+                );
+                for &i in &circles[..2] {
+                    assert!(Rc::ptr_eq(
+                        initial[i].svg.as_ref().unwrap(),
+                        styles[i].svg.as_ref().unwrap()
+                    ));
+                }
+                for &i in &circles[2..] {
+                    if time != "0" {
+                        assert_ne!(initial[i].svg, styles[i].svg);
+                        assert_ne!(initial[i].opacity, styles[i].opacity);
+                    }
+                }
+            }
+            assert_eq!(f.traces(), 1);
+        });
+    }
+
+    #[test]
     fn svg_map_imports_reuse_equivalent_global_expressions() {
         big_stack(|| {
             let mut f = scene(

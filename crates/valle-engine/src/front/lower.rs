@@ -552,7 +552,12 @@ pub fn variant(
     };
     let prop = |r: Ref| -> Result<Prop, Error> {
         match r {
-            Ref::Expr(e) => Ok(Prop::Expr(expr(e)?)),
+            // Shared rows fold constants into the program. Keep their props static so style
+            // declarations and SVG geometry still bind once rather than on every frame.
+            Ref::Expr(e) => Ok(match &program.ops[expr(e)? as usize] {
+                Op::Const(v) => Prop::Const(v.clone()),
+                _ => Prop::Expr(e),
+            }),
             Ref::Const { c } => Ok(Prop::Const(c.value()?)),
         }
     };
@@ -788,10 +793,14 @@ pub fn variant(
                         .geometry
                         .map(|v| {
                             v.into_iter()
-                                .map(|p| match prop(p)? {
-                                    Prop::Expr(e) => Ok(Part::Expr(e)),
-                                    Prop::Const(V::Str(s)) => Ok(Part::Text(s)),
-                                    _ => Err("SVG template literal is not text".into()),
+                                .map(|p| match p {
+                                    // A numeric operand, even a constant, stays separate from
+                                    // literal SVG syntax so coordinates need no string parsing.
+                                    Ref::Expr(e) => Ok(Part::Expr(expr(e)?)),
+                                    Ref::Const { c } => match c.value()? {
+                                        V::Str(s) => Ok(Part::Text(s)),
+                                        _ => Err("SVG template literal is not text".into()),
+                                    },
                                 })
                                 .collect::<Result<_, Error>>()
                         })
