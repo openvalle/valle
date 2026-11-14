@@ -188,6 +188,7 @@ pub(super) enum Field {
     Scale,
     Transform,
     TransformOrigin,
+    TransformBox,
     Perspective,
     PerspectiveOrigin,
     BackfaceVisibility,
@@ -311,7 +312,7 @@ pub(super) enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 258] = [
+const FIELDS: [(&str, Field); 259] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -599,6 +600,7 @@ const FIELDS: [(&str, Field); 258] = [
     ("scale", Field::Scale),
     ("transform", Field::Transform),
     ("transformOrigin", Field::TransformOrigin),
+    ("transformBox", Field::TransformBox),
     ("perspective", Field::Perspective),
     ("perspectiveOrigin", Field::PerspectiveOrigin),
     ("backfaceVisibility", Field::BackfaceVisibility),
@@ -707,7 +709,13 @@ impl Field {
     pub(super) fn drawn_in_svg(self) -> bool {
         matches!(
             self,
-            Field::Fill
+            Field::Transform
+                | Field::TransformOrigin
+                | Field::TransformBox
+                | Field::Translate
+                | Field::Rotate
+                | Field::Scale
+                | Field::Fill
                 | Field::FillOpacity
                 | Field::FillRule
                 | Field::PaintOrder
@@ -754,6 +762,7 @@ impl Field {
                 | Field::Scale
                 | Field::Transform
                 | Field::TransformOrigin
+                | Field::TransformBox
                 | Field::Perspective
                 | Field::PerspectiveOrigin
                 | Field::OffsetPath

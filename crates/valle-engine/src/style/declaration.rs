@@ -123,6 +123,8 @@ pub(super) struct Declared {
     pub(super) rotate: Option<transform::Function<Len>>,
     pub(super) scale: Option<transform::Function<Len>>,
     pub(super) transform: Vec<transform::Function<Len>>,
+    pub(super) transform_set: bool,
+    pub(super) transform_box: transform::ReferenceBox,
     pub(super) transform_origin: [position::Offset<Len>; 2],
     pub(super) transform_origin_z: Len,
     pub(super) offset_path: Option<(offset::Route<Len>, background::Area)>,
@@ -257,6 +259,8 @@ impl Default for Declared {
             rotate: None,
             scale: None,
             transform: Vec::new(),
+            transform_set: false,
+            transform_box: transform::ReferenceBox::View,
             transform_origin: [CENTER; 2],
             transform_origin_z: ZERO,
             offset_path: None,
@@ -1146,7 +1150,23 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::Translate => d.translate = transform::translate(&px_text(v)?)?,
         F::Rotate => d.rotate = transform::rotate(&text(v)?)?,
         F::Scale => d.scale = transform::scale(&number_text(v)?)?,
-        F::Transform => d.transform = transform::transform(&text(v)?)?,
+        F::Transform => {
+            d.transform = transform::transform(&text(v)?)?;
+            d.transform_set = true;
+        }
+        F::TransformBox => {
+            use transform::ReferenceBox as B;
+            d.transform_box = keyword(
+                v,
+                &[
+                    ("content-box", B::Content),
+                    ("border-box", B::Border),
+                    ("fill-box", B::Fill),
+                    ("stroke-box", B::Stroke),
+                    ("view-box", B::View),
+                ],
+            )?;
+        }
         F::TransformOrigin => {
             (d.transform_origin, d.transform_origin_z) = transform::origin(&px_text(v)?)?;
         }

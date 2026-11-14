@@ -20,6 +20,18 @@ pub(crate) fn accepts(name: &str, value: &str) -> bool {
     .is_ok()
 }
 
+/// The box whose size and origin CSS transforms use. SVG maps content/border boxes to
+/// fill/stroke boxes; layout boxes map fill/stroke/view boxes to content/border boxes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ReferenceBox {
+    Content,
+    Border,
+    Fill,
+    Stroke,
+    #[default]
+    View,
+}
+
 /// A transform function.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Function<P = Calc> {

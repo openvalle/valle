@@ -21,6 +21,8 @@ const CASES: {
   pixels?: { maxDifference: number; maxPixels: number };
 }[] = [
   { entry: "examples/hello.motion.tsx", frames: [0, 60] },
+  { entry: "tests/cases/svg/css-transforms/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
+  { entry: "tests/cases/svg/css-transforms/file/scene.motion.tsx", frames: [0] },
   { entry: "examples/01-kinetic-title.motion.tsx", frames: [45] },
   { entry: "examples/02-logo-sting.motion.tsx", frames: [165, 270] },
   { entry: "examples/03-data-dashboard.motion.tsx", frames: [120] },

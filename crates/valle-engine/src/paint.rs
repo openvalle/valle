@@ -813,7 +813,12 @@ fn spaces(
                 (canvas, SQUARE)
             }
         });
-        let own = transform(&styles[i], border, seen[i], within);
+        use crate::style::transform::ReferenceBox as B;
+        let reference = match styles[i].transform_box {
+            B::Content | B::Fill => layout.boxes[i].content,
+            _ => border,
+        };
+        let own = transform(&styles[i], border, reference, seen[i], within);
         out[i] = base[i].times(own.or(seen[i]).unwrap_or(Matrix4::IDENTITY));
         let perspective = perspective(&styles[i], border);
         let keeps = styles[i].keeps_3d();
@@ -837,6 +842,29 @@ fn perspective(s: &Style, border: Rect) -> Option<Matrix4> {
     Some(m.times(Matrix4::translate(-x, -y, 0.0)))
 }
 
+/// Append one CSS transform, resolving percentage translations against the reference box.
+fn transform_function(m: Matrix4, f: &Function, size: [f32; 2]) -> Matrix4 {
+    m.times(match f {
+        Function::Translate([x, y, z]) => {
+            let [x, y, z] = [(x, size[0]), (y, size[1]), (z, 0.0)].map(|(l, of)| l.resolve(of));
+            Matrix4::translate(x.into(), y.into(), z.into())
+        }
+        Function::Scale([x, y, z]) => Matrix4::scale(*x, *y, *z),
+        Function::Rotate(a) => Matrix4::rotate([0.0, 0.0, 1.0], *a),
+        Function::Rotate3d(axis, a) => Matrix4::rotate(*axis, *a),
+        Function::Skew([x, y]) => {
+            let [x, y] = [x, y].map(|a| a.to_radians().tan());
+            Matrix4::affine([1.0, y, x, 1.0, 0.0, 0.0])
+        }
+        Function::Matrix(m) => Matrix4::affine(*m),
+        Function::Matrix3d(m) => Matrix4(std::array::from_fn(|c| {
+            std::array::from_fn(|r| m[c * 4 + r])
+        })),
+        Function::Perspective(None) => Matrix4::IDENTITY,
+        Function::Perspective(Some(d)) => Matrix4::perspective(d.resolve(0.0).into()),
+    })
+}
+
 /// A box's transform with the border box `border`, in the px around it, seen in its parent's
 /// perspective `seen`: its functions, the last first, around its origin, with its motion path's
 /// move, in the box `within`, after `translate`, `rotate` and `scale`. In space: flattened, it
@@ -844,13 +872,14 @@ fn perspective(s: &Style, border: Rect) -> Option<Matrix4> {
 fn transform(
     s: &Style,
     border: Rect,
+    reference: Rect,
     seen: Option<Matrix4>,
     within: Option<(Rect, Radii)>,
 ) -> Option<Matrix4> {
     if !s.transformed() {
         return None;
     }
-    let b = snap(border);
+    let b = snap(reference);
     let size = [b.width, b.height];
     let origin = |r: Rect| {
         let size = [r.width, r.height];
@@ -858,27 +887,7 @@ fn transform(
     };
     let [x, y] = origin(b).map(f64::from);
     let z = s.transform_origin_z;
-    let function = |m: Matrix4, f: &Function| {
-        m.times(match f {
-            Function::Translate([x, y, z]) => {
-                let [x, y, z] = [(x, size[0]), (y, size[1]), (z, 0.0)].map(|(l, of)| l.resolve(of));
-                Matrix4::translate(x.into(), y.into(), z.into())
-            }
-            Function::Scale([x, y, z]) => Matrix4::scale(*x, *y, *z),
-            Function::Rotate(a) => Matrix4::rotate([0.0, 0.0, 1.0], *a),
-            Function::Rotate3d(axis, a) => Matrix4::rotate(*axis, *a),
-            Function::Skew([x, y]) => {
-                let [x, y] = [x, y].map(|a| a.to_radians().tan());
-                Matrix4::affine([1.0, y, x, 1.0, 0.0, 0.0])
-            }
-            Function::Matrix(m) => Matrix4::affine(*m),
-            Function::Matrix3d(m) => Matrix4(std::array::from_fn(|c| {
-                std::array::from_fn(|r| m[c * 4 + r])
-            })),
-            Function::Perspective(None) => Matrix4::IDENTITY,
-            Function::Perspective(Some(d)) => Matrix4::perspective(d.resolve(0.0).into()),
-        })
-    };
+    let function = |m, f| transform_function(m, f, size);
     let (individual, functions) = s.transform.split_at(s.individual);
     let mut m = individual.iter().fold(Matrix4::IDENTITY, function);
     // As Chrome moves it: from its border box as laid out, not snapped.
@@ -1040,7 +1049,7 @@ impl Painter<'_> {
                 style.individual = row.individual;
                 style.transform_origin = row.origin.clone();
                 style.transform_origin_z = row.origin_z;
-                let matrix = transform(&style, border, None, None)
+                let matrix = transform(&style, border, border, None, None)
                     .unwrap_or(Matrix4::IDENTITY)
                     .flatten();
                 if matrix.inverse().is_none() {

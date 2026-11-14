@@ -123,6 +123,7 @@ pub struct Style {
     pub individual: usize,
     pub transform_origin: [position::Offset; 2],
     pub transform_origin_z: f64,
+    pub transform_box: transform::ReferenceBox,
     /// `offset-*`: the motion path the box moves along, `None` for `offset-path: none`.
     pub motion: Option<offset::Motion>,
     /// `perspective` in px, `None` for `none`, which its children's transforms are seen in, from
@@ -302,6 +303,7 @@ impl Style {
             individual: _,
             transform_origin: _,
             transform_origin_z: _,
+            transform_box: _,
             perspective_origin: _,
             object_fit: _,
             object_position: _,
@@ -717,6 +719,7 @@ pub(super) fn compute(
             .count(),
         transform_origin: d.transform_origin.each_ref().map(|o| o.computed(u)),
         transform_origin_z: d.transform_origin_z.px(u, 0.0),
+        transform_box: d.transform_box,
         motion: d.offset_path.as_ref().map(|(path, area)| offset::Motion {
             path: path.computed(u),
             area: *area,

@@ -119,6 +119,7 @@ impl<'a> Drawing<'a> {
                 c.element,
                 Element::Shape(svg::Shape::Circle { .. } | svg::Shape::Ellipse { .. })
             ) && c.transform.is_none()
+                && !s.transformed()
                 && rows.iter().all(|r| {
                     matches!(r.stroke.as_ref().unwrap_or(&s.stroke.paint), Paint::None)
                         && r.opacity == 1.0
@@ -196,7 +197,7 @@ impl<'a> Drawing<'a> {
         if s.layout.display == Display::None || s.opacity <= 0.0 {
             return;
         }
-        let local = local(c, size);
+        let local = self.local(i, s, c, size, copy);
         let matrix = local.map_or(matrix, |t| matrix.times(t));
         let scale = matrix.radius_scale();
         let mut items = Vec::new();
@@ -351,6 +352,109 @@ impl<'a> Drawing<'a> {
         }
     }
 
+    /// CSS transforms use the selected SVG reference box without pixel snapping. The SVG
+    /// attribute supplies the transform only when CSS has not overridden it (even with none).
+    fn local(
+        &self,
+        i: usize,
+        s: &Style,
+        c: &svg::Computed,
+        size: [f64; 2],
+        copy: Option<&Instance>,
+    ) -> Option<Matrix> {
+        use crate::style::transform::ReferenceBox as B;
+        let mut result = None;
+        if c.transform.is_some() || !s.transform.is_empty() {
+            let mut reference = match s.transform_box {
+                B::Fill | B::Content => self.bbox(i, size, copy),
+                B::Stroke | B::Border => self.stroke_bbox(i, size, copy),
+                // viewBox establishes a new user coordinate system: its origin is (0, 0),
+                // not its min-x/min-y, which belong to the outer viewport transform.
+                B::View => Some([0.0, 0.0, size[0], size[1]]),
+            }
+            .unwrap_or([0.0; 4]);
+            // x/y place the use's copied graphics inside its own user coordinate system.
+            if s.transform_box != B::View
+                && let Element::Use { at, .. } = c.element
+            {
+                reference[0] += at[0].resolve(size[0]);
+                reference[1] += at[1].resolve(size[1]);
+            }
+            let [x, y, w, h] = reference;
+            let size = [w as f32, h as f32];
+            let origin =
+                [0, 1].map(|k| [x, y][k] + f64::from(s.transform_origin[k].resolve(size[k])));
+            let mut matrix = s.transform.iter().fold(super::Matrix4::IDENTITY, |m, f| {
+                super::transform_function(m, f, size)
+            });
+            if let Some(attribute) = c.transform {
+                let [a, b, t] = attribute.0;
+                matrix = matrix.times(super::Matrix4::affine([a[0], a[1], b[0], b[1], t[0], t[1]]));
+            }
+            let [x, y] = origin;
+            let z = s.transform_origin_z;
+            result = Some(
+                super::Matrix4::translate(x, y, z)
+                    .times(matrix)
+                    .times(super::Matrix4::translate(-x, -y, -z))
+                    .flatten(),
+            );
+        }
+        if let Element::Use { at, .. } = c.element {
+            let [x, y] = [at[0].resolve(size[0]), at[1].resolve(size[1])];
+            if x != 0.0 || y != 0.0 {
+                result = Some(
+                    result
+                        .unwrap_or(Matrix::IDENTITY)
+                        .times(Matrix::translate(x, y)),
+                );
+            }
+        }
+        result
+    }
+
+    /// Stroke bounds include caps and joins, but not markers or dashing gaps.
+    fn stroke_bbox(&self, i: usize, size: [f64; 2], copy: Option<&Instance>) -> Option<[f64; 4]> {
+        let s = self.style(i, copy);
+        let c = s.svg.as_deref()?;
+        if let Element::Shape(shape) = &c.element {
+            let path = svg::path(shape, size)?;
+            if !matches!(s.stroke.paint, Paint::None) {
+                let diagonal = ((size[0] * size[0] + size[1] * size[1]) / 2.0).sqrt() as f32;
+                let pen = svg::Pen {
+                    width: s.stroke.width.resolve(diagonal).into(),
+                    cap: s.stroke.cap,
+                    join: s.stroke.join,
+                    miter_limit: s.stroke.miter_limit,
+                    dashes: Vec::new(),
+                    dash_offset: 0.0,
+                    path_length: None,
+                };
+                if let Some(outline) = self.cache.stroke(&path, &pen, 1.0) {
+                    return Some(svg::bounds(&outline));
+                }
+            }
+        }
+        match &c.element {
+            Element::G => self.around_bounds(&self.template.nodes[i].children, size, copy, true),
+            Element::Use { .. } => {
+                let instance = s.instance.as_deref()?;
+                match self.symbol(i, size, copy) {
+                    Some((fitted, _, units)) => self
+                        .around_bounds(
+                            &self.template.nodes[instance.root].children,
+                            units,
+                            Some(instance),
+                            true,
+                        )
+                        .map(|b| mapped(fitted, b)),
+                    None => self.around_bounds(&[instance.root as u32], size, Some(instance), true),
+                }
+            }
+            _ => self.bbox(i, size, copy),
+        }
+    }
+
     /// SVG element `i`'s style: its copy's in `copy` if that holds it, else the frame's.
     fn style<'s>(&'s self, i: usize, copy: Option<&'s Instance>) -> &'s Style {
         copy.and_then(|c| c.style(i)).unwrap_or(&self.styles[i])
@@ -458,11 +562,26 @@ impl<'a> Drawing<'a> {
         size: [f64; 2],
         copy: Option<&Instance>,
     ) -> Option<[f64; 4]> {
+        self.around_bounds(elements, size, copy, false)
+    }
+
+    fn around_bounds(
+        &self,
+        elements: &[u32],
+        size: [f64; 2],
+        copy: Option<&Instance>,
+        stroke: bool,
+    ) -> Option<[f64; 4]> {
         let boxes = elements.iter().filter_map(|&k| {
             let k = k as usize;
-            let b = self.bbox(k, size, copy)?;
+            let b = if stroke {
+                self.stroke_bbox(k, size, copy)
+            } else {
+                self.bbox(k, size, copy)
+            }?;
             let c = self.style(k, copy).svg.as_deref()?;
-            Some(local(c, size).map_or(b, |t| mapped(t, b)))
+            let s = self.style(k, copy);
+            Some(self.local(k, s, c, size, copy).map_or(b, |t| mapped(t, b)))
         });
         boxes.reduce(|[x, y, w, h], [u, v, p, q]| {
             let lo = [x.min(u), y.min(v)];
@@ -480,7 +599,9 @@ impl<'a> Drawing<'a> {
         let Element::ClipPath { user_space } = c.element else {
             return None;
         };
-        let mut matrix = c.transform.unwrap_or(Matrix::IDENTITY);
+        let mut matrix = self
+            .local(n, &self.styles[n], c, size, None)
+            .unwrap_or(Matrix::IDENTITY);
         if !user_space {
             let bbox @ [.., w, h] = self.bbox(i, size, copy)?;
             if w <= 0.0 || h <= 0.0 {
@@ -508,7 +629,7 @@ impl<'a> Drawing<'a> {
                 even_odd: s.clip_even_odd,
                 color: [1.0; 4],
             };
-            items.push(match c.transform {
+            items.push(match self.local(k as usize, s, c, size, None) {
                 Some(matrix) => Item::Transform {
                     matrix,
                     items: vec![path],
@@ -749,20 +870,6 @@ impl<'a> Drawing<'a> {
     }
 }
 
-/// An SVG element's transform from its user units to its parent's, in a viewport `size` user
-/// units big: its `transform`, then a `<use>`'s move by its x and y, as SVG appends it.
-fn local(c: &svg::Computed, size: [f64; 2]) -> Option<Matrix> {
-    let Element::Use { at, .. } = c.element else {
-        return c.transform;
-    };
-    let [x, y] = [at[0].resolve(size[0]), at[1].resolve(size[1])];
-    let moved = (x != 0.0 || y != 0.0).then(|| Matrix::translate(x, y));
-    match (c.transform, moved) {
-        (Some(t), Some(m)) => Some(t.times(m)),
-        (t, m) => t.or(m),
-    }
-}
-
 /// The bounding box of `[x, y, width, height]` through `m`.
 fn mapped(m: Matrix, b: [f64; 4]) -> [f64; 4] {
     let r = m.bounds(rect(b));
@@ -840,6 +947,102 @@ mod tests {
     use crate::front::Inputs;
     use crate::scene::Scene;
     use crate::time::Tick;
+
+    #[test]
+    fn css_transforms_use_svg_reference_boxes_and_override_attributes() {
+        for (style, attribute, expected) in [
+            ("transform: rotate(90deg)", "", [-10.0, 20.0]),
+            (
+                "transform: rotate(90deg); transform-box: fill-box; transform-origin: center",
+                "",
+                [50.0, 0.0],
+            ),
+            (
+                "transform: scale(2); transform-box: content-box; transform-origin: top left",
+                "",
+                [20.0, 10.0],
+            ),
+            (
+                "transform: scale(2); transform-box: stroke-box; transform-origin: top left",
+                "",
+                [25.0, 15.0],
+            ),
+            (
+                "transform: scale(2); transform-box: border-box; transform-origin: top left",
+                "",
+                [25.0, 15.0],
+            ),
+            (
+                "transform: rotate(90deg); transform-box: view-box; transform-origin: center",
+                "",
+                [140.0, -30.0],
+            ),
+            ("transform: none", "scale(3)", [20.0, 10.0]),
+            ("transform: translate(5px, 7px)", "scale(3)", [25.0, 17.0]),
+            ("translate: 5px 7px", "scale(3)", [65.0, 37.0]),
+            (
+                "transform: translate(50%, 50%); transform-box: fill-box",
+                "",
+                [40.0, 20.0],
+            ),
+        ] {
+            let xml = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="10 20 200 100">
+                <rect id="r" x="20" y="10" width="40" height="20" stroke="black" stroke-width="10"
+                    transform="{attribute}" style="{style}" />
+            </svg>"#
+            )
+            .replace(" transform=\"\"", "");
+            let doc = Document::parse(&xml, &mut Vec::new()).unwrap();
+            let cache = Cache::default();
+            let drawing = Drawing::new(&doc.template, &doc.styles, &[], &cache);
+            let i = drawing.ids["r"];
+            let s = &doc.styles[i];
+            let m = drawing
+                .local(i, s, s.svg.as_deref().unwrap(), [200.0, 100.0], None)
+                .unwrap_or(Matrix::IDENTITY);
+            let actual = m.apply([20.0, 10.0]);
+            for k in 0..2 {
+                assert!(
+                    (actual[k] - expected[k]).abs() < 0.001,
+                    "{style}: {actual:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn svg_css_transforms_follow_geometry_on_backward_seeks() {
+        let source = indoc::indoc! {r#"
+            export const composition = { width: 200, height: 100, fps: 4, duration: 2 };
+            export default function Scene() {
+              const { seconds } = useCurrentTime();
+              return <svg width={200} height={100}>
+                <rect x={20} y={10} width={40 + seconds * 20} height={20}
+                  transform="translate(500)"
+                  style={{ transformBox: "fill-box", transformOrigin: "center",
+                    transform: `rotate(${seconds * 90}deg)` }} />
+              </svg>;
+            }
+        "#};
+        let load = || {
+            Scene::load(
+                "transform.motion.tsx",
+                &|_| Some(source.as_bytes().to_vec()),
+                &Inputs::default(),
+                crate::testing::fonts(),
+            )
+            .unwrap()
+        };
+        let mut scene = load();
+        for frame in [0, 5, 2, 7, 0] {
+            let time = Tick::from_seconds(frame as f64 / 4.0).unwrap();
+            assert_eq!(
+                scene.frame(time).unwrap().items,
+                load().frame(time).unwrap().items
+            );
+        }
+    }
 
     #[test]
     fn inline_and_file_shapes_order_fill_stroke_and_markers() {

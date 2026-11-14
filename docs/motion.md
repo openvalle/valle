@@ -170,6 +170,14 @@ Not supported: CSS variables (use JavaScript constants), `@keyframes` and CSS tr
 (animate with values over time), `position: fixed`/`sticky`, hover and other states. An
 unsupported property or class is an error that says so.
 
+SVG shapes and groups accept CSS `transform`, `translate`, `rotate`, `scale`,
+`transformOrigin` and `transformBox`. CSS `transform` overrides the SVG `transform`
+attribute, including `"none"`. SVG child elements default to an origin of `0 0`.
+Use `transformBox: "fill-box", transformOrigin: "center"` to rotate a shape about
+its own center; `"stroke-box"` includes its stroke, and `"view-box"` uses the SVG
+viewport. On SVG children, `"content-box"` means `"fill-box"` and `"border-box"`
+means `"stroke-box"`. Values can be time expressions, just like other styles.
+
 ## Valle filters
 
 Use these in `style.filter` for the element and its children, or `style.backdropFilter`

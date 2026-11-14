@@ -49292,7 +49292,12 @@
       "& { --tw-text-shadow-color: color-mix(in oklab, var(--color-zinc-950) var(--tw-text-shadow-alpha), transparent); }"
     ],
     ["transform-3d", "& { transform-style: preserve-3d; }"],
-    ["transform-flat", "& { transform-style: flat; }"]
+    ["transform-border", "& { transform-box: border-box; }"],
+    ["transform-content", "& { transform-box: content-box; }"],
+    ["transform-fill", "& { transform-box: fill-box; }"],
+    ["transform-flat", "& { transform-style: flat; }"],
+    ["transform-stroke", "& { transform-box: stroke-box; }"],
+    ["transform-view", "& { transform-box: view-box; }"]
   ],
   "invalid": [
     "-basis-4",
@@ -52401,11 +52406,6 @@
     "min-inline-fit",
     "min-inline-max",
     "min-inline-min",
-    "transform-border",
-    "transform-content",
-    "transform-fill",
-    "transform-stroke",
-    "transform-view",
     "hover:p-4"
   ]
 }

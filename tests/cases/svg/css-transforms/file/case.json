@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/css-transforms-1/#transform-box",
+  "assertion": "SVG CSS transforms use fill, stroke and view reference boxes, group bounds and origins; CSS overrides the transform attribute, including none. Individual transforms precede transform and use positioning.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Chrome and Firefox agree on geometry and CSS overriding the transform attribute. WebKit retains translate(-50) when CSS says transform:none, contrary to the cascade rule. Reviewed Valle differences are only the antialiased edges of the two 30-degree rectangles (266 pixels, maximum 26 channels on Metal).",
+    "pixels": {
+      "maxDifference": 32,
+      "maxPixels": 280
+    }
+  }
+}

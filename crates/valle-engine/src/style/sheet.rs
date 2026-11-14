@@ -440,7 +440,11 @@ impl Sheet {
             ));
         }
         if let Some(g) = &b.svg {
-            style.svg = Some(g.computed(frame).map_err(|e| format!("{}: {e}", b.place))?);
+            let mut svg = g.computed(frame).map_err(|e| format!("{}: {e}", b.place))?;
+            if declared.transform_set && svg.transform.is_some() {
+                Rc::make_mut(&mut svg).transform = None;
+            }
+            style.svg = Some(svg);
         }
         if let Some(s) = &b.shader {
             let shaded = s.computed(frame);
@@ -630,6 +634,14 @@ fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result
         } => (Some(*tag), &attributes[..], geometry),
         _ => (None, &[][..], &None),
     };
+    if matches!(&node.kind, Kind::Svg { tag, .. } if *tag != Tag::Svg) {
+        declared.transform_origin = [const {
+            super::position::Offset {
+                end: false,
+                by: super::declaration::ZERO,
+            }
+        }; 2];
+    }
     // An <svg> clips what it draws to its box, as Chrome's style for it has it.
     if tag == Some(Tag::Svg) {
         declared.overflow = pair(&V::Str("hidden".into()), overflow)?.into();
