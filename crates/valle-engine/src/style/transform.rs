@@ -6,6 +6,20 @@ use super::math::{self, Calc, degrees};
 use super::position::{Offset, position};
 use super::units::{Accept, Len, Units, length_text};
 
+/// Validate a transform declaration's syntax, including units on nonzero numeric tokens.
+/// The interval checker uses this only after restricting templates to ordinary transforms.
+pub(crate) fn accepts(name: &str, value: &str) -> bool {
+    let Some(field) = super::property::Field::by_name(name) else {
+        return false;
+    };
+    super::declaration::set(
+        &mut super::declaration::Declared::default(),
+        field,
+        &crate::template::V::Str(value.into()),
+    )
+    .is_ok()
+}
+
 /// A transform function.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Function<P = Calc> {

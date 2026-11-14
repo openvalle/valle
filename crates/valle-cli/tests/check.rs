@@ -136,6 +136,44 @@ fn an_error_in_later_frames_is_reported_with_its_first_frame_and_count() {
 }
 
 #[test]
+fn interval_checks_cover_long_scenes_and_keep_explicit_frame_selection() {
+    let dir = std::env::temp_dir().join(format!("valle-check-interval-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("hour.motion.tsx");
+    std::fs::write(
+        &file,
+        indoc! {r#"
+        export const composition = {width:64,height:36,fps:30,duration:3600};
+        export default function Scene() {
+            const {seconds}=useCurrentTime();
+            return <View style={{width:10,height:10,opacity:0.5+0.5*Math.sin(seconds)}}/>;
+        }
+    "#},
+    )
+    .unwrap();
+    for (flags, samples, proven) in [
+        (vec![], 1, 107999),
+        (vec!["--frames", "30..89"], 1, 59),
+        (vec!["--frames", "90,0,30,30"], 4, 0),
+        (vec!["--frame", "100"], 1, 0),
+    ] {
+        let out = Command::new(VALLE)
+            .args(["motion", "check"])
+            .arg(&file)
+            .args(flags)
+            .args(["--json", "--perf"])
+            .output()
+            .unwrap();
+        let result: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert!(out.status.success(), "{result}");
+        assert_eq!(result["frames"], 108000);
+        assert_eq!(result["perf"]["hold"]["check_samples"], samples, "{result}");
+        assert_eq!(result["perf"]["hold"]["check_proven"], proven, "{result}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn timeline_check_requires_audio_only_for_enabled_audio_clips_including_nested_edits() {
     let dir = std::env::temp_dir().join(format!("valle-check-audio-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

@@ -7,12 +7,17 @@ values; this guide gives what each one is for and what it returns.
 
 | Command | What it does |
 | --- | --- |
-| `valle motion check SCENE` | Compiles the scene and checks every frame, or `--frame`/`--frames`, without drawing |
+| `valle motion check SCENE` | Compiles the scene and validates every requested frame, or `--frame`/`--frames`, without drawing |
 | `valle motion render SCENE -o OUT` | Draws into `OUT`: a `.png` (one frame), a folder (a PNG sequence), or a `.mp4` or `.mov` |
 | `valle motion studio SCENE` | Opens Studio on the scene |
 
 Both `check` and `render` take the bindings `--props`, `--data` (JSON, or `@file`),
 `--resource name=path`, `--input name=path` and `--caption`.
+
+Checking covers the requested frames. For supported expressions, it proves that a whole
+time interval stays valid and on the same structural branch; other work is checked frame
+by frame. Video decoding, changing text layout and unanalysed expressions keep the sampled
+path. Rendering does not consume or depend on a previous check.
 
 ## Timeline
 
@@ -96,6 +101,8 @@ frame's choices differ from those already found). Stages are
 frame made), `draw` (a frame drawn and its commands submitted), `gpu-wait` (waiting for
 one the GPU drew) and `encoder` (waiting for the encoder's surface). A stage's `ms` leaves
 out the stages inside it, so all stages' `ms` added together is the work done and not more.
+For `check`, `check.prove` measures interval analysis; `hold.check_samples` counts frames
+actually evaluated and `hold.check_proven` counts additional frames covered by those proofs.
 Without `--perf` timing costs one atomic check a span. A result leaves
 out fields that would be `null` or empty. It has
 `status`, and a failure `code`, `message`, `hint` and, for a check, `problems`. The exit code is 0 on success and 1 on failure. A render's result includes the

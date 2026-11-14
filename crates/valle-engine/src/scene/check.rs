@@ -3,6 +3,8 @@
 
 use super::*;
 
+mod interval;
+
 /// Checks a loaded scene. Consuming the scene keeps resource bindings fixed for the lifetime
 /// of its validation results. Rendering uses its own scene, not cached check results.
 pub struct Checker {
@@ -12,6 +14,7 @@ pub struct Checker {
 
 /// Only the current variant is retained here; changing variants drops its successful values.
 struct Plan {
+    interval: bool,
     template: Rc<Template>,
     layout: bool,
     late: bool,
@@ -80,6 +83,7 @@ impl Plan {
         inputs.sort_unstable();
         inputs.dedup();
         Self {
+            interval: interval::candidate(&template),
             template,
             layout,
             late,
@@ -97,6 +101,42 @@ impl Checker {
     /// The same tracing diagnostics as rendering, for checks of all or selected frames.
     pub fn traces(&self) -> (usize, Option<&str>) {
         self.scene.traces()
+    }
+
+    /// Check `first`, then prove as much of the inclusive output-frame interval as possible.
+    /// Returns the last proven frame; unsupported work retains the exact sampled checker.
+    pub fn check_frames(&mut self, first: i64, last: i64) -> Result<i64, Error> {
+        let rate = self.scene.front.composition.fps;
+        self.check(rate.frame_start(first)?)?;
+        let plan = self.plan.as_mut().expect("checked frame has a plan");
+        if first >= last || !plan.interval || plan.checked.is_none() {
+            return Ok(first);
+        }
+        let _span = crate::perf::span("check.prove");
+        let start = self.scene.front.clock(rate.frame_start(first)?);
+        let proves = |end| -> Result<bool, Error> {
+            let end = self.scene.front.clock(rate.frame_start(end)?);
+            Ok(interval::proves(&plan.template, start, end))
+        };
+        if proves(last)? {
+            return Ok(last);
+        }
+        if !proves(first + 1)? {
+            // No useful interval even between neighbouring frames: avoid trying the same
+            // unsupported proof at every following frame of this variant.
+            plan.interval = false;
+            return Ok(first);
+        }
+        let (mut low, mut high) = (first + 1, last);
+        while high - low > 1 {
+            let mid = low + (high - low) / 2;
+            if proves(mid)? {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        Ok(low)
     }
 
     /// Validate the frame at `at`, including sampled-time and video decode errors. No drawing
@@ -239,6 +279,79 @@ mod tests {
 
     fn at(s: &str) -> Tick {
         Tick::parse_seconds(s).unwrap()
+    }
+
+    #[test]
+    fn interval_checks_skip_safe_motion_and_stop_before_branch_changes() {
+        run(|| {
+            let mut smooth = scene("export default function Scene(){ const {seconds}=useCurrentTime(); return <View style={{width:10,height:10,opacity:0.5+0.5*Math.sin(seconds),translate:`${100*Math.sin(seconds)}px 0px`}}/>; }").into_checker();
+            assert_eq!(smooth.check_frames(0, 89).unwrap(), 89);
+            let mut branches = scene("export default function Scene(){ const {seconds}=useCurrentTime(); if(seconds<1) return <View style={{width:10}}/>; return <View style={{width:'broken'}}/>; }").into_checker();
+            assert_eq!(branches.check_frames(0, 89).unwrap(), 29);
+            assert!(branches.check_frames(30, 89).unwrap_err().contains("width"));
+        });
+    }
+
+    #[test]
+    fn interval_and_sampled_checks_report_the_same_errors() {
+        run(|| {
+            for body in [
+                "export default function Scene(){const {seconds:t}=useCurrentTime();return <View style={{width:100/(1.5-t)}}/>}",
+                "export default function Scene(){const {seconds:t}=useCurrentTime();return <View style={{opacity:t<1?'0.5':'broken'}}/>}",
+                "export default function Scene(){const {seconds:t}=useCurrentTime();return <View style={{translate:`-${1-t}px 0px`}}/>}",
+                "export default function Scene(){const {seconds:t}=useCurrentTime();return <View style={{translate:`${t}`}}/>}",
+                "export default function Scene(){const {seconds:t}=useCurrentTime();return <View style={{transform:`translate(${t})`}}/>}",
+                "export default function Scene(){const {seconds:t}=useCurrentTime();const unused=pathLength(t<1?'M0 0 L1 1':'bad');return <View/>}",
+                "export default function Scene(){const {seconds:t}=useCurrentTime();return <Text style={{width:100-t*10}}>a changing line width</Text>}",
+                "export default function Scene(){const {seconds:t}=useCurrentTime();return <View style={{width:Math.sqrt(1-t),height:10,motionBlur:'auto'}}/>}",
+                "export default function Scene(){const {seconds:t}=useCurrentTime();if(Math.floor(t)%2)return <View style={{height:20}}/>;return <View style={{width:10}}/>}",
+            ] {
+                let mut plain = scene(body).into_checker();
+                let mut ranged = scene(body).into_checker();
+                let mut expected = Vec::new();
+                let mut actual = Vec::new();
+                let rate = plain.scene.front.composition.fps;
+                for frame in 0..90 {
+                    if let Err(e) = plain.check(rate.frame_start(frame).unwrap()) {
+                        expected.push((frame, e));
+                    }
+                }
+                let mut frame = 0;
+                while frame < 90 {
+                    match ranged.check_frames(frame, 89) {
+                        Ok(end) => frame = end + 1,
+                        Err(e) => {
+                            actual.push((frame, e));
+                            frame += 1;
+                        }
+                    }
+                }
+                assert_eq!(actual, expected, "{body}");
+            }
+        });
+    }
+
+    #[test]
+    fn an_hour_of_provable_motion_needs_one_sample() {
+        run(|| {
+            let source = indoc::indoc! {r#"
+                export const composition = {width:200,height:100,fps:30,duration:3600};
+                export default function Scene() {
+                    const {seconds}=useCurrentTime();
+                    return <View style={{width:10,height:10,opacity:0.5+0.5*Math.sin(seconds)}}/>;
+                }
+            "#};
+            let mut checker = Scene::load(
+                "hour.motion.tsx",
+                &|p| (p == "hour.motion.tsx").then(|| source.as_bytes().to_vec()),
+                &Inputs::default(),
+                fonts(),
+            )
+            .unwrap()
+            .into_checker();
+            assert_eq!(checker.check_frames(0, 107_999).unwrap(), 107_999);
+            assert_eq!(checker.traces().0, 1);
+        });
     }
 
     #[test]

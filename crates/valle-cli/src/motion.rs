@@ -221,7 +221,7 @@ pub fn hdr_warning(file: &str, transfer: &str) -> Value {
     })
 }
 
-/// Check every frame without building drawing commands: each error once, with its frames.
+/// Check every requested frame, proving supported intervals without drawing commands.
 pub fn check(args: &Args) -> Result<Value, Failure> {
     if args.timeline {
         crate::timeline::check_audio(args)?;
@@ -244,16 +244,42 @@ pub fn check(args: &Args) -> Result<Value, Failure> {
     let mut problems: Vec<(String, Vec<i64>)> = Vec::new();
     // The frames traced again, by why.
     let mut retraced: Vec<(String, Vec<i64>)> = Vec::new();
-    let frames = chosen(args, count)?;
-    for &i in &frames {
+    // The ordinary all-frames check must not allocate or walk an entry per frame before a
+    // proof can skip them. Explicit selections keep their authored order and repetitions.
+    let frames = (args.frames.is_some() || args.storyboard)
+        .then(|| chosen(args, count))
+        .transpose()?;
+    let total = frames.as_ref().map_or(count as usize, Vec::len);
+    let contiguous = frames
+        .as_ref()
+        .is_none_or(|f| f.windows(2).all(|w| w[1] == w[0] + 1));
+    let last = frames
+        .as_ref()
+        .and_then(|f| f.last())
+        .copied()
+        .unwrap_or(count - 1);
+    let mut cursor = 0;
+    let mut sampled = 0;
+    let mut proven = 0;
+    while cursor < total {
+        let i = frames.as_ref().map_or(cursor as i64, |f| f[cursor]);
         let at = c.fps.frame_start(i).map_err(|e| Failure::new("scene", e))?;
         let before = checker.traces().0;
-        if let Err(e) = checker.check(at) {
-            match problems.iter_mut().find(|(m, _)| *m == e) {
-                Some((_, frames)) => frames.push(i),
-                None => problems.push((e, vec![i])),
+        let checked = if contiguous {
+            checker.check_frames(i, last)
+        } else {
+            checker.check(at).map(|()| i)
+        };
+        let through = match checked {
+            Ok(through) => through,
+            Err(e) => {
+                match problems.iter_mut().find(|(m, _)| *m == e) {
+                    Some((_, frames)) => frames.push(i),
+                    None => problems.push((e, vec![i])),
+                }
+                i
             }
-        }
+        };
         if let (after, Some(why)) = checker.traces()
             && after > before
             && before > 0
@@ -263,8 +289,13 @@ pub fn check(args: &Args) -> Result<Value, Failure> {
                 None => retraced.push((why.to_string(), vec![i])),
             }
         }
+        cursor += (through - i + 1) as usize;
+        sampled += 1;
+        proven += (through - i) as u64;
     }
-    warnings.extend(slow(&retraced, frames.len()));
+    valle_engine::perf::gauge("check_samples", sampled);
+    valle_engine::perf::gauge("check_proven", proven);
+    warnings.extend(slow(&retraced, total));
     let urls: Vec<Value> = (urls.iter())
         .map(|(url, file)| json!({ "url": url, "sha256": sha256_of(file) }))
         .collect();
