@@ -439,11 +439,17 @@ impl Front {
         });
         let _span = crate::perf::span("trace.lower");
         // Take the recorder even on a JS error: a failed trace must not retain a partial program.
-        let program = std::mem::take(&mut *self.builder.borrow_mut()).finish();
+        let mut builder = std::mem::take(&mut *self.builder.borrow_mut());
+        let kernels = std::mem::take(&mut builder.kernels)
+            .into_iter()
+            .map(lower::Builder::finish)
+            .collect();
+        let program = builder.finish();
         let traced = traced?;
         lower::variant(
             &traced,
             program,
+            kernels,
             &|at| self.place(at),
             &self.resources,
             &self.pictures(),
@@ -962,6 +968,123 @@ mod tests {
                 at(&mut f, s);
             }
             assert_eq!(f.traces(), 1);
+        });
+    }
+
+    #[test]
+    fn shared_map_program_size_is_independent_of_row_count() {
+        big_stack(|| {
+            let mut sizes = Vec::new();
+            for count in [10, 1000] {
+                let mut front = scene(&format!(
+                    r#"
+                    const points = Array.from({{length:{count}}}, (_,i) => ({{x:i*12,p:i/10,c:i%2?'red':'blue',unused:'\uD800'}}));
+                    export default function Scene() {{
+                        const {{seconds:t}} = useCurrentTime();
+                        return <View>{{points.map((p,i) => {{
+                            const unused = p.unused;
+                            const y = 20 + Math.sin(t+p.p)*10;
+                            return <View key={{`dot-${{i}}`}} style={{{{position:'absolute',left:p.x,top:y,width:8,height:7,
+                                backgroundColor:p.c,rotate:`${{t*10+p.p}}deg`}}}}/>;
+                        }})}}</View>;
+                    }}
+                "#
+                ));
+                let frame = at(&mut front, "0");
+                assert_eq!(frame.template.nodes.len(), 2);
+                let table = &frame.template.instances[0].1;
+                assert_eq!(table.rows.len(), count);
+                assert_eq!(
+                    table.rows[0].len(),
+                    4,
+                    "only reachable data crosses into Rust"
+                );
+                let formula = table.formula.as_ref().expect("one shared callback");
+                sizes.push((frame.template.program.ops.len(), formula.program.ops.len()));
+                for time in ["2", "0.5", "3"] {
+                    at(&mut front, time);
+                }
+                assert_eq!(front.traces(), 1);
+            }
+            assert_eq!(sizes[0], sizes[1]);
+            let mut constant = scene(indoc! {r#"
+                export default function Scene() {
+                    return <View>{[0,1].map(i=><View style={{position:'absolute',left:0,top:0,width:8,height:8}}/>)}</View>;
+                }
+            "#});
+            let frame = at(&mut constant, "0");
+            let table = &frame.template.instances[0].1;
+            assert_eq!(table.rows.len(), 2);
+            assert!(table.rows.iter().all(Vec::is_empty));
+            assert!(table.formula.as_ref().unwrap().program.ops.is_empty());
+        });
+    }
+
+    #[test]
+    fn shared_map_fallback_keeps_array_and_callback_semantics() {
+        big_stack(|| {
+            for (setup, body, expected) in [
+                ("const points=[1,2,3];", "calls++; return", "3"),
+                (
+                    "const points=[{get x(){calls++;return 1;}},{get x(){calls++;return 2;}}];",
+                    "const x=p.x; return",
+                    "2",
+                ),
+                ("const points=[1,,3];", "calls++; return", "2"),
+                (
+                    "const points=[1,2,3]; Object.defineProperty(points,'map',{value:function(f){calls++; return [f(this[0],0)];}});",
+                    "return",
+                    "1",
+                ),
+                (
+                    "const points=[1,2,3]; Object.defineProperty(points,'constructor',{get(){calls++; return Array;}});",
+                    "return",
+                    "1",
+                ),
+                (
+                    "const points=[1,2,3]; const Math={sin(x){calls++; return x;}};",
+                    "const x=Math.sin(p); return",
+                    "3",
+                ),
+                (
+                    "const points=[1,2,3]; const f=x=>{calls++;return x;};",
+                    "const x=f(p); return",
+                    "3",
+                ),
+                (
+                    "const points=[1,2,3]; const obj={get x(){calls++;return 1;}};",
+                    "const x=obj.x; return",
+                    "3",
+                ),
+            ] {
+                let mut f = scene(&format!(
+                    r#"
+                    export default function Scene() {{
+                        let calls=0; {setup}
+                        return <View>{{points.map((p,i)=>{{{body} <View style={{{{position:'absolute',left:i*12,top:0,width:8,height:8,backgroundColor:'red'}}}}/>;}})}}<Text>{{calls}}</Text></View>;
+                    }}
+                "#
+                ));
+                let frame = at(&mut f, "0");
+                assert_eq!(texts(&frame), [expected], "{setup}");
+                assert!(
+                    frame
+                        .template
+                        .instances
+                        .iter()
+                        .all(|(_, b)| b.formula.is_none()),
+                    "{setup}"
+                );
+            }
+            // A component may inspect its children as an array. Only intrinsic View children
+            // can be replaced with an internal table.
+            let mut f = scene(indoc! {r#"
+                function List({children}) { return <Text>{children.length}</Text>; }
+                export default function Scene() {
+                    return <List>{[0,1,2].map(i=><View style={{position:'absolute',left:i,top:0,width:8,height:8}}/>)}</List>;
+                }
+            "#});
+            assert_eq!(texts(&at(&mut f, "0")), ["3"]);
         });
     }
 

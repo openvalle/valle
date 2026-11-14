@@ -72,6 +72,28 @@ pub(super) fn install_host<'js>(
     builder: Rc<RefCell<lower::Builder>>,
 ) -> rquickjs::Result<()> {
     let host = Object::new(ctx.clone())?;
+    let kernel_builder = builder.clone();
+    host.set(
+        "kernel",
+        Function::new(ctx.clone(), move |slots: usize| {
+            kernel_builder.borrow_mut().kernel(slots)
+        })?,
+    )?;
+    let kernel_builder = builder.clone();
+    let kernel_clips = clips.clone();
+    host.set(
+        "recordKernel",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, kernel: usize, name: String, args: Array<'js>| {
+                let mut b = kernel_builder.borrow_mut();
+                let Some(b) = b.kernels.get_mut(kernel) else {
+                    return Err(Exception::throw_type(&ctx, "unknown instance program"));
+                };
+                record(b, name, &args, &kernel_clips).map_err(|e| Exception::throw_type(&ctx, &e))
+            },
+        )?,
+    )?;
     let table = clips.clone();
     host.set(
         "record",

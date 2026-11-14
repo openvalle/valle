@@ -3,7 +3,7 @@
 
 use crate::eval::Clock;
 use crate::js::MathFn;
-use crate::template::{Bin, Cmp, Kind, Op, Part, Piece, Prop, Template, V, Want};
+use crate::template::{Bin, Cmp, Kind, Op, Part, Piece, Program, Prop, Template, V, Want};
 
 #[derive(Clone, Debug)]
 enum Value {
@@ -119,10 +119,28 @@ pub(super) fn candidate(t: &Template) -> bool {
         }
     }
     t.instances.iter().all(|(_, table)| {
-        table
-            .rows
-            .iter()
-            .all(|row| table.fields.iter().zip(row).all(|(k, p)| property(k, p)))
+        if let Some(f) = &table.formula {
+            if !f.program.ops.iter().all(supported) {
+                return false;
+            }
+            let mut local = vec![false; table.rows[0].len()];
+            local.extend(f.imports.iter().map(|e| changes[*e as usize]));
+            for op in f.program.ops.iter().skip(local.len()) {
+                let mut changing = false;
+                op.operands(|e| changing |= local[e as usize]);
+                local.push(changing);
+            }
+            table.fields.iter().zip(&f.outputs).all(|(k, p)| {
+                !matches!(p, Prop::Expr(e) if local[*e as usize])
+                    || paint_property(k)
+                    || (!text && box_property(k))
+            })
+        } else {
+            table
+                .rows
+                .iter()
+                .all(|row| table.fields.iter().zip(row).all(|(k, p)| property(k, p)))
+        }
     })
 }
 
@@ -162,10 +180,20 @@ fn compare(c: Cmp, (a, b): (f64, f64), (d, e): (f64, f64)) -> Value {
     }
 }
 
-fn evaluate(t: &Template, first: Clock, last: Clock) -> Option<Vec<Value>> {
-    let mut values: Vec<Value> = Vec::with_capacity(t.program.ops.len());
-    let mut concrete = Vec::with_capacity(t.program.ops.len());
-    for op in &t.program.ops {
+fn evaluate(
+    program: &Program,
+    mut values: Vec<Value>,
+    first: Clock,
+    last: Clock,
+) -> Option<Vec<Value>> {
+    let mut concrete: Vec<V> = values
+        .iter()
+        .map(|v| match v {
+            Value::Exact(v) => v.clone(),
+            _ => V::Num(0.0),
+        })
+        .collect();
+    for op in program.ops.iter().skip(values.len()) {
         let mut exact = true;
         op.operands(|e| exact &= matches!(values[e as usize], Value::Exact(_)));
         if exact && !matches!(op, Op::Seconds | Op::Progress) {
@@ -321,7 +349,7 @@ fn transform_template(name: &str, op: &Op, values: &[Value]) -> bool {
 }
 
 pub(super) fn proves(t: &Template, first: Clock, last: Clock) -> bool {
-    let Some(values) = evaluate(t, first, last) else {
+    let Some(values) = evaluate(&t.program, Vec::new(), first, last) else {
         return false;
     };
     for g in &t.guards {
@@ -347,39 +375,63 @@ pub(super) fn proves(t: &Template, first: Clock, last: Clock) -> bool {
             return false;
         }
     }
-    let property = |name: &str, p: &Prop| {
-        let Prop::Expr(e) = p else {
-            return true;
-        };
-        let v = &values[*e as usize];
-        if matches!(v, Value::Exact(_)) {
-            return true;
-        }
-        match name {
-            "opacity" => v.range().is_some_and(|(a, b)| a >= -1e6 && b <= 1e6),
-            "scale" => {
-                v.range().is_some_and(|(a, b)| a >= -1e6 && b <= 1e6)
-                    || transform_template(name, &t.program.ops[*e as usize], &values)
+    t.nodes.iter().all(|n| {
+        n.style
+            .iter()
+            .all(|(k, p)| property(&t.program, &values, k, p))
+    }) && t.instances.iter().all(|(_, table)| {
+        table.rows.iter().all(|row| {
+            if let Some(f) = &table.formula {
+                let mut local = Vec::with_capacity(f.program.ops.len());
+                for p in row {
+                    let Prop::Const(v) = p else {
+                        return false;
+                    };
+                    local.push(Value::Exact(v.clone()));
+                }
+                local.extend(f.imports.iter().map(|e| values[*e as usize].clone()));
+                let Some(local) = evaluate(&f.program, local, first, last) else {
+                    return false;
+                };
+                table
+                    .fields
+                    .iter()
+                    .zip(&f.outputs)
+                    .all(|(k, p)| property(&f.program, &local, k, p))
+            } else {
+                table
+                    .fields
+                    .iter()
+                    .zip(row)
+                    .all(|(k, p)| property(&t.program, &values, k, p))
             }
-            "width" | "height" => v
-                .range()
-                .is_some_and(|(a, b)| a >= 0.0 && b <= 33_554_431.0),
-            "left" | "top" | "right" | "bottom" => v
-                .range()
-                .is_some_and(|(a, b)| a >= -33_554_431.0 && b <= 33_554_431.0),
-            "translate" | "rotate" | "transform" | "transformOrigin" => {
-                transform_template(name, &t.program.ops[*e as usize], &values)
-            }
-            _ => false,
-        }
-    };
-    t.nodes
-        .iter()
-        .all(|n| n.style.iter().all(|(k, p)| property(k, p)))
-        && t.instances.iter().all(|(_, table)| {
-            table
-                .rows
-                .iter()
-                .all(|row| table.fields.iter().zip(row).all(|(k, p)| property(k, p)))
         })
+    })
+}
+
+fn property(program: &Program, values: &[Value], name: &str, p: &Prop) -> bool {
+    let Prop::Expr(e) = p else {
+        return true;
+    };
+    let v = &values[*e as usize];
+    if matches!(v, Value::Exact(_)) {
+        return true;
+    }
+    match name {
+        "opacity" => v.range().is_some_and(|(a, b)| a >= -1e6 && b <= 1e6),
+        "scale" => {
+            v.range().is_some_and(|(a, b)| a >= -1e6 && b <= 1e6)
+                || transform_template(name, &program.ops[*e as usize], values)
+        }
+        "width" | "height" => v
+            .range()
+            .is_some_and(|(a, b)| a >= 0.0 && b <= 33_554_431.0),
+        "left" | "top" | "right" | "bottom" => v
+            .range()
+            .is_some_and(|(a, b)| a >= -33_554_431.0 && b <= 33_554_431.0),
+        "translate" | "rotate" | "transform" | "transformOrigin" => {
+            transform_template(name, &program.ops[*e as usize], values)
+        }
+        _ => false,
+    }
 }

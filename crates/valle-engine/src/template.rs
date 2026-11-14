@@ -769,6 +769,19 @@ pub struct Template {
 pub struct Instances {
     pub fields: Vec<Rc<str>>,
     pub rows: Vec<Vec<Prop>>,
+    /// With a shared formula, rows supply its initial slots instead of final style values.
+    pub formula: Option<Rc<InstanceProgram>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct InstanceProgram {
+    pub program: Program,
+    /// Global expression ids, copied after the row's data slots before evaluating the formula.
+    pub imports: Vec<u32>,
+    pub outputs: Vec<Prop>,
+    /// Static row keys and their enclosing component path, retained for bounds/3D fallback.
+    pub key: Option<Prop>,
+    pub prefix: Rc<str>,
 }
 
 impl Template {

@@ -80,6 +80,11 @@ impl Plan {
         for (_, table) in &template.instances {
             table.rows.iter().flatten().for_each(&mut prop);
         }
+        for (_, table) in &template.instances {
+            if let Some(formula) = &table.formula {
+                inputs.extend(&formula.imports);
+            }
+        }
         inputs.sort_unstable();
         inputs.dedup();
         Self {
@@ -305,6 +310,8 @@ mod tests {
                 "export default function Scene(){const {seconds:t}=useCurrentTime();return <Text style={{width:100-t*10}}>a changing line width</Text>}",
                 "export default function Scene(){const {seconds:t}=useCurrentTime();return <View style={{width:Math.sqrt(1-t),height:10,motionBlur:'auto'}}/>}",
                 "export default function Scene(){const {seconds:t}=useCurrentTime();if(Math.floor(t)%2)return <View style={{height:20}}/>;return <View style={{width:10}}/>}",
+                "export default function Scene(){const {seconds:t}=useCurrentTime();return <View>{[1,2].map(p=><View style={{position:'absolute',left:p*10,top:0,width:8,height:8,opacity:1/(p-t)}}/>)}</View>}",
+                "export default function Scene(){const {seconds:t}=useCurrentTime();return <View>{[1,2].map(p=><View style={{position:'absolute',left:p*10,top:0,width:8,height:8,translate:`-${p-t}px 0px`}}/>)}</View>}",
             ] {
                 let mut plain = scene(body).into_checker();
                 let mut ranged = scene(body).into_checker();
@@ -350,6 +357,37 @@ mod tests {
             .unwrap()
             .into_checker();
             assert_eq!(checker.check_frames(0, 107_999).unwrap(), 107_999);
+            assert_eq!(checker.traces().0, 1);
+        });
+    }
+
+    #[test]
+    fn shared_map_keeps_interval_validation() {
+        run(|| {
+            let source = indoc::indoc! {r#"
+                export const composition = {width:320,height:180,fps:30,duration:3600};
+                const points = Array.from({length:100}, (_,i) => ({x:i*2,phase:i/10}));
+                export default function Scene() {
+                    const {seconds:t}=useCurrentTime();
+                    return <View>{points.map(p=><View style={{position:'absolute',width:10,height:10,
+                        left:p.x,top:0,translate:`${20*Math.sin(t+p.phase)}px 0px`}}/>)}</View>;
+                }
+            "#};
+            let mut checker = Scene::load(
+                "hour.motion.tsx",
+                &|p| (p == "hour.motion.tsx").then(|| source.as_bytes().to_vec()),
+                &Inputs::default(),
+                fonts(),
+            )
+            .unwrap()
+            .into_checker();
+            assert_eq!(checker.check_frames(0, 107_999).unwrap(), 107_999);
+            assert!(
+                checker.plan.as_ref().unwrap().template.instances[0]
+                    .1
+                    .formula
+                    .is_some()
+            );
             assert_eq!(checker.traces().0, 1);
         });
     }

@@ -1,13 +1,13 @@
 //! Packs repeated absolute leaf boxes before their variant enters style and layout.
 
-use crate::template::{Instances, Kind, Node, Op, Piece, Prop, Template, V};
+use crate::template::{Error, Instances, Kind, Op, Part, Piece, Prop, Template, V};
 use std::rc::Rc;
 
 /// Pack consecutive sibling leaves from the same JSX site. The original expression program
 /// and guards remain, including expressions that can fail before a value reaches a row.
-pub(crate) fn pack(t: &mut Template) {
+pub(crate) fn pack(t: &mut Template) -> Result<(), Error> {
     if !t.pictures.is_empty() || t.program.ops.iter().any(|op| matches!(op, Op::Bounds(..))) {
-        return;
+        return expand(t);
     }
     // A 3D scene sorts individual planes. A table must not hide those planes from its sorter.
     if t.nodes.iter().any(|n| {
@@ -18,7 +18,7 @@ pub(crate) fn pack(t: &mut Template) {
                 c.contains("perspective") || c.contains("preserve-3d") || c.contains("transform-3d")
             })
     }) {
-        return;
+        return expand(t);
     }
     let mut numeric = Vec::with_capacity(t.program.ops.len());
     for op in &t.program.ops {
@@ -38,7 +38,11 @@ pub(crate) fn pack(t: &mut Template) {
         };
         numeric.push(yes);
     }
-    let eligible = |n: &Node| {
+    let eligible = |i: u32| {
+        if t.instances.iter().any(|(node, _)| *node == i) {
+            return false;
+        }
+        let n = &t.nodes[i as usize];
         if n.kind != Kind::View
             || !n.children.is_empty()
             || n.site.is_none()
@@ -91,14 +95,14 @@ pub(crate) fn pack(t: &mut Template) {
         let mut i = 0;
         while i < children.len() {
             let first = &t.nodes[children[i] as usize];
-            if !eligible(first) {
+            if !eligible(children[i]) {
                 i += 1;
                 continue;
             }
             let mut end = i + 1;
             while end < children.len() {
                 let n = &t.nodes[children[end] as usize];
-                if !eligible(n)
+                if !eligible(children[end])
                     || n.site != first.site
                     || !n
                         .style
@@ -134,8 +138,14 @@ pub(crate) fn pack(t: &mut Template) {
                     .collect()
             })
             .collect();
-        t.instances
-            .push((first as u32, Rc::new(Instances { fields, rows })));
+        t.instances.push((
+            first as u32,
+            Rc::new(Instances {
+                fields,
+                rows,
+                formula: None,
+            }),
+        ));
         let node = &mut t.nodes[first];
         node.path = None;
         node.classes.clear();
@@ -148,7 +158,7 @@ pub(crate) fn pack(t: &mut Template) {
         }
     }
     if t.instances.is_empty() {
-        return;
+        return Ok(());
     }
     let mut next = 0;
     let ids: Vec<u32> = removed
@@ -189,4 +199,122 @@ pub(crate) fn pack(t: &mut Template) {
         i += 1;
         keep
     });
+    Ok(())
+}
+
+/// Restore independent nodes where their keys or 3D planes are observable. Expressions still
+/// come from the shared formula, but retain the ordinary layout and painting path.
+fn expand(t: &mut Template) -> Result<(), Error> {
+    if t.instances.is_empty() {
+        return Ok(());
+    }
+    let mut nodes = Vec::new();
+    let mut ids = Vec::new();
+    let clock = crate::eval::Clock {
+        seconds: 0.0,
+        progress: 0.0,
+    };
+    for (i, node) in t.nodes.iter().enumerate() {
+        let first = nodes.len() as u32;
+        if let Some((_, table)) = t
+            .instances
+            .iter()
+            .find(|(n, b)| *n as usize == i && b.formula.is_some())
+        {
+            let f = table.formula.as_ref().unwrap();
+            for row in &table.rows {
+                let mut local = Vec::new();
+                let mut mapped = Vec::new();
+                for p in row {
+                    let Prop::Const(v) = p else {
+                        return Err("instance input must be constant".into());
+                    };
+                    mapped.push(t.program.ops.len() as u32);
+                    t.program.ops.push(Op::Const(v.clone()));
+                    local.push(v.clone());
+                }
+                mapped.extend(&f.imports);
+                local.resize(mapped.len(), V::Num(0.0));
+                for op in f.program.ops.iter().skip(mapped.len()) {
+                    local.push(crate::eval::value(op, &local, clock)?);
+                    let at = |i: u32| mapped[i as usize];
+                    let op = match op {
+                        Op::Const(v) => Op::Const(v.clone()),
+                        Op::Bin(b, a, c) => Op::Bin(*b, at(*a), at(*c)),
+                        Op::Cmp(b, a, c) => Op::Cmp(*b, at(*a), at(*c)),
+                        Op::Neg(a) => Op::Neg(at(*a)),
+                        Op::Select(a, b, c) => Op::Select(at(*a), at(*b), at(*c)),
+                        Op::Math(f, args) => Op::Math(*f, args.iter().map(|e| at(*e)).collect()),
+                        Op::Template(parts) => Op::Template(
+                            parts
+                                .iter()
+                                .map(|p| match p {
+                                    Part::Text(s) => Part::Text(s.clone()),
+                                    Part::Expr(e) => Part::Expr(at(*e)),
+                                })
+                                .collect(),
+                        ),
+                        _ => return Err("unsupported instance expression".into()),
+                    };
+                    mapped.push(t.program.ops.len() as u32);
+                    t.program.ops.push(op);
+                }
+                let mut node = node.clone();
+                node.style = table
+                    .fields
+                    .iter()
+                    .cloned()
+                    .zip(f.outputs.iter().map(|p| match p {
+                        Prop::Const(v) => Prop::Const(v.clone()),
+                        Prop::Expr(e) => Prop::Expr(mapped[*e as usize]),
+                    }))
+                    .collect();
+                node.path = f.key.as_ref().map(|p| {
+                    let v = match p {
+                        Prop::Const(v) => v,
+                        Prop::Expr(e) => &local[*e as usize],
+                    };
+                    if f.prefix.is_empty() {
+                        v.text().into_owned().into()
+                    } else {
+                        format!("{}/{}", f.prefix, v.text()).into()
+                    }
+                });
+                nodes.push(node);
+            }
+        } else {
+            nodes.push(node.clone());
+        }
+        ids.push(first..nodes.len() as u32);
+    }
+    let remap = |children: &mut Vec<u32>| {
+        *children = children
+            .iter()
+            .flat_map(|i| ids[*i as usize].clone())
+            .collect();
+    };
+    for n in &mut nodes {
+        remap(&mut n.children);
+        match &mut n.kind {
+            Kind::Mask { source, .. } => *source = ids[*source as usize].start,
+            Kind::Text { content } | Kind::Span { content, .. } => {
+                for p in content {
+                    if let Piece::Span(i) = p {
+                        *i = ids[*i as usize].start;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for (n, _) in &mut t.pictures {
+        *n = ids[*n as usize].start;
+    }
+    t.instances.retain(|(_, b)| b.formula.is_none());
+    for (n, _) in &mut t.instances {
+        *n = ids[*n as usize].start;
+    }
+    remap(&mut t.roots);
+    t.nodes = nodes;
+    Ok(())
 }

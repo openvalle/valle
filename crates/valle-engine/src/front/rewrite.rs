@@ -52,6 +52,8 @@ use super::controls::{self, Prop};
 use super::role::{self, Role};
 use crate::time::{Rate, Tick};
 
+mod instances;
+
 /// A place in the source where the runtime may record a guard or an element.
 pub struct Site {
     /// 1-based line and column (UTF-16 units) in the original file; 0 where unknown.
@@ -966,6 +968,7 @@ struct Collector {
     sites: Vec<(u32, &'static str)>,
     first_site: usize,
     depth: u32,
+    view_child: bool,
 }
 
 fn json(s: &str) -> String {
@@ -1075,6 +1078,7 @@ impl Collector {
 
 impl<'a> Visit<'a> for Collector {
     fn visit_expression(&mut self, e: &Expression<'a>) {
+        let view_child = std::mem::take(&mut self.view_child);
         match e {
             Expression::BinaryExpression(b)
                 if !matches!(b.operator.as_str(), "in" | "instanceof") =>
@@ -1182,14 +1186,46 @@ impl<'a> Visit<'a> for Collector {
             }
             Expression::CallExpression(c) if !c.optional => match &c.callee {
                 Expression::StaticMemberExpression(m) if !m.optional => {
-                    self.call(c, &m.object, Err(m.property.name.as_str()));
+                    let captures = (view_child && m.property.name == "map")
+                        .then(|| instances::captures(c))
+                        .flatten();
+                    if let Some(captures) = captures {
+                        let arg = &c.arguments[0];
+                        let site = self.site(c.span.start, "call");
+                        self.open(m.object.span().start, "__map(");
+                        self.replace(m.object.span().end, arg.span().start, ", ");
+                        self.replace(
+                            arg.span().end,
+                            c.span.end,
+                            format!(
+                                ", () => [Math, View{}], {}, {site})",
+                                captures
+                                    .captures
+                                    .iter()
+                                    .map(|s| format!(", {s}"))
+                                    .collect::<String>(),
+                                serde_json::to_string(&captures.fields)
+                                    .expect("property names serialize")
+                            ),
+                        );
+                        self.nested(|s| {
+                            s.visit_expression(&m.object);
+                            s.visit_arguments(&c.arguments);
+                        });
+                    } else {
+                        self.call(c, &m.object, Err(m.property.name.as_str()));
+                    }
                 }
                 Expression::ComputedMemberExpression(m) if !m.optional => {
                     self.call(c, &m.object, Ok(&m.expression));
                 }
                 Expression::Identifier(h) if h.name == "__h" && !c.arguments.is_empty() => {
                     self.element_site(h.span, c);
-                    walk::walk_expression(self, e);
+                    let view = matches!(c.arguments[0].as_expression(), Some(Expression::Identifier(i)) if i.name == "View");
+                    for (i, arg) in c.arguments.iter().enumerate() {
+                        self.view_child = view && i >= 2 && arg.as_expression().is_some();
+                        self.visit_argument(arg);
+                    }
                 }
                 _ => walk::walk_expression(self, e),
             },

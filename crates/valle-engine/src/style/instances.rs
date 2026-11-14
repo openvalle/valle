@@ -9,7 +9,7 @@ use super::property::Field;
 use super::units::Units;
 use super::{color, position, transform};
 use crate::layout::Rect;
-use crate::template::{Instances, Prop, V};
+use crate::template::{InstanceProgram, Instances, Prop, V};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
@@ -26,24 +26,85 @@ pub struct Row {
 pub(super) struct Table {
     rows: Vec<Bound>,
     place: Rc<str>,
+    formula: Option<Formula>,
+}
+
+struct Formula {
+    shared: Rc<InstanceProgram>,
+    data: usize,
+    dynamic: Vec<bool>,
 }
 
 struct Bound {
     fixed: Declared,
     updates: Vec<(Field, Prop, Rc<str>)>,
+    local: Vec<V>,
 }
 
 impl Table {
     pub fn new(table: &Instances, place: Rc<str>) -> Result<Self, String> {
+        let formula = table.formula.as_ref().map(|shared| {
+            let data = table.rows[0].len();
+            let mut dynamic = vec![false; shared.program.ops.len()];
+            dynamic[data..data + shared.imports.len()].fill(true);
+            for (i, op) in shared
+                .program
+                .ops
+                .iter()
+                .enumerate()
+                .skip(data + shared.imports.len())
+            {
+                op.operands(|j| dynamic[i] |= dynamic[j as usize]);
+            }
+            Formula {
+                shared: shared.clone(),
+                data,
+                dynamic,
+            }
+        });
         let mut rows = Vec::with_capacity(table.rows.len());
         for row in &table.rows {
+            let mut local = Vec::new();
+            let props = if let Some(f) = &formula {
+                for p in row {
+                    let Prop::Const(v) = p else {
+                        return Err("instance data must be constant".into());
+                    };
+                    local.push(v.clone());
+                }
+                local.resize(f.data + f.shared.imports.len(), V::Num(0.0));
+                for (i, op) in f.shared.program.ops.iter().enumerate().skip(local.len()) {
+                    local.push(if f.dynamic[i] {
+                        V::Num(0.0)
+                    } else {
+                        crate::eval::value(
+                            op,
+                            &local,
+                            crate::eval::Clock {
+                                seconds: 0.0,
+                                progress: 0.0,
+                            },
+                        )?
+                    });
+                }
+                &f.shared.outputs
+            } else {
+                row
+            };
             let mut d = Declared::default();
             let mut rest = Vec::new();
-            for (name, prop) in table.fields.iter().zip(row) {
+            for (name, prop) in table.fields.iter().zip(props) {
                 let field = Field::by_name(name).expect("eligible instance field");
                 // These eligible fields are independent; no shorthand overrides another
                 // column. Parse every constant once even when a dynamic column precedes it.
-                if let Prop::Const(v) = prop {
+                let constant = match prop {
+                    Prop::Const(v) => Some(v),
+                    Prop::Expr(e) if formula.as_ref().is_some_and(|f| !f.dynamic[*e as usize]) => {
+                        Some(&local[*e as usize])
+                    }
+                    _ => None,
+                };
+                if let Some(v) = constant {
                     set(&mut d, field, v).map_err(|e| format!("{place}: style {name}: {e}"))?;
                 } else {
                     rest.push((field, prop.clone(), name.clone()));
@@ -52,12 +113,21 @@ impl Table {
             rows.push(Bound {
                 fixed: d,
                 updates: rest,
+                local,
             });
         }
-        Ok(Self { rows, place })
+        Ok(Self {
+            rows,
+            place,
+            formula,
+        })
     }
 
     pub fn reads(&self, mut f: impl FnMut(u32)) {
+        if let Some(formula) = &self.formula {
+            formula.shared.imports.iter().copied().for_each(f);
+            return;
+        }
         for row in &self.rows {
             for (_, p, _) in &row.updates {
                 if let Prop::Expr(e) = p {
@@ -78,7 +148,36 @@ impl Table {
             canvas,
         };
         let mut rows = Vec::with_capacity(self.rows.len());
+        let mut local = Vec::new();
         for row in &self.rows {
+            let values = if let Some(f) = &self.formula {
+                local.clone_from(&row.local);
+                for (slot, e) in f.shared.imports.iter().enumerate() {
+                    local[f.data + slot] = values[*e as usize].clone();
+                }
+                for (i, op) in f
+                    .shared
+                    .program
+                    .ops
+                    .iter()
+                    .enumerate()
+                    .skip(f.data + f.shared.imports.len())
+                {
+                    if f.dynamic[i] {
+                        local[i] = crate::eval::value(
+                            op,
+                            &local,
+                            crate::eval::Clock {
+                                seconds: 0.0,
+                                progress: 0.0,
+                            },
+                        )?;
+                    }
+                }
+                &local
+            } else {
+                values
+            };
             let mut d = row.fixed.clone();
             for (field, prop, name) in &row.updates {
                 let v = match prop {
@@ -127,7 +226,7 @@ mod tests {
             export default function Scene() {{
                 const {{seconds:t}} = useCurrentTime();
                 return <View style={{{{width:300,height:160,position:'relative',backgroundColor:'#172130',{parent}}}}}>
-                    {{Array.from({{length:12}},(_,i)=><View key={{`dot-${{i}}`}} className="absolute" style={{{{
+                    {{Array.from({{length:12}},(_,i)=>i).map(i=><View key={{`dot-${{i}}`}} className="absolute" style={{{{
                         left:10+i*15+t*7,top:20+(i%3)*25,width:29.25,height:19.5,
                         borderRadius:7,backgroundColor:i%2?'#e97635':'#49c5f2',{additions}
                     }}}}/> )}}
@@ -160,6 +259,7 @@ mod tests {
             let first = scene.frame(Tick::ZERO).unwrap();
             assert_eq!(first.template.nodes.len(), 2);
             assert_eq!(first.template.instances[0].1.rows.len(), 12);
+            assert!(first.template.instances[0].1.formula.is_some());
             let next = scene.frame(Tick::parse_seconds("1").unwrap()).unwrap();
             assert!(Rc::ptr_eq(&first.layout, &next.layout));
             assert_ne!(first.items, next.items);
@@ -246,6 +346,52 @@ mod tests {
                     .instances
                     .is_empty()
             );
+        });
+    }
+
+    #[test]
+    fn shared_maps_preserve_keys_scoped_clocks_and_samples() {
+        run(|| {
+            for wrapper in [
+                "<Dots/><View style={{opacity:bounds('dots/dot-0').width/20,width:20,height:5,backgroundColor:'red'}}/>",
+                "<TimeScope offset={0.3} rate={2}><Dots/></TimeScope>",
+                "<Echo count={2} delay={0.1} decay={0.5}><Dots/></Echo>",
+                "<Shutter samples={4} angle={180}><Dots/></Shutter>",
+                "<View style={{perspective:500,transformStyle:'preserve-3d'}}><Dots/></View>",
+            ] {
+                let load = |extra| {
+                    let source = format!(
+                        r#"
+                        export const composition = {{width:320,height:180,fps:30,duration:3}};
+                        function Dots() {{
+                            const {{seconds:t}}=useCurrentTime();
+                            return <View key="dots">{{[0,1,2].map(i=>{{ {extra} return <View key={{`dot-${{i}}`}} style={{{{
+                                position:'absolute',left:20+i*30,top:20,width:13,height:11,backgroundColor:'orange',
+                                translate:`${{t*12}}px 0px`,rotate:`${{i*10+t*20}}deg`
+                            }}}}/>; }})}}</View>;
+                        }}
+                        export default function Scene() {{ return <View>{wrapper}</View>; }}
+                    "#
+                    );
+                    Scene::load(
+                        "s.motion.tsx",
+                        &|p| (p == "s.motion.tsx").then(|| source.as_bytes().to_vec()),
+                        &Inputs::default(),
+                        crate::testing::fonts(),
+                    )
+                    .unwrap()
+                };
+                let mut table = load("");
+                let mut plain = load("void i;");
+                for t in ["0", "1.5", "0.25", "2.9"] {
+                    let at = Tick::parse_seconds(t).unwrap();
+                    assert_eq!(
+                        table.frame(at).unwrap().items,
+                        plain.frame(at).unwrap().items,
+                        "{wrapper} at {t}"
+                    );
+                }
+            }
         });
     }
 

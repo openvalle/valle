@@ -43,9 +43,18 @@ pub(super) struct Builder {
     program: Program,
     constants: HashMap<ConstantKey, u32>,
     expressions: HashMap<(String, Vec<Arg>), u32>,
+    pub(super) kernels: Vec<Builder>,
 }
 
 impl Builder {
+    pub(super) fn kernel(&mut self, slots: usize) -> u32 {
+        let mut kernel = Self::default();
+        kernel.program.ops.resize(slots, Op::Const(V::Num(0.0)));
+        let id = self.kernels.len() as u32;
+        self.kernels.push(kernel);
+        id
+    }
+
     pub(super) fn constant(&mut self, v: V) -> u32 {
         let key = match &v {
             V::Num(n) => ConstantKey::Num(n.to_bits()),
@@ -385,6 +394,17 @@ struct TracedNode {
     time: Option<Ref>,
     /// The picture it draws, `<TimeScope picture>`'s name.
     picture: Option<String>,
+    instances: Option<TracedInstances>,
+}
+
+#[derive(Deserialize)]
+struct TracedInstances {
+    kernel: usize,
+    imports: Vec<u32>,
+    rows: Vec<Vec<Constant>>,
+    fields: Vec<(String, Ref)>,
+    key: Option<Ref>,
+    prefix: String,
 }
 
 #[derive(Deserialize)]
@@ -428,6 +448,7 @@ struct TracedGuard {
 pub fn variant(
     json: &str,
     program: Program,
+    kernels: Vec<Program>,
     place: &dyn Fn(&At) -> Rc<str>,
     resources: &[Slot],
     inputs: &[&str],
@@ -514,7 +535,62 @@ pub fn variant(
     let image = |name: &str, what: &str| picture(name, what, false);
     let mut nodes = Vec::with_capacity(traced.nodes.len());
     let mut pictures = Vec::new();
+    let mut instances = Vec::new();
     for n in traced.nodes {
+        if let Some(batch) = n.instances {
+            let kernel = kernels
+                .get(batch.kernel)
+                .ok_or("unknown instance program")?;
+            let local = |r: Ref| -> Result<Prop, Error> {
+                match r {
+                    Ref::Expr(e) if (e as usize) < kernel.ops.len() => Ok(Prop::Expr(e)),
+                    Ref::Const { c } => Ok(Prop::Const(c.value()?)),
+                    _ => Err("unknown instance expression".into()),
+                }
+            };
+            let (fields, outputs) = batch
+                .fields
+                .into_iter()
+                .map(|(k, v)| Ok((Rc::from(k), local(v)?)))
+                .collect::<Result<Vec<_>, Error>>()?
+                .into_iter()
+                .unzip();
+            let rows = batch
+                .rows
+                .into_iter()
+                .map(|row| {
+                    row.into_iter()
+                        .map(|v| v.value().map(Prop::Const))
+                        .collect()
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+            let imports = batch
+                .imports
+                .into_iter()
+                .map(expr)
+                .collect::<Result<Vec<_>, _>>()?;
+            let slots = rows.first().map_or(0, Vec::len) + imports.len();
+            if rows.is_empty()
+                || slots > kernel.ops.len()
+                || rows.iter().any(|r| r.len() + imports.len() != slots)
+            {
+                return Err("invalid instance input rows".into());
+            }
+            instances.push((
+                nodes.len() as u32,
+                Rc::new(crate::template::Instances {
+                    fields,
+                    rows,
+                    formula: Some(Rc::new(crate::template::InstanceProgram {
+                        program: kernel.clone(),
+                        imports,
+                        outputs,
+                        key: batch.key.map(local).transpose()?,
+                        prefix: batch.prefix.into(),
+                    })),
+                }),
+            ));
+        }
         let kind = match &*n.kind {
             "view" => Kind::View,
             "text" => Kind::Text {
@@ -675,9 +751,9 @@ pub fn variant(
         roots,
         guards,
         pictures,
-        instances: Vec::new(),
+        instances,
     };
-    super::instances::pack(&mut template);
+    super::instances::pack(&mut template)?;
     Ok(template)
 }
 
@@ -764,6 +840,7 @@ mod tests {
         let t = variant(
             json,
             b.finish(),
+            Vec::new(),
             &|_| "test".into(),
             &[],
             &[],
@@ -867,7 +944,16 @@ mod tests {
             "template",
             vec![Arg::Text("t=".into()), Arg::Expr(doubled)],
         );
-        let t = variant(json, b.finish(), &place, &[], &[], &HashMap::new()).unwrap();
+        let t = variant(
+            json,
+            b.finish(),
+            Vec::new(),
+            &place,
+            &[],
+            &[],
+            &HashMap::new(),
+        )
+        .unwrap();
         // seconds, 2, mul, 1, gt, template
         assert_eq!(t.program.ops.len(), 6);
         assert_eq!(t.program.ops[2], Op::Bin(Bin::Mul, 0, 1));
@@ -891,6 +977,7 @@ mod tests {
             variant(
                 r#"{"nodes": [], "roots": [], "guards": [{"e": 5, "truthy": false, "when": [], "kind": "if", "at": 0}]}"#,
                 Program::default(),
+                Vec::new(),
                 &place,
                 &[],
                 &[],

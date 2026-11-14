@@ -28,6 +28,9 @@
     Object;
   const isArray = Array.isArray;
   const nativeFrom = Array.from;
+  const nativeMap = Array.prototype.map;
+  const nativeMath = Math;
+  const BATCH = Symbol("instance table");
   const stringify = JSON.stringify;
   const parse = JSON.parse;
   const NativeError = Error;
@@ -52,6 +55,7 @@
     this.args = freeze(args);
     this.v = v;
     this.late = late;
+    this.row = op === "row" || args.some((a) => a instanceof T && a.row);
     freeze(this);
   }
   const isT = (x) => x instanceof T;
@@ -444,6 +448,117 @@
       };
     }
     return o[name](...args);
+  }
+
+  // Only the compiler's proven-pure, direct View-child callbacks reach this path. A row
+  // contains scalars, never getters, sparse indices or objects with user-defined coercion.
+  function __map(source, callback, captures, reads, at) {
+    const fallback = () => __call(source, "map", at, callback);
+    if (!isArray(source) || getPrototypeOf(source) !== Array.prototype || source.length < 2)
+      return fallback();
+    const own = getOwnPropertyDescriptors(source);
+    if (
+      keys(own).some((k) => k !== "length" && !/^(0|[1-9][0-9]*)$/.test(k)) ||
+      source.map !== nativeMap
+    )
+      return fallback();
+    let captured;
+    try {
+      captured = captures();
+    } catch {
+      return fallback();
+    }
+    if (
+      captured[0] !== nativeMath ||
+      captured[1] !== "View" ||
+      !captured.slice(2).every((v) => scalar(v) && (!(v instanceof T) || (!v.late && !v.row)))
+    )
+      return fallback();
+    const first = own[0]?.value;
+    const object = plain(first);
+    const fields = object ? keys(getOwnPropertyDescriptors(first)) : null;
+    if (object !== reads.length > 0 || (object && reads.some((k) => !fields.includes(k))))
+      return fallback();
+    const rows = [];
+    let types;
+    for (let i = 0; i < source.length; i++) {
+      const item = own[i];
+      if (!item || !("value" in item)) return fallback();
+      let values;
+      if (object) {
+        if (!plain(item.value)) return fallback();
+        const props = getOwnPropertyDescriptors(item.value);
+        const names = keys(props);
+        if (names.length !== fields.length || names.some((k, j) => k !== fields[j]))
+          return fallback();
+        values = fields.map((k) => ("value" in props[k] ? props[k].value : undefined));
+      } else values = [item.value];
+      if (!values.every((v) => scalar(v) && !(v instanceof T))) return fallback();
+      if (!types) types = values.map((v) => typeof v);
+      if (values.some((v, j) => typeof v !== types[j])) return fallback();
+      rows.push([...values, i]);
+    }
+    const saved = [G.ops, nextValue, G.guards.length, G.joinTemplates];
+    const parameters = rows[0].map((v, i) => new T("row", [i], v, false));
+    const item = object
+      ? Object.fromEntries(fields.map((k, i) => [k, parameters[i]]))
+      : parameters[0];
+    let element;
+    try {
+      element = callback(item, parameters[parameters.length - 1]);
+    } catch {
+      element = null;
+    }
+    const props = element?.props;
+    const style = props?.style;
+    const allowed = new Set([
+      "position",
+      "left",
+      "top",
+      "width",
+      "height",
+      "borderRadius",
+      "backgroundColor",
+      "opacity",
+      "translate",
+      "rotate",
+      "scale",
+      "transform",
+      "transformOrigin",
+    ]);
+    const rowOnly = (v) =>
+      !(v instanceof T) || (v.row && (v.op === "row" || v.args.every(rowOnly)));
+    const valid =
+      element?.__el &&
+      element.type === "View" &&
+      element.children.length === 0 &&
+      plain(props) &&
+      keys(props).every((k) => ["key", "className", "style"].includes(k)) &&
+      (props.className === undefined || props.className === "absolute") &&
+      plain(style) &&
+      keys(style).every((k) => allowed.has(k)) &&
+      (style.position === "absolute" ||
+        (style.position === undefined && props.className === "absolute")) &&
+      ["width", "height"].every(
+        (k) =>
+          typeof style[k] === "number" &&
+          Number.isFinite(style[k]) &&
+          style[k] >= 0 &&
+          style[k] <= 33554431,
+      ) &&
+      ["left", "top"].every((k) => numeric(style[k])) &&
+      (props.key === undefined || (scalar(props.key) && rowOnly(props.key))) &&
+      G.guards.length === saved[2];
+    if (!valid) {
+      [G.ops, nextValue, G.guards.length, G.joinTemplates] = saved;
+      return fallback();
+    }
+    return {
+      [BATCH]: true,
+      element,
+      rows,
+      style: styleOf({ position: "absolute", ...style }, "View", element.site),
+    };
   }
 
   function __spread(x) {
@@ -2141,6 +2256,28 @@
   function render(x, out, at) {
     if (x === null || x === undefined || typeof x === "boolean") return;
     if (isArray(x)) return x.forEach((y) => render(y, out, at));
+    if (x[BATCH]) {
+      G.nodes += x.rows.length;
+      if (G.nodes > MAX_NODES) fail(at, "a frame has more than " + MAX_NODES + " elements");
+      if (G.svg > 0) fail(at, "<View> cannot be inside an <svg>");
+      out.push({
+        type: "view",
+        path: null,
+        classes: [],
+        style: [
+          ["position", "absolute"],
+          ["left", 0],
+          ["top", 0],
+          ["width", 0],
+          ["height", 0],
+        ],
+        children: [],
+        site: x.element.site,
+        batch: x,
+        prefix: G.keys.join("/"),
+      });
+      return;
+    }
     if (!x.__el) {
       if (typeof x === "string" && x.trim() === "") return;
       if (G.svg > 0) fail(at, "text in an <svg> is not supported yet: " + stringify(String(x)));
@@ -2264,6 +2401,59 @@
       return ids[root[TRACE_INDEX]];
     }
     const ref = (x) => (x instanceof T ? id(x) : { c: constant(x) });
+    function batch(n) {
+      const b = n.batch;
+      const globals = [],
+        globalSlots = new Map(),
+        dataSlots = new Map(),
+        order = [],
+        seen = new Set();
+      function visit(t) {
+        if (!(t instanceof T) || seen.has(t)) return;
+        seen.add(t);
+        if (!t.row) {
+          globalSlots.set(t, globals.length);
+          globals.push(t);
+          return;
+        }
+        if (t.op === "row" && !dataSlots.has(t.args[0])) dataSlots.set(t.args[0], dataSlots.size);
+        for (const a of t.args) visit(a);
+        if (t.op !== "row") order.push(t);
+      }
+      for (const [, v] of b.style) visit(v);
+      visit(b.element.props.key);
+      const data = dataSlots.size;
+      const kernel = host.kernel(data + globals.length);
+      const local = new Map();
+      const index = (t) =>
+        t.op === "row"
+          ? dataSlots.get(t.args[0])
+          : !t.row
+            ? data + globalSlots.get(t)
+            : local.get(t);
+      for (const t of order) {
+        local.set(
+          t,
+          host.recordKernel(
+            kernel,
+            t.op,
+            t.args.map((a) =>
+              a instanceof T ? index(a) : t.op === "template" ? { text: a.text } : { c: a },
+            ),
+          ),
+        );
+      }
+      const ref = (v) => (v instanceof T ? index(v) : { c: constant(v) });
+      const slots = [...dataSlots.keys()];
+      return {
+        kernel,
+        imports: globals.map(id),
+        rows: b.rows.map((r) => slots.map((slot) => constant(r[slot]))),
+        fields: b.style.map(([k, v]) => [k, ref(v)]),
+        key: b.element.props.key === undefined ? null : ref(b.element.props.key),
+        prefix: n.prefix,
+      };
+    }
     const nodes = [];
     function node(n) {
       const out = {
@@ -2274,6 +2464,7 @@
         children: [],
         site: n.site >= 0 ? n.site : null,
       };
+      if (n.batch) out.instances = batch(n);
       nodes.push(out);
       const index = nodes.length - 1;
       if ("source" in n) {
@@ -2619,6 +2810,7 @@
     __get,
     __idx,
     __call,
+    __map,
     __spread,
     __h,
     __hs,
