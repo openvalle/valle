@@ -6,7 +6,7 @@ use std::rc::Rc;
 use super::computed::{Style, computed_transforms};
 use super::declaration::{Declared, set};
 use super::property::Field;
-use super::units::Units;
+use super::units::{Len, Units};
 use super::{color, position, transform};
 use crate::layout::Rect;
 use crate::template::{InstanceProgram, Instances, Prop, V};
@@ -36,9 +36,61 @@ struct Formula {
 }
 
 struct Bound {
-    fixed: Declared,
+    fixed: Fixed,
     updates: Vec<(Field, Prop, Rc<str>)>,
     local: Vec<V>,
+}
+
+/// Only the declarations an instance can use. Keeping a full Declared per row would also
+/// retain and clone the defaults for grids, fonts, background layers and unrelated features.
+struct Fixed {
+    inset: [Len; 2],
+    size: [Len; 2],
+    radii: [[Len; 2]; 4],
+    color: Option<color::Rgba>,
+    opacity: f64,
+    translate: Option<transform::Function<Len>>,
+    rotate: Option<transform::Function<Len>>,
+    scale: Option<transform::Function<Len>>,
+    transform: Vec<transform::Function<Len>>,
+    origin: [position::Offset<Len>; 2],
+    origin_z: Len,
+}
+
+impl Fixed {
+    fn new(d: Declared) -> Self {
+        let [top, _, _, left] = d.inset;
+        Self {
+            inset: [left, top],
+            size: d.size,
+            radii: d.radii,
+            color: d.background,
+            opacity: d.opacity,
+            translate: d.translate,
+            rotate: d.rotate,
+            scale: d.scale,
+            transform: d.transform,
+            origin: d.transform_origin,
+            origin_z: d.transform_origin_z,
+        }
+    }
+
+    /// Reset the row's drawing declarations before applying dynamic values. The same scratch
+    /// declaration can then use the normal parser without copying unrelated defaults.
+    fn reset(&self, d: &mut Declared) {
+        d.inset[3].clone_from(&self.inset[0]);
+        d.inset[0].clone_from(&self.inset[1]);
+        d.size.clone_from(&self.size);
+        d.radii.clone_from(&self.radii);
+        d.background = self.color;
+        d.opacity = self.opacity;
+        d.translate.clone_from(&self.translate);
+        d.rotate.clone_from(&self.rotate);
+        d.scale.clone_from(&self.scale);
+        d.transform.clone_from(&self.transform);
+        d.transform_origin.clone_from(&self.origin);
+        d.transform_origin_z.clone_from(&self.origin_z);
+    }
 }
 
 impl Table {
@@ -111,7 +163,7 @@ impl Table {
                 }
             }
             rows.push(Bound {
-                fixed: d,
+                fixed: Fixed::new(d),
                 updates: rest,
                 local,
             });
@@ -149,6 +201,7 @@ impl Table {
         };
         let mut rows = Vec::with_capacity(self.rows.len());
         let mut local = Vec::new();
+        let mut d = Declared::default();
         for row in &self.rows {
             let values = if let Some(f) = &self.formula {
                 local.clone_from(&row.local);
@@ -178,7 +231,7 @@ impl Table {
             } else {
                 values
             };
-            let mut d = row.fixed.clone();
+            row.fixed.reset(&mut d);
             for (field, prop, name) in &row.updates {
                 let v = match prop {
                     Prop::Const(v) => v,
@@ -275,6 +328,56 @@ mod tests {
             let plain = plain.frame(Tick::ZERO).unwrap();
             assert!(!table.template.instances.is_empty());
             assert_eq!(table.items, plain.items);
+        });
+    }
+
+    #[test]
+    fn rows_reset_styles_and_resolve_current_parent_units() {
+        run(|| {
+            let load = |extra| {
+                let source = format!(
+                    r#"
+                    export const composition = {{width:320,height:180,fps:30,duration:3}};
+                    export default function Scene() {{
+                        const {{seconds:t}}=useCurrentTime();
+                        return <View style={{{{position:'relative',width:320,height:180,fontSize:12+t*4,color:t<1?'red':'blue'}}}}>
+                            {{Array.from({{length:4}},(_,i)=><View className="absolute" style={{{{
+                                left:10+i*40,top:20,width:30,height:20,backgroundColor:i%2?'currentColor':'orange',
+                                borderRadius:i%2?`${{t}}em`:'25%',opacity:i%2?t/3:1,
+                                translate:i%2?`${{t}}em 2vh`:'none',rotate:i%3?'none':`${{t*20}}deg`,
+                                scale:i%2?0.7:1,transform:i%2?'none':`skewX(${{t*10}}deg)`,
+                                transformOrigin:i%2?'left bottom':'25% top 0.5em'{extra}
+                            }}}}/>)}}
+                        </View>;
+                    }}
+                "#
+                );
+                Scene::load(
+                    "s.motion.tsx",
+                    &|p| (p == "s.motion.tsx").then(|| source.as_bytes().to_vec()),
+                    &Inputs::default(),
+                    crate::testing::fonts(),
+                )
+                .unwrap()
+            };
+            let mut table = load("");
+            let mut plain = load(",margin:0");
+            for time in ["1", "2", "0", "2.9"] {
+                let at = Tick::parse_seconds(time).unwrap();
+                let a = table.frame(at).unwrap();
+                let b = plain.frame(at).unwrap();
+                let rows = a.styles[1].instances.as_ref().unwrap();
+                assert!(a.template.instances[0].1.formula.is_none());
+                for (row, style) in rows.iter().zip(&b.styles[1..]) {
+                    assert_eq!(row.color, style.background);
+                    assert_eq!(row.opacity, style.opacity);
+                    assert_eq!(row.radii, style.radii);
+                    assert_eq!(row.transform, style.transform);
+                    assert_eq!(row.individual, style.individual);
+                    assert_eq!(row.origin, style.transform_origin);
+                    assert_eq!(row.origin_z, style.transform_origin_z);
+                }
+            }
         });
     }
 

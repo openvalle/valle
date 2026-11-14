@@ -183,9 +183,28 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
             let pick = if values[*c as usize].truthy() { a } else { b };
             values[*pick as usize].clone()
         }
-        Op::Math(f, args) => V::Num(f.call(&args.iter().map(num).collect::<Vec<_>>())),
+        Op::Math(f, args) => V::Num(match args.as_slice() {
+            [] => f.call(&[]),
+            [a] => f.call(&[num(a)]),
+            [a, b] => f.call(&[num(a), num(b)]),
+            [a, b, c] => f.call(&[num(a), num(b), num(c)]),
+            _ => f.call(&args.iter().map(num).collect::<Vec<_>>()),
+        }),
         Op::Template(parts) => {
-            let mut s = String::new();
+            // Reserve once for the literal text and typical scalar representations. This is
+            // a capacity hint, not a length limit: longer numbers and strings still grow it.
+            let capacity = parts
+                .iter()
+                .map(|p| match p {
+                    Part::Text(t) => t.len(),
+                    Part::Expr(i) => match &values[*i as usize] {
+                        V::Num(_) => 24,
+                        V::Bool(_) => 5,
+                        V::Str(s) => s.len(),
+                    },
+                })
+                .sum();
+            let mut s = String::with_capacity(capacity);
             for p in parts {
                 match p {
                     Part::Text(t) => s.push_str(t),
@@ -376,6 +395,24 @@ mod tests {
         seconds: 1.5,
         progress: 0.75,
     };
+
+    #[test]
+    fn math_keeps_empty_variadic_and_signed_zero_arguments() {
+        for (f, args, expected) in [
+            (MathFn::Min, vec![], f64::INFINITY),
+            (MathFn::Max, vec![], f64::NEG_INFINITY),
+            (MathFn::Abs, vec![-0.0], 0.0),
+            (MathFn::Min, vec![0.0, -0.0], -0.0),
+            (MathFn::Max, vec![-0.0, 0.0, -1.0], 0.0),
+            (MathFn::Hypot, vec![3.0, 4.0, 0.0, 0.0, 12.0], 13.0),
+            (MathFn::Min, vec![8.0, 6.0, 4.0, 2.0], 2.0),
+        ] {
+            let indices = (0..args.len() as u32).collect();
+            let values = args.into_iter().map(V::Num).collect::<Vec<_>>();
+            let actual = value(&Op::Math(f, indices), &values, AT).unwrap().num();
+            assert_eq!(actual.to_bits(), expected.to_bits(), "{f:?}");
+        }
+    }
 
     #[test]
     fn a_failed_variant_skips_its_values_but_a_matching_one_keeps_errors() {
