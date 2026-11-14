@@ -378,8 +378,9 @@ fn subtree(
         .map(|leaf| {
             let mut f = (*styles[leaf.node].font).clone();
             f.wrap = false;
-            f.balance = false;
+            f.wrap_style = crate::style::WrapStyle::Auto;
             f.align = TextAlign::Left;
+            f.align_last = None;
             f.indent = None;
             f.collapse = Collapse::Preserve;
             f
@@ -795,6 +796,32 @@ mod tests {
                 assert_ne!(drawn.items, items);
             }
             previous = Some(drawn.items);
+        }
+    }
+
+    #[test]
+    fn inherited_paragraph_alignment_does_not_move_svg_glyphs() {
+        let draw = |last: &str| {
+            let source = indoc::indoc! {r#"
+              export const composition = { width: 200, height: 80, fps: 1, duration: 1 };
+              export default function Scene() {
+                return <View style={{textAlignLast: "LAST", textWrap: "pretty"}}>
+                  <svg width={200} height={80}><text x={10} y={40} fontSize={24}>AB<tspan fill="red">CD</tspan></text></svg>
+                </View>;
+              }
+            "#}.replace("LAST",last);
+            let mut scene = Scene::load(
+                "alignment.motion.tsx",
+                &|_| Some(source.as_bytes().to_vec()),
+                &Inputs::default(),
+                crate::testing::fonts(),
+            )
+            .unwrap();
+            scene.frame(Tick::ZERO).unwrap().items
+        };
+        let expected = draw("auto");
+        for last in ["right", "center", "justify"] {
+            assert_eq!(draw(last), expected, "{last}");
         }
     }
 

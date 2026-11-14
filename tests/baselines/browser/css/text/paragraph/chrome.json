@@ -1,0 +1,234 @@
+{
+  "size": [490, 205],
+  "sources": {
+    "tests/baselines/browser/css/text/paragraph/scene.html": "d849b796e3b816e116995ab214ab6233f3e86452dd12afcd471ef602facb7d97",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97",
+    "tests/resources/NotoSansSC.ttf": "6cbd3ac22ef454e4e9bcfb67369ea94297002a218e9abebc90852534afee096a"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "last",
+        "border": {
+          "x": 10,
+          "y": 10,
+          "width": 260,
+          "height": 100
+        },
+        "padding": {
+          "x": 10,
+          "y": 10,
+          "width": 260,
+          "height": 100
+        },
+        "content": {
+          "x": 10,
+          "y": 10,
+          "width": 260,
+          "height": 100
+        }
+      },
+      {
+        "key": "pretty",
+        "border": {
+          "x": 10,
+          "y": 120,
+          "width": 260,
+          "height": 70
+        },
+        "padding": {
+          "x": 10,
+          "y": 120,
+          "width": 260,
+          "height": 70
+        },
+        "content": {
+          "x": 10,
+          "y": 120,
+          "width": 260,
+          "height": 70
+        }
+      },
+      {
+        "key": "anywhere",
+        "border": {
+          "x": 280,
+          "y": 10,
+          "width": 70,
+          "height": 180
+        },
+        "padding": {
+          "x": 280,
+          "y": 10,
+          "width": 70,
+          "height": 180
+        },
+        "content": {
+          "x": 280,
+          "y": 10,
+          "width": 70,
+          "height": 180
+        }
+      },
+      {
+        "key": "strict",
+        "border": {
+          "x": 360,
+          "y": 10,
+          "width": 52,
+          "height": 180
+        },
+        "padding": {
+          "x": 360,
+          "y": 10,
+          "width": 52,
+          "height": 180
+        },
+        "content": {
+          "x": 360,
+          "y": 10,
+          "width": 52,
+          "height": 180
+        }
+      },
+      {
+        "key": "loose",
+        "border": {
+          "x": 420,
+          "y": 10,
+          "width": 52,
+          "height": 180
+        },
+        "padding": {
+          "x": 420,
+          "y": 10,
+          "width": 52,
+          "height": 180
+        },
+        "content": {
+          "x": 420,
+          "y": 10,
+          "width": 52,
+          "height": 180
+        }
+      }
+    ],
+    "lines": [
+      {
+        "key": "last",
+        "text": ["One two three four five six ", "seven", "End"],
+        "geometry": [
+          {
+            "x": 10,
+            "baseline": 31,
+            "height": 28
+          },
+          {
+            "x": 215.734375,
+            "baseline": 59,
+            "height": 28
+          },
+          {
+            "x": 234.21875,
+            "baseline": 87,
+            "height": 28
+          }
+        ]
+      },
+      {
+        "key": "pretty",
+        "text": ["One two three four five ", "six seven"],
+        "geometry": [
+          {
+            "x": 10,
+            "baseline": 141,
+            "height": 28
+          },
+          {
+            "x": 10,
+            "baseline": 169,
+            "height": 28
+          }
+        ]
+      },
+      {
+        "key": "anywhere",
+        "text": ["ABC DE", "FGH IJK", "LMNO"],
+        "geometry": [
+          {
+            "x": 280,
+            "baseline": 31,
+            "height": 28
+          },
+          {
+            "x": 280,
+            "baseline": 59,
+            "height": 28
+          },
+          {
+            "x": 280,
+            "baseline": 87,
+            "height": 28
+          }
+        ]
+      },
+      {
+        "key": "strict",
+        "text": ["春", "あぁ", "天", "あぁ", "山"],
+        "geometry": [
+          {
+            "x": 360,
+            "baseline": 32,
+            "height": 28
+          },
+          {
+            "x": 360,
+            "baseline": 60,
+            "height": 28
+          },
+          {
+            "x": 360,
+            "baseline": 88,
+            "height": 28
+          },
+          {
+            "x": 360,
+            "baseline": 116,
+            "height": 28
+          },
+          {
+            "x": 360,
+            "baseline": 144,
+            "height": 28
+          }
+        ]
+      },
+      {
+        "key": "loose",
+        "text": ["春あ", "ぁ天", "あぁ", "山"],
+        "geometry": [
+          {
+            "x": 420,
+            "baseline": 32,
+            "height": 28
+          },
+          {
+            "x": 420,
+            "baseline": 60,
+            "height": 28
+          },
+          {
+            "x": 420,
+            "baseline": 88,
+            "height": 28
+          },
+          {
+            "x": 420,
+            "baseline": 116,
+            "height": 28
+          }
+        ]
+      }
+    ]
+  }
+}

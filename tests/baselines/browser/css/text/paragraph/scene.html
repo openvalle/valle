@@ -1,0 +1,38 @@
+<!doctype html><meta charset="utf-8" /><title>Paragraph controls</title
+><style>
+  @font-face {
+    font-family: "Test Sans";
+    src: url("/tests/resources/NotoSans.ttf");
+    font-weight: 100 900;
+  }
+  @font-face {
+    font-family: CJK;
+    src: url("/tests/resources/NotoSansSC.ttf");
+    font-weight: 100 900;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+  }
+  #canvas {
+    position: relative;
+    width: 490px;
+    height: 205px;
+    background: white;
+  }
+</style>
+<div id="canvas">
+  <!-- prettier-ignore -->
+  <div data-key="last" data-text="" style="position:absolute;font-family:&quot;Test Sans&quot;;font-size:20px;line-height:28px;color:#17324d;background-color:#eff6ff;left:10px;top:10px;width:260px;height:100px;white-space:pre-wrap;text-align:justify;text-align-last:right">One two three four five six seven
+End</div>
+  <!-- prettier-ignore -->
+  <div data-key="pretty" data-text="" style="position:absolute;font-family:&quot;Test Sans&quot;;font-size:20px;line-height:28px;color:#17324d;background-color:#eff6ff;left:10px;top:120px;width:260px;height:70px;text-wrap:pretty">One two three four five six seven</div>
+  <!-- prettier-ignore -->
+  <div data-key="anywhere" data-text="" style="position:absolute;font-family:&quot;Test Sans&quot;;font-size:20px;line-height:28px;color:#17324d;background-color:#eff6ff;left:280px;top:10px;width:70px;height:180px;line-break:anywhere;word-break:keep-all">ABC DEFGH IJKLMNO</div>
+  <!-- prettier-ignore -->
+  <div data-key="strict" data-text="" style="position:absolute;font-family:CJK;font-size:20px;line-height:28px;color:#17324d;background-color:#eff6ff;left:360px;top:10px;width:52px;height:180px;line-break:strict">春あぁ天あぁ山</div>
+  <!-- prettier-ignore -->
+  <div data-key="loose" data-text="" style="position:absolute;font-family:CJK;font-size:20px;line-height:28px;color:#17324d;background-color:#eff6ff;left:420px;top:10px;width:52px;height:180px;line-break:loose">春あぁ天あぁ山</div>
+</div>

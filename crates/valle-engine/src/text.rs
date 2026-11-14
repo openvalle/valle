@@ -36,7 +36,7 @@ use crate::slug;
 use crate::style::color::Rgba;
 use crate::style::{
     Collapse, DecorationStyle, Family, Feature, Font, FontStyle, LineHeight, OverflowWrap,
-    TextAlign, TextTransform, VARIANTS, Variation, WordBreak, WritingMode,
+    TextAlign, TextTransform, VARIANTS, Variation, WordBreak, WrapStyle, WritingMode,
 };
 use crate::template::Error;
 
@@ -222,6 +222,7 @@ struct Shaping {
     collapse: Collapse,
     wrap: bool,
     word_break: WordBreak,
+    line_break: u8,
     /// `word-break: break-word` is `anywhere` here.
     overflow_wrap: OverflowWrap,
     transform: TextTransform,
@@ -249,6 +250,7 @@ impl Shaping {
             collapse: font.collapse,
             wrap: font.wrap,
             word_break: font.word_break,
+            line_break: font.line_break as u8,
             overflow_wrap: match (font.word_break, font.overflow_wrap) {
                 (WordBreak::BreakWord, _) => OverflowWrap::Anywhere,
                 (_, OverflowWrap::BreakWord) if min => OverflowWrap::Normal,
@@ -278,7 +280,7 @@ struct Paragraph {
     /// one line).
     empty: bool,
     /// The width its lines were last broken at, their indent, and whether they balance.
-    broken: Option<(Option<f32>, f32, bool)>,
+    broken: Option<(Option<f32>, f32, WrapStyle)>,
     used: bool,
 }
 
@@ -568,6 +570,7 @@ impl Text {
         if content.font.writing != WritingMode::Horizontal {
             let mut font = content.font.clone();
             font.align = TextAlign::Start;
+            font.align_last = None;
             let measured = Content {
                 font: &font,
                 pieces: content
@@ -627,7 +630,7 @@ impl Text {
         if content.font.writing != WritingMode::Horizontal {
             return vertical::lines(self, content, Some(width), false);
         }
-        let alignment = match content.font.align {
+        let alignment = |align| match align {
             TextAlign::Start => Alignment::Start,
             TextAlign::End => Alignment::End,
             TextAlign::Left => Alignment::Left,
@@ -649,7 +652,13 @@ impl Text {
                 decorations: Vec::new(),
             });
         }
-        p.layout.align(alignment, AlignmentOptions::default());
+        p.layout.align(
+            alignment(content.font.align),
+            AlignmentOptions {
+                last_line_alignment: content.font.align_last.map(alignment),
+                ..AlignmentOptions::default()
+            },
+        );
         let boxes = stack(&p.layout, content, strut);
         let text = p.layout.lines().map(|line| line.text_range()).collect();
         let mut baselines = Vec::new();
@@ -1024,6 +1033,23 @@ impl Text {
                     WordBreak::KeepAll => parley::WordBreak::KeepAll,
                 };
                 builder.push(StyleProperty::WordBreak(breaks), range.clone());
+                builder.push(StyleProperty::LineBreak(font.line_break), range.clone());
+                // CSS Text 3 forbids a break before small kana in normal as well as strict.
+                // ICU's normal table still treats CJ as an ideograph. Tailor only those
+                // characters, preserving normal's other punctuation rules and Span styles.
+                if font.line_break == parley::LineBreak::Normal {
+                    use icu_properties::{CodePointMapData, props::LineBreak};
+                    let classes = CodePointMapData::<LineBreak>::new();
+                    for (offset, c) in string[range.clone()].char_indices() {
+                        if classes.get(c) == LineBreak::ConditionalJapaneseStarter {
+                            let start = range.start + offset;
+                            builder.push(
+                                StyleProperty::LineBreak(parley::LineBreak::Strict),
+                                start..start + c.len_utf8(),
+                            );
+                        }
+                    }
+                }
                 let wrap = match key[k].1.overflow_wrap {
                     OverflowWrap::Normal => parley::OverflowWrap::Normal,
                     OverflowWrap::Anywhere => parley::OverflowWrap::Anywhere,
@@ -1067,16 +1093,24 @@ impl Text {
             .get_mut(&key)
             .ok_or("engine bug: a paragraph went missing")?;
         p.used = true;
-        let balanced = content.font.balance && !min;
+        let wrap_style = if min {
+            WrapStyle::Auto
+        } else {
+            content.font.wrap_style
+        };
         let indent = (content.font.indent.as_ref())
             .map_or(0.0, |indent| indent.resolve(width.unwrap_or(0.0)));
-        if p.broken != Some((width, indent, balanced)) {
+        if p.broken != Some((width, indent, wrap_style)) {
             p.layout.set_text_indent(indent, IndentOptions::default());
             p.layout.break_all_lines(width);
-            if let Some(width) = width.filter(|_| balanced && !p.empty) {
-                balance(&mut p.layout, width);
+            if let Some(width) = width.filter(|_| !p.empty) {
+                match wrap_style {
+                    WrapStyle::Auto => {}
+                    WrapStyle::Balance => balance(&mut p.layout, width),
+                    WrapStyle::Pretty => pretty(&mut p.layout, width, &p.string),
+                }
             }
-            p.broken = Some((width, indent, balanced));
+            p.broken = Some((width, indent, wrap_style));
         }
         Ok(p)
     }
@@ -1102,6 +1136,74 @@ fn balance(layout: &mut parley::Layout<u32>, width: f32) {
         }
     }
     balanced(layout, narrowest, width);
+}
+
+/// Avoid a final one-word line by moving the preceding word with it. Earlier lines
+/// retain their greedy breaks. Each forced-break paragraph is considered separately;
+/// a change that adds a line or still leaves a widow is discarded.
+fn pretty(layout: &mut parley::Layout<u32>, width: f32, text: &str) {
+    let mut targets = Vec::new();
+    let mut paragraph = 0;
+    let count = layout.len();
+    for (i, line) in layout.lines().enumerate() {
+        if matches!(
+            line.break_reason(),
+            BreakReason::Explicit | BreakReason::None
+        ) {
+            if i > paragraph && text[line.text_range()].unicode_words().count() == 1 {
+                let previous = layout.get(i - 1).unwrap();
+                let range = previous.text_range();
+                let words: Vec<_> = text[range.clone()].unicode_word_indices().collect();
+                if let Some((start, _)) = words.last().filter(|_| words.len() > 1) {
+                    let start = range.start + start;
+                    let tail: f32 = previous
+                        .runs()
+                        .flat_map(|r| r.clusters())
+                        .filter(|c| c.text_range().start >= start)
+                        .map(|c| c.advance())
+                        .sum();
+                    let narrow = (previous.metrics().advance - tail - 1.0 / 64.0).max(0.0);
+                    targets.push((i - 1, narrow, line.text_range().end));
+                }
+            }
+            paragraph = i + 1;
+        }
+    }
+    if targets.is_empty() {
+        return;
+    }
+    let mut lines = layout.break_lines();
+    lines.state_mut().set_layout_max_advance(width);
+    let mut index = 0;
+    lines.state_mut().set_line_max_advance(
+        targets
+            .iter()
+            .find(|(i, ..)| *i == 0)
+            .map_or(width, |(_, w, _)| *w),
+    );
+    while let Some(yielded) = lines.break_next() {
+        if matches!(yielded, YieldData::LineBreak(_)) {
+            lines.set_prior_line_width(width);
+            index += 1;
+            lines.state_mut().set_line_max_advance(
+                targets
+                    .iter()
+                    .find(|(i, ..)| *i == index)
+                    .map_or(width, |(_, w, _)| *w),
+            );
+        }
+    }
+    lines.finish();
+    if layout.len() != count
+        || targets.iter().any(|(_, _, end)| {
+            layout
+                .lines()
+                .find(|l| l.text_range().end == *end)
+                .is_none_or(|l| text[l.text_range()].unicode_words().count() < 2)
+        })
+    {
+        layout.break_all_lines(Some(width));
+    }
 }
 
 /// How many lines `layout` has up to its first forced break.
@@ -1464,6 +1566,8 @@ mod tests {
             family: Rc::new([Family::SansSerif]),
             line_height: LineHeight::Normal,
             align: TextAlign::Start,
+            align_last: None,
+            line_break: parley::LineBreak::Strict,
             writing: WritingMode::Horizontal,
             orientation: crate::style::Orientation::Mixed,
             indent: None,
@@ -1471,7 +1575,7 @@ mod tests {
             word_spacing: 0.0,
             collapse: Collapse::Collapse,
             wrap: true,
-            balance: false,
+            wrap_style: WrapStyle::Auto,
             word_break: WordBreak::Normal,
             overflow_wrap: OverflowWrap::Normal,
             transform: TextTransform::None,
@@ -1919,12 +2023,157 @@ mod tests {
     }
 
     #[test]
+    fn last_line_alignment_applies_after_wrapping_and_forced_breaks() {
+        let mut t = text();
+        let mut f = font(20.0);
+        f.collapse = Collapse::Preserve;
+        f.align_last = Some(TextAlign::Right);
+        let c = plain("One two three four\nLast", &f);
+        let lines = t.lines(&c, 130.0).unwrap();
+        for (i, range) in lines.text.iter().enumerate() {
+            let right = lines
+                .runs
+                .iter()
+                .filter(|r| r.line as usize == i)
+                .map(|r| r.x[1])
+                .fold(0.0, f32::max);
+            let last =
+                range.end == lines.string.len() || lines.string[range.clone()].ends_with('\n');
+            if last {
+                assert!((right - 130.0).abs() < 0.05, "{range:?}: {right}");
+            }
+        }
+        let lines = t
+            .lines(
+                &plain(
+                    "One two",
+                    &Font {
+                        align_last: Some(TextAlign::Justify),
+                        ..f
+                    },
+                ),
+                200.0,
+            )
+            .unwrap();
+        assert!((lines.runs.last().unwrap().x[1] - 200.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn last_column_alignment_does_not_change_intrinsic_measurement() {
+        let mut t = text();
+        let f = Font {
+            writing: WritingMode::VerticalRl,
+            ..font(20.0)
+        };
+        let expected = t.measure(&plain("ABC", &f), Some(200.0)).unwrap();
+        for align in [TextAlign::Right, TextAlign::Center, TextAlign::Justify] {
+            let aligned = Font {
+                align_last: Some(align),
+                ..f.clone()
+            };
+            assert_eq!(
+                t.measure(&plain("ABC", &aligned), Some(200.0)).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn pretty_moves_a_word_to_a_lonely_last_line_without_adding_lines() {
+        let mut t = text();
+        let f = font(20.0);
+        let words = "One two three four five six seven";
+        let pretty = Font {
+            wrap_style: WrapStyle::Pretty,
+            ..f.clone()
+        };
+        let mut found = false;
+        for width in [240.0, 250.0, 260.0, 270.0, 280.0, 290.0] {
+            let a = t.lines(&plain(words, &f), width).unwrap();
+            let b = t.lines(&plain(words, &pretty), width).unwrap();
+            assert_eq!(a.boxes.len(), b.boxes.len());
+            if a.text
+                .last()
+                .is_some_and(|r| a.string[r.clone()].unicode_words().count() == 1)
+                && b.text
+                    .last()
+                    .is_some_and(|r| b.string[r.clone()].unicode_words().count() > 1)
+            {
+                found = true;
+            }
+            let again = t.lines(&plain(words, &f), width).unwrap();
+            assert_eq!(a, again, "changing wrap style must invalidate line breaks");
+        }
+        assert!(found, "pretty must improve a lonely final word");
+    }
+
+    #[test]
+    fn line_break_anywhere_overrides_no_break_spaces_and_keep_all() {
+        let mut t = text();
+        let f = Font {
+            word_break: WordBreak::KeepAll,
+            ..font(20.0)
+        };
+        let normal = t.lines(&plain("AB\u{a0}CD", &f), 25.0).unwrap();
+        let anywhere = t
+            .lines(
+                &plain(
+                    "AB\u{a0}CD",
+                    &Font {
+                        line_break: parley::LineBreak::Anywhere,
+                        ..f.clone()
+                    },
+                ),
+                25.0,
+            )
+            .unwrap();
+        assert_eq!(normal.boxes.len(), 1);
+        assert!(anywhere.boxes.len() > 1);
+        assert_eq!(normal, t.lines(&plain("AB\u{a0}CD", &f), 25.0).unwrap());
+    }
+
+    #[test]
+    fn normal_and_strict_keep_small_kana_with_the_preceding_character() {
+        let mut t = text();
+        let f = font(20.0);
+        let words = "春あぁ天あぁ山";
+        let strict = t.lines(&plain(words, &f), 52.0).unwrap();
+        let normal = t
+            .lines(
+                &plain(
+                    words,
+                    &Font {
+                        line_break: parley::LineBreak::Normal,
+                        ..f.clone()
+                    },
+                ),
+                52.0,
+            )
+            .unwrap();
+        let loose = t
+            .lines(
+                &plain(
+                    words,
+                    &Font {
+                        line_break: parley::LineBreak::Loose,
+                        ..f
+                    },
+                ),
+                52.0,
+            )
+            .unwrap();
+        assert_eq!(strict.text, normal.text);
+        assert_eq!(strict.text.len(), 5);
+        assert_eq!(loose.text.len(), 4);
+    }
+
+    #[test]
     fn balanced_lines_are_as_narrow_as_they_go_up_to_the_first_forced_break() {
         let mut t = text();
         let (normal, balanced) = (
             font(16.0),
             Font {
-                balance: true,
+                wrap_style: WrapStyle::Balance,
                 align: TextAlign::Center,
                 ..font(16.0)
             },

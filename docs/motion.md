@@ -214,6 +214,31 @@ This is vertical **Text/Span** layout; vertical container layout and vertical SV
 text are not implemented and report an error. Use flex or grid to position separate
 text blocks. `sideways-rl`, `sideways-lr` and `text-combine-upright` are not supported.
 
+### Paragraph alignment and wrapping
+
+`textAlignLast` sets alignment on the last line of each paragraph, including a line
+before a preserved newline: `"auto"` (default), `"start"`, `"end"`, `"left"`,
+`"right"`, `"center"` or `"justify"`. With `"auto"`, justified paragraphs leave their
+last line start-aligned; other paragraphs keep their `textAlign`.
+
+`textWrap: "pretty"` (also `textWrapStyle`) avoids a lone final word when another
+word can move down without adding a line. This is a deterministic layout preference,
+not a promise to reproduce every browser's pretty-breaking algorithm. `"balance"`
+continues to balance short titles; `"auto"` uses ordinary greedy breaks.
+
+`lineBreak` accepts `"auto"`, `"strict"`, `"normal"`, `"loose"` and `"anywhere"`.
+Auto uses strict rules. Loose relaxes CJK punctuation restrictions; normal and strict
+keep small kana with the preceding character. Anywhere allows wrapping between
+character clusters even around no-break spaces and with `wordBreak: "keep-all"`;
+it does not split a grapheme or override `whiteSpace: "nowrap"`.
+All three properties inherit and also apply to vertical text columns.
+
+```tsx
+<Text style={{ width: 260, textAlign: "justify", textAlignLast: "center", textWrap: "pretty" }}>
+  One two three four five six seven
+</Text>
+```
+
 ### SVG patterns
 
 Use `<pattern id="dots" width={20} height={20} patternUnits="userSpaceOnUse">`

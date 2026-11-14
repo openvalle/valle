@@ -1,6 +1,7 @@
 //! Vertical paragraphs keep logical inline/block coordinates until paint. Font fallback
 //! comes from Parley; upright clusters use HarfRust's vertical forms, origins and advances.
 use std::collections::HashSet;
+use unicode_segmentation::UnicodeSegmentation;
 
 use icu_properties::{
     CodePointMapData,
@@ -9,7 +10,9 @@ use icu_properties::{
 use skrifa::raw::TableProvider;
 
 use super::{Content, Glyph, Lines, Run, Text};
-use crate::style::{Collapse, Font, Orientation, OverflowWrap, TextAlign, WordBreak, WritingMode};
+use crate::style::{
+    Collapse, Font, Orientation, OverflowWrap, TextAlign, WordBreak, WrapStyle, WritingMode,
+};
 
 struct Cluster {
     range: std::ops::Range<usize>,
@@ -32,9 +35,19 @@ pub(super) fn lines(
     min: bool,
 ) -> Result<Lines, String> {
     let original = layout(text, content, width, min, width)?;
-    let Some(width) =
-        width.filter(|_| content.font.balance && !min && (2..=6).contains(&original.boxes.len()))
-    else {
+    let pretty = content.font.wrap_style == WrapStyle::Pretty;
+    let widow = |lines: &Lines| {
+        lines
+            .text
+            .last()
+            .is_some_and(|r| lines.string[r.clone()].unicode_words().count() == 1)
+    };
+    let eligible = match content.font.wrap_style {
+        WrapStyle::Auto => false,
+        WrapStyle::Balance => (2..=6).contains(&original.boxes.len()),
+        WrapStyle::Pretty => original.boxes.len() > 1 && widow(&original),
+    };
+    let Some(width) = width.filter(|_| eligible && !min) else {
         return Ok(original);
     };
     let n = original.boxes.len();
@@ -51,7 +64,12 @@ pub(super) fn lines(
             low = mid;
         }
     }
-    layout(text, content, Some(high as f32 / 64.0), min, Some(width))
+    let result = layout(text, content, Some(high as f32 / 64.0), min, Some(width))?;
+    Ok(if pretty && widow(&result) {
+        original
+    } else {
+        result
+    })
 }
 
 fn layout(
@@ -297,18 +315,30 @@ fn layout(
             let baseline = top + extent[0];
             let center = baseline - central;
             let extra = alignment_width.map_or(0.0, |w| (w - advance).max(0.0));
-            let alignment = match content.font.align {
+            let last = end == clusters.len();
+            let align = if last {
+                content
+                    .font
+                    .align_last
+                    .unwrap_or(if content.font.align == TextAlign::Justify {
+                        TextAlign::Start
+                    } else {
+                        content.font.align
+                    })
+            } else {
+                content.font.align
+            };
+            let alignment = match align {
                 TextAlign::End | TextAlign::Right => extra,
                 TextAlign::Center => extra * 0.5,
                 _ => 0.0,
             };
             let spaces = slice.iter().filter(|c| c.space).count();
-            let justify =
-                if content.font.align == TextAlign::Justify && end < clusters.len() && spaces > 0 {
-                    extra / spaces as f32
-                } else {
-                    0.0
-                };
+            let justify = if align == TextAlign::Justify && spaces > 0 {
+                extra / spaces as f32
+            } else {
+                0.0
+            };
             let index = out.boxes.len() as u32;
             let mut cursor = indent + alignment;
             for c in slice {

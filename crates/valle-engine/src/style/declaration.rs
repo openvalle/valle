@@ -12,8 +12,8 @@ use super::color::Rgba;
 use super::computed::{BLENDS, Blend, BorderStyle, Cap, Fit, Join, PAINT_ORDER, Paint, PaintPart};
 use super::font::{
     Collapse, DecorationStyle, Family, Feature, FontStyle, Leading, Orientation, OverflowWrap,
-    SkipInk, TextAlign, TextTransform, VARIANTS, Variation, Weight, WordBreak, WritingMode,
-    families, features, font_style, leading, stretch, variants, variations, weight,
+    SkipInk, TextAlign, TextTransform, VARIANTS, Variation, Weight, WordBreak, WrapStyle,
+    WritingMode, families, features, font_style, leading, stretch, variants, variations, weight,
 };
 use super::property::{BorderPart, Field, NO_FLOW, NO_SCROLL, Sides, USE_FLEX};
 use super::units::{
@@ -194,6 +194,8 @@ pub(super) struct Declared {
     pub(super) variations: Option<Rc<[Variation]>>,
     pub(super) line_height: Option<Leading>,
     pub(super) text_align: Option<TextAlign>,
+    pub(super) align_last: Option<Option<TextAlign>>,
+    pub(super) line_break: Option<parley::LineBreak>,
     pub(super) writing: Option<WritingMode>,
     pub(super) orientation: Option<Orientation>,
     /// `normal` is `Auto`, 0.
@@ -202,7 +204,7 @@ pub(super) struct Declared {
     pub(super) word_spacing: Option<Len>,
     pub(super) collapse: Option<Collapse>,
     pub(super) wrap: Option<bool>,
-    pub(super) balance: Option<bool>,
+    pub(super) wrap_style: Option<WrapStyle>,
     pub(super) word_break: Option<WordBreak>,
     pub(super) overflow_wrap: Option<OverflowWrap>,
     pub(super) text_transform: Option<TextTransform>,
@@ -328,6 +330,8 @@ impl Default for Declared {
             variations: None,
             line_height: None,
             text_align: None,
+            align_last: None,
+            line_break: None,
             writing: None,
             orientation: None,
             text_indent: None,
@@ -335,7 +339,7 @@ impl Default for Declared {
             word_spacing: None,
             collapse: None,
             wrap: None,
-            balance: None,
+            wrap_style: None,
             word_break: None,
             overflow_wrap: None,
             text_transform: None,
@@ -1359,16 +1363,23 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
                 ],
             )?)
         }
-        F::TextAlign => {
-            d.text_align = Some(keyword(
+        F::TextAlign => d.text_align = Some(text_align(v)?),
+        F::TextAlignLast => {
+            d.align_last = Some(if text(v)?.eq_ignore_ascii_case("auto") {
+                None
+            } else {
+                Some(text_align(v)?)
+            })
+        }
+        F::LineBreak => {
+            d.line_break = Some(keyword(
                 v,
                 &[
-                    ("start", TextAlign::Start),
-                    ("end", TextAlign::End),
-                    ("left", TextAlign::Left),
-                    ("right", TextAlign::Right),
-                    ("center", TextAlign::Center),
-                    ("justify", TextAlign::Justify),
+                    ("auto", parley::LineBreak::Strict),
+                    ("normal", parley::LineBreak::Normal),
+                    ("strict", parley::LineBreak::Strict),
+                    ("loose", parley::LineBreak::Loose),
+                    ("anywhere", parley::LineBreak::Anywhere),
                 ],
             )?)
         }
@@ -1381,9 +1392,9 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::WhiteSpaceCollapse => d.collapse = Some(keyword(v, COLLAPSE)?),
         F::TextWrapMode => d.wrap = Some(keyword(v, WRAP)?),
         F::TextWrap => {
-            (d.wrap, d.balance) = text_wrap(&text(v)?).map(|(w, b)| (Some(w), Some(b)))?
+            (d.wrap, d.wrap_style) = text_wrap(&text(v)?).map(|(w, b)| (Some(w), Some(b)))?
         }
-        F::TextWrapStyle => d.balance = Some(wrap_style(&text(v)?)?),
+        F::TextWrapStyle => d.wrap_style = Some(wrap_style(&text(v)?)?),
         F::WordBreak => {
             d.word_break = Some(keyword(
                 v,
@@ -1630,6 +1641,20 @@ fn thickness_of(v: &V) -> Result<Len, String> {
     }
 }
 
+fn text_align(v: &V) -> Result<TextAlign, String> {
+    keyword(
+        v,
+        &[
+            ("start", TextAlign::Start),
+            ("end", TextAlign::End),
+            ("left", TextAlign::Left),
+            ("right", TextAlign::Right),
+            ("center", TextAlign::Center),
+            ("justify", TextAlign::Justify),
+        ],
+    )
+}
+
 const COLLAPSE: &[(&str, Collapse)] = &[
     ("collapse", Collapse::Collapse),
     ("preserve", Collapse::Preserve),
@@ -1639,25 +1664,25 @@ const COLLAPSE: &[(&str, Collapse)] = &[
 
 const WRAP: &[(&str, bool)] = &[("wrap", true), ("nowrap", false)];
 
-/// `text-wrap-style`: whether lines balance; `auto` and `stable`, which is `auto` without
-/// editing, do not.
-fn wrap_style(s: &str) -> Result<bool, String> {
+/// `text-wrap-style`: greedy lines, balanced lines, or avoiding a lonely final word.
+/// `stable` is equivalent to `auto` in a frame-determined scene without live editing.
+fn wrap_style(s: &str) -> Result<WrapStyle, String> {
     match s {
-        "auto" | "stable" => Ok(false),
-        "balance" => Ok(true),
-        "pretty" => Err("text-wrap pretty is not supported yet; use balance or auto".into()),
+        "auto" | "stable" => Ok(WrapStyle::Auto),
+        "balance" => Ok(WrapStyle::Balance),
+        "pretty" => Ok(WrapStyle::Pretty),
         s => Err(format!("{s:?} is not one of auto, balance, stable, pretty")),
     }
 }
 
 /// `text-wrap`: a `text-wrap-mode` and a `text-wrap-style` in either order, each at most once,
 /// and the initial ones for those left out.
-fn text_wrap(s: &str) -> Result<(bool, bool), String> {
-    let (mut wrap, mut balance) = (None, None);
+fn text_wrap(s: &str) -> Result<(bool, WrapStyle), String> {
+    let (mut wrap, mut style) = (None, None);
     for word in s.split_ascii_whitespace() {
         let twice = match WRAP.iter().find(|(k, _)| *k == word) {
             Some(&(_, w)) => wrap.replace(w).is_some(),
-            None => balance.replace(wrap_style(word)?).is_some(),
+            None => style.replace(wrap_style(word)?).is_some(),
         };
         if twice {
             return Err(format!(
@@ -1665,9 +1690,9 @@ fn text_wrap(s: &str) -> Result<(bool, bool), String> {
             ));
         }
     }
-    match (wrap, balance) {
+    match (wrap, style) {
         (None, None) => Err(format!("{s:?} is not a text-wrap")),
-        _ => Ok((wrap.unwrap_or(true), balance.unwrap_or(false))),
+        _ => Ok((wrap.unwrap_or(true), style.unwrap_or_default())),
     }
 }
 

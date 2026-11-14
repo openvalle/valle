@@ -118,6 +118,15 @@ pub enum SkipInk {
     None,
 }
 
+/// Paragraph line-breaking preference; pretty avoids a lonely final word.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum WrapStyle {
+    #[default]
+    Auto,
+    Balance,
+    Pretty,
+}
+
 /// The inline and column directions of a Text paragraph.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum WritingMode {
@@ -149,6 +158,8 @@ pub struct Font {
     pub family: Rc<[Family]>,
     pub line_height: LineHeight,
     pub align: TextAlign,
+    pub align_last: Option<TextAlign>,
+    pub line_break: parley::LineBreak,
     pub writing: WritingMode,
     pub orientation: Orientation,
     /// `text-indent` of the first line, which the text's own box takes, not a Span's; its
@@ -161,7 +172,7 @@ pub struct Font {
     pub collapse: Collapse,
     pub wrap: bool,
     /// `text-wrap-style: balance`, which the text's own box takes, not a Span's.
-    pub balance: bool,
+    pub wrap_style: WrapStyle,
     pub word_break: WordBreak,
     pub overflow_wrap: OverflowWrap,
     pub transform: TextTransform,
@@ -208,6 +219,8 @@ impl Font {
             family: Rc::new([Family::SansSerif]),
             line_height: LineHeight::Normal,
             align: TextAlign::Start,
+            align_last: None,
+            line_break: parley::LineBreak::Strict,
             writing: WritingMode::Horizontal,
             orientation: Orientation::Mixed,
             indent: None,
@@ -215,7 +228,7 @@ impl Font {
             word_spacing: 0.0,
             collapse: Collapse::Collapse,
             wrap: true,
-            balance: false,
+            wrap_style: WrapStyle::Auto,
             word_break: WordBreak::Normal,
             overflow_wrap: OverflowWrap::Normal,
             transform: TextTransform::None,
@@ -920,7 +933,7 @@ mod tests {
     fn text_wrap_sets_its_mode_and_style_or_refuses() {
         let wrap = |v: &str| {
             let f = one(&[("textWrap", text(v))]).font;
-            (f.wrap, f.balance)
+            (f.wrap, f.wrap_style == WrapStyle::Balance)
         };
         assert_eq!(wrap("balance"), (true, true));
         assert_eq!(wrap("nowrap"), (false, false));
@@ -930,15 +943,58 @@ mod tests {
             ("textWrapStyle", text("balance")),
             ("whiteSpace", text("nowrap")),
         ]);
-        assert_eq!((kept.font.wrap, kept.font.balance), (false, true));
+        assert_eq!(
+            (kept.font.wrap, kept.font.wrap_style == WrapStyle::Balance),
+            (false, true)
+        );
         for (bad, message) in [
-            ("pretty", "pretty is not supported yet"),
             ("wrap nowrap", "twice"),
             ("balance auto", "twice"),
             ("even", "is not one of auto, balance"),
         ] {
             let e = error(&[("textWrap", text(bad))]);
             assert!(e.contains(message), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn paragraph_controls_inherit_and_reset() {
+        let tree = vec![
+            view(
+                &[
+                    ("textAlignLast", text("right")),
+                    ("lineBreak", text("loose")),
+                    ("textWrap", text("pretty")),
+                ],
+                &[1, 2],
+            ),
+            view(&[], &[]),
+            view(
+                &[
+                    ("textAlignLast", text("auto")),
+                    ("lineBreak", text("strict")),
+                    ("textWrapStyle", text("auto")),
+                ],
+                &[],
+            ),
+        ];
+        let s = styles(tree, &[]).unwrap();
+        assert_eq!(s[1].font.align_last, Some(TextAlign::Right));
+        assert_eq!(s[1].font.line_break, parley::LineBreak::Loose);
+        assert_eq!(s[1].font.wrap_style, WrapStyle::Pretty);
+        assert_eq!(s[2].font.align_last, None);
+        assert_eq!(s[2].font.line_break, parley::LineBreak::Strict);
+        assert_eq!(s[2].font.wrap_style, WrapStyle::Auto);
+        assert_eq!(
+            one(&[("textWrap", text("nowrap pretty"))]).font.wrap_style,
+            WrapStyle::Pretty
+        );
+        for (key, bad) in [
+            ("textAlignLast", "middle"),
+            ("lineBreak", "break-all"),
+            ("textWrap", "pretty balance"),
+        ] {
+            assert!(!error(&[(key, text(bad))]).is_empty());
         }
     }
 
@@ -1294,6 +1350,8 @@ mod tests {
             family: Rc::new([Family::SansSerif]),
             line_height: LineHeight::Normal,
             align: TextAlign::Start,
+            align_last: None,
+            line_break: parley::LineBreak::Strict,
             writing: WritingMode::Horizontal,
             orientation: Orientation::Mixed,
             indent: None,
@@ -1301,7 +1359,7 @@ mod tests {
             word_spacing: 0.0,
             collapse: Collapse::Collapse,
             wrap: true,
-            balance: false,
+            wrap_style: WrapStyle::Auto,
             word_break: WordBreak::Normal,
             overflow_wrap: OverflowWrap::Normal,
             transform: TextTransform::None,
@@ -1331,6 +1389,8 @@ mod tests {
             ]),
             line_height: LineHeight::Factor(1.5),
             align: TextAlign::Center,
+            align_last: None,
+            line_break: parley::LineBreak::Strict,
             writing: WritingMode::Horizontal,
             orientation: Orientation::Mixed,
             indent: None,
@@ -1338,7 +1398,7 @@ mod tests {
             word_spacing: 5.0,
             collapse: Collapse::PreserveBreaks,
             wrap: true,
-            balance: true,
+            wrap_style: WrapStyle::Balance,
             word_break: WordBreak::BreakAll,
             overflow_wrap: OverflowWrap::BreakWord,
             transform: TextTransform::Uppercase,

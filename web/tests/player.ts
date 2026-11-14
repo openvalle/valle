@@ -18,6 +18,8 @@ const CASES: {
   entry: string;
   frames: number[];
   props?: Record<string, unknown>;
+  /** Native files for resources whose defaults use the test server's virtual root. */
+  nativeResources?: Record<string, string>;
   pixels?: { maxDifference: number; maxPixels: number };
 }[] = [
   { entry: "tests/cases/svg/non-scaling-stroke/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
@@ -26,7 +28,16 @@ const CASES: {
   { entry: "tests/cases/svg/text/file/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/pattern/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/pattern/file/scene.motion.tsx", frames: [0] },
-  { entry: "tests/cases/css/text/vertical/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
+  {
+    entry: "tests/cases/css/text/paragraph/scene.motion.tsx",
+    frames: [0, 5, 2, 7, 0],
+    nativeResources: { CJK: "tests/resources/NotoSansSC.ttf" },
+  },
+  {
+    entry: "tests/cases/css/text/vertical/scene.motion.tsx",
+    frames: [0, 5, 2, 7, 0],
+    nativeResources: { CJK: "tests/resources/NotoSansSC.ttf" },
+  },
   { entry: "examples/hello.motion.tsx", frames: [0, 60] },
   { entry: "tests/cases/svg/css-transforms/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/css-transforms/file/scene.motion.tsx", frames: [0] },
@@ -435,9 +446,12 @@ async function fonts(): Promise<Map<string, string>> {
 async function main() {
   const out = await mkdtemp(join(tmpdir(), "valle-player-"));
   const natives = new Map<string, string>();
-  for (const { entry, frames, props } of CASES) {
+  for (const { entry, frames, props, nativeResources } of CASES) {
     const kind = entry.endsWith(".timeline.json") ? "timeline" : "motion";
     const bound = props ? ["--props", JSON.stringify(props)] : [];
+    for (const [name, file] of Object.entries(nativeResources ?? {})) {
+      bound.push("--resource", `${name}=${join(root, file)}`);
+    }
     for (const frame of frames) {
       const name = named(entry, frame, props);
       if (natives.has(name)) continue;

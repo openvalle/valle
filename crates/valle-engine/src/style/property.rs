@@ -256,6 +256,8 @@ pub(super) enum Field {
     FontVariationSettings,
     LineHeight,
     TextAlign,
+    TextAlignLast,
+    LineBreak,
     WritingMode,
     TextOrientation,
     TextIndent,
@@ -318,7 +320,7 @@ pub(super) enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 264] = [
+const FIELDS: [(&str, Field); 266] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -677,6 +679,8 @@ const FIELDS: [(&str, Field); 264] = [
     ("fontVariationSettings", Field::FontVariationSettings),
     ("lineHeight", Field::LineHeight),
     ("textAlign", Field::TextAlign),
+    ("textAlignLast", Field::TextAlignLast),
+    ("lineBreak", Field::LineBreak),
     ("writingMode", Field::WritingMode),
     ("textOrientation", Field::TextOrientation),
     ("textIndent", Field::TextIndent),
@@ -908,6 +912,8 @@ impl Field {
                 | Field::FontVariationSettings
                 | Field::LineHeight
                 | Field::TextAlign
+                | Field::TextAlignLast
+                | Field::LineBreak
                 | Field::WritingMode
                 | Field::TextOrientation
                 | Field::TextIndent
@@ -969,11 +975,6 @@ mod tests {
              earlier frames or events; animate with interpolate(seconds, …) or spring()",
             ),
             ("zoom", num(2.0), "style zoom is not supported: use scale"),
-            (
-                "textAlignLast",
-                text("1em"),
-                "style textAlignLast is not supported",
-            ),
             ("width", text("10"), "style width: 10 needs a unit: 10px"),
             (
                 "width",

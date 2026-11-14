@@ -509,6 +509,8 @@ pub(super) fn compute(
             Some(Leading::Len(l)) => LineHeight::Px(l.px(units(size), size)),
         },
         align: d.text_align.unwrap_or(inherited.align),
+        align_last: d.align_last.unwrap_or(inherited.align_last),
+        line_break: d.line_break.unwrap_or(inherited.line_break),
         writing: d.writing.unwrap_or(inherited.writing),
         orientation: d.orientation.unwrap_or(inherited.orientation),
         indent: match &d.text_indent {
@@ -525,7 +527,7 @@ pub(super) fn compute(
         },
         collapse: d.collapse.unwrap_or(inherited.collapse),
         wrap: d.wrap.unwrap_or(inherited.wrap),
-        balance: d.balance.unwrap_or(inherited.balance),
+        wrap_style: d.wrap_style.unwrap_or(inherited.wrap_style),
         word_break: d.word_break.unwrap_or(inherited.word_break),
         overflow_wrap: d.overflow_wrap.unwrap_or(inherited.overflow_wrap),
         transform: d.text_transform.unwrap_or(inherited.transform),
