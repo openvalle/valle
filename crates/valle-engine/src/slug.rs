@@ -5,6 +5,8 @@
 //! center, right through its horizontal band and up through its vertical one: each curve a ray
 //! crosses counts by how much of the pixel lies before the crossing.
 
+use std::ops::Range;
+
 use skrifa::instance::{LocationRef, NormalizedCoord, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::raw::TableProvider;
@@ -44,6 +46,9 @@ pub struct Outline {
     /// horizontal band by their right end first, of a vertical band by their top first, so the
     /// rays stop at the first curve that ends before the pixel.
     pub lists: Vec<u32>,
+    /// Curve texels of each contour, excluding its final endpoint texel. Coverage preparation
+    /// can visit each curve once without scanning and deduplicating all band lists.
+    contours: Vec<Range<u32>>,
 }
 
 impl Outline {
@@ -207,20 +212,18 @@ impl Outline {
         };
         let [xs, ys] = [(columns, x0, x1), (rows, y0, y1)]
             .map(|(n, lo, hi)| (0..=n).map(|i| edge(n, lo, hi, i)).collect::<Vec<f32>>());
-        // The cells a curve, grown by the margin, reaches into: every curve is in a vertical band
-        // or a horizontal one, or both. A long curve goes in pieces about half a cell long, each
-        // within the box of its own control points, as a whole curve's box holds much it is not
-        // near.
+        // The cells a curve, grown by the margin, reaches into. A long curve goes in pieces about
+        // half a cell long, each within the box of its own control points, as a whole curve's box
+        // holds much it is not near.
         let mut near = vec![false; rows * columns];
         let size = ((x1 - x0) / columns as f32).min((y1 - y0) / rows as f32);
-        // Each curve once, though it is in every band it crosses.
-        let mut seen = vec![false; self.curves.len()];
-        for b in 0..(self.bands[0] + self.bands[1]) as usize {
-            for &texel in self.listed(b) {
-                if std::mem::replace(&mut seen[texel as usize], true) {
+        for contour in &self.contours {
+            for texel in contour.clone() {
+                let [p0, p1, p2] = self.curve(texel);
+                // A point crosses no band and contributes no coverage.
+                if p0 == p1 && p1 == p2 {
                     continue;
                 }
-                let [p0, p1, p2] = self.curve(texel);
                 let long =
                     (p1[0] - p0[0]).hypot(p1[1] - p0[1]) + (p2[0] - p1[0]).hypot(p2[1] - p1[1]);
                 let n = ((2.0 * long / size).ceil() as usize).clamp(1, 1024);
@@ -360,17 +363,22 @@ fn crossings(c: [[f32; 2]; 3], y: f32, out: &mut Vec<(f32, i32)>) {
 
 /// The outline of closed contours of quadratic curves, y up, `em` units per em.
 pub fn encode(em: f32, contours: &[Vec<Curve>]) -> Outline {
+    let count = contours.iter().map(Vec::len).sum::<usize>();
     let mut out = Outline {
         em,
+        curves: Vec::with_capacity(count + contours.len()),
+        contours: Vec::with_capacity(contours.len()),
         ..Outline::default()
     };
     // Each curve with its texel.
-    let mut curves = Vec::new();
+    let mut curves = Vec::with_capacity(count);
     for contour in contours {
+        let first = out.curves.len() as u32;
         for c in contour {
             curves.push((c, out.curves.len() as u32));
             out.curves.push([c[0][0], c[0][1], c[1][0], c[1][1]]);
         }
+        out.contours.push(first..out.curves.len() as u32);
         let end = contour[contour.len() - 1][2];
         out.curves.push([end[0], end[1], 0.0, 0.0]);
     }
@@ -409,13 +417,13 @@ pub fn encode(em: f32, contours: &[Vec<Curve>]) -> Outline {
     // curve that ends before the pixel. Horizontal bands come first, bottom up; vertical ones
     // after, left to right.
     let mut flat: Vec<(f32, u32)> = Vec::new();
-    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let mut spans = Vec::with_capacity((out.bands[0] + out.bands[1]) as usize);
     let mut entries = Vec::new();
     // Horizontal bands cut y and sort by x; vertical ones cut x and sort by y.
     for (cut, list) in [(1, &horizontal), (0, &vertical)] {
         let sort = 1 - cut;
         let n = out.bands[1 - cut] as usize;
-        let mut diff = vec![0i64; n + 1];
+        let mut diff = [0i64; BANDS + 1];
         // Count and fill from the same ranges, without finding each curve's bands twice.
         entries.clear();
         entries.reserve(list.len());
@@ -430,18 +438,18 @@ pub fn encode(em: f32, contours: &[Vec<Curve>]) -> Outline {
             diff[last + 1] -= 1;
         }
         // How many curves each band holds, and where each band's start among them.
-        let mut starts = Vec::with_capacity(n + 1);
+        let mut starts = [0usize; BANDS + 1];
         let mut total = 0usize;
         let mut running = 0i64;
-        for &change in &diff[..n] {
+        for (band, &change) in diff[..n].iter().enumerate() {
             running += change;
-            starts.push(total);
+            starts[band] = total;
             total += running as usize;
         }
-        starts.push(total);
+        starts[n] = total;
         let base = flat.len();
         flat.resize(base + total, (0.0, 0));
-        let mut at = starts.clone();
+        let mut at = starts;
         for &(reach, texel, first, last) in &entries {
             for band in first..=last {
                 flat[base + at[band]] = (reach, texel);
@@ -456,6 +464,7 @@ pub fn encode(em: f32, contours: &[Vec<Curve>]) -> Outline {
         }
     }
     let mut start = 2 * spans.len();
+    out.lists.reserve(start + flat.len());
     for &(from, to) in &spans {
         out.lists.extend([(to - from) as u32, start as u32]);
         start += to - from;
@@ -867,6 +876,48 @@ mod tests {
                 (solid > 0) == filled && solid + drawn < all,
                 "{solid} solid, {drawn} drawn of {all}"
             );
+        }
+    }
+
+    #[test]
+    fn runs_keep_contours_separate_and_ignore_isolated_points() {
+        let contours = path::parse("M-96-80H-32V-16H-96Z M-80-64H-48V-32H-80Z M32 16H96V80H32Z")
+            .unwrap()
+            .quads(0.02);
+        let plain = encode(1.0, &contours);
+        let mut with_points = contours.clone();
+        with_points.insert(0, vec![[[0.0, 0.0]; 3]]);
+        with_points.insert(2, vec![[[60.0, -50.0]; 3]]);
+        with_points.push(vec![[[-20.0, 40.0]; 3]]);
+        let points = encode(1.0, &with_points);
+        with_points.reverse();
+        let reversed = encode(1.0, &with_points);
+        for even_odd in [false, true] {
+            for cells in [[1, 1], [7, 11], [24, 20], [128, 96]] {
+                for margin in [0.0, 0.25, 1.5] {
+                    let runs = |o: &Outline| {
+                        o.runs(cells, margin, even_odd)
+                            .into_iter()
+                            .map(|r| (r.rect.map(f32::to_bits), r.solid))
+                            .collect::<Vec<_>>()
+                    };
+                    let expected = runs(&plain);
+                    assert_eq!(runs(&points), expected);
+                    assert_eq!(runs(&reversed), expected);
+                }
+            }
+            let runs = points.runs([24, 20], 0.25, even_odd);
+            let at = |x, y| {
+                runs.iter().find(|r| {
+                    let [x0, y0, x1, y1] = r.rect;
+                    x >= x0 && x < x1 && y >= y0 && y < y1
+                })
+            };
+            // No connector between contours, nor coverage at the isolated point in the gap.
+            assert!(at(0.0, 0.0).is_none());
+            assert!(at(64.0, 48.0).is_some_and(|r| r.solid));
+            // The two nested contours have the same winding: only even-odd leaves a hole.
+            assert_eq!(at(-64.0, -48.0).is_none(), even_odd);
         }
     }
 
