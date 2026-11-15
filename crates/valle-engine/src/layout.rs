@@ -265,6 +265,9 @@ pub fn layout(
                             g.y += shift;
                         }
                     }
+                    for m in laid.marks.iter_mut().filter(|m| m.line as usize == k) {
+                        m.path = m.path.moved([0.0, shift]);
+                    }
                     b[0] += shift;
                     laid.baselines[k] += shift;
                 }

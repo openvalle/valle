@@ -273,6 +273,10 @@ pub(super) enum Field {
     WordBreak,
     OverflowWrap,
     TextTransform,
+    TextEmphasis,
+    TextEmphasisStyle,
+    TextEmphasisColor,
+    TextEmphasisPosition,
     TextDecoration,
     TextDecorationLine,
     TextDecorationColor,
@@ -322,7 +326,7 @@ pub(super) enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 268] = [
+const FIELDS: [(&str, Field); 272] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -699,6 +703,10 @@ const FIELDS: [(&str, Field); 268] = [
     ("overflowWrap", Field::OverflowWrap),
     ("wordWrap", Field::OverflowWrap),
     ("textTransform", Field::TextTransform),
+    ("textEmphasis", Field::TextEmphasis),
+    ("textEmphasisStyle", Field::TextEmphasisStyle),
+    ("textEmphasisColor", Field::TextEmphasisColor),
+    ("textEmphasisPosition", Field::TextEmphasisPosition),
     ("textDecoration", Field::TextDecoration),
     ("textDecorationLine", Field::TextDecorationLine),
     ("textDecorationColor", Field::TextDecorationColor),
@@ -938,6 +946,10 @@ impl Field {
                 | Field::WordBreak
                 | Field::OverflowWrap
                 | Field::TextTransform
+                | Field::TextEmphasis
+                | Field::TextEmphasisStyle
+                | Field::TextEmphasisColor
+                | Field::TextEmphasisPosition
                 | Field::TextDecoration
                 | Field::TextDecorationLine
                 | Field::TextDecorationColor

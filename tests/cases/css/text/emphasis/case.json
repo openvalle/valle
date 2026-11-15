@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/css-text-decor-3/#emphasis-marks",
+  "assertion": "Emphasis marks are centered on typographic units, skip spaces and punctuation, honor custom glyphs, colors and horizontal/vertical placement.",
+  "at": [0],
+  "browser": {
+    "selected": "firefox",
+    "reason": "Reviewed all three browsers plus native and difference images. Firefox marks each character in the ffi ligature, matching CSS typographic units; Chrome marks the ligature once. Native uses synthesized shapes permitted by CSS, so circle/triangle sizes differ from Firefox. Custom ruby mark placement and glyph-edge rasterization also differ; WebKit additionally changes the text baseline. Independent numerical tests check mark count, centers, skipped punctuation, vertical side, interline spacing and truncation. Native/Firefox difference: 8612 pixels, maximum 235.",
+    "pixels": {
+      "maxDifference": 240,
+      "maxPixels": 8800
+    }
+  }
+}

@@ -79,7 +79,18 @@ fn layout(
     min: bool,
     alignment_width: Option<f32>,
 ) -> Result<Lines, String> {
+    let marks = super::emphasis::shapes(text, content)?;
+    let plain: Vec<_> = content
+        .pieces
+        .iter()
+        .map(|p| {
+            let mut f = p.font.clone();
+            f.emphasis = crate::style::emphasis::Mark::None;
+            f
+        })
+        .collect();
     let mut font = content.font.clone();
+    font.emphasis = crate::style::emphasis::Mark::None;
     font.writing = WritingMode::Horizontal;
     font.align = TextAlign::Start;
     font.indent = None;
@@ -88,10 +99,11 @@ fn layout(
         pieces: content
             .pieces
             .iter()
-            .map(|p| super::Piece {
+            .zip(&plain)
+            .map(|(p, font)| super::Piece {
                 text: p.text.clone(),
                 node: p.node,
-                font: p.font,
+                font,
             })
             .collect(),
         clamp: None,
@@ -111,11 +123,13 @@ fn layout(
         string: base.string.clone(),
         text: Vec::new(),
         decorations: Vec::new(),
+        marks: Vec::new(),
     };
     let strut = text.strut(content.font)?;
     let metrics = text.metrics(content.font)?;
     let central = (metrics[0].round() - metrics[1].round()) * 0.5;
     let mut top = 0.0;
+    let mut previous_extra = 0.0;
     for (line, range) in base.text.iter().enumerate() {
         let mut clusters = Vec::new();
         for run in base.runs.iter().filter(|r| r.line as usize == line) {
@@ -311,6 +325,21 @@ fn layout(
             let extent = slice
                 .iter()
                 .fold(strut, |a, c| [a[0].max(c.extent[0]), a[1].max(c.extent[1])]);
+            let mut extra = [0.0_f32; 2];
+            for c in slice {
+                if let Some(mark) = marks.get(&c.node)
+                    && super::emphasis::eligible(&base.string[c.range.clone()])
+                {
+                    let required = super::emphasis::leading(mark, font_of(c.node), extent);
+                    for k in 0..2 {
+                        extra[k] = extra[k].max(required[k]);
+                    }
+                }
+            }
+            if !out.boxes.is_empty() {
+                top += previous_extra + extra[0];
+            }
+            previous_extra = extra[1];
             let height = extent[0] + extent[1];
             let baseline = top + extent[0];
             let center = baseline - central;
@@ -374,6 +403,20 @@ fn layout(
                         x: [cursor, next],
                         glyphs: [first, out.glyphs.len() as u32],
                     });
+                }
+                if let Some(mark) = marks.get(&c.node) {
+                    super::emphasis::append(
+                        &mut out.marks,
+                        mark,
+                        font_of(c.node),
+                        &base.string[c.range.clone()],
+                        super::emphasis::Placement {
+                            node: c.node,
+                            line: index,
+                            inline: [cursor, next],
+                            baseline,
+                        },
+                    );
                 }
                 cursor = next;
             }

@@ -1764,9 +1764,29 @@ impl Painter<'_> {
                     None => items,
                 }
             };
+            let first = !lines.runs[..k]
+                .iter()
+                .any(|r| r.node == run.node && r.line == run.line);
+            let marks = |color: Option<[f32; 4]>, by: [f32; 2]| -> Vec<Item> {
+                if !first {
+                    return Vec::new();
+                }
+                let by = offset(by);
+                lines
+                    .marks
+                    .iter()
+                    .filter(|m| m.node == run.node && m.line == run.line)
+                    .map(|m| Item::Path {
+                        path: m.path.moved([at.x + by[0], at.y + by[1]]),
+                        even_odd: false,
+                        color: color.unwrap_or(work(s.font.emphasis_color.unwrap_or(s.color))),
+                    })
+                    .collect()
+            };
             let mut drawn = Vec::new();
             self.shadowed(s, stripes(false), clip, &mut drawn);
             self.shadowed(s, glyphs, clip, &mut drawn);
+            self.shadowed(s, marks, clip, &mut drawn);
             self.shadowed(s, stripes(true), clip, &mut drawn);
             if vertical {
                 let matrix = crate::layout::vertical_matrix(at);
@@ -1965,6 +1985,17 @@ impl Painter<'_> {
                 let decorations = lines.decorations.iter().filter(|d| d.run == k as u32);
                 items.extend(decorations.flat_map(|d| stripe(d, at, OPAQUE, [0.0; 2])));
             }
+            items.extend(
+                lines
+                    .marks
+                    .iter()
+                    .filter(|m| self.styles[m.node as usize].visible)
+                    .map(|m| Item::Path {
+                        path: m.path.moved([at.x, at.y]),
+                        even_odd: false,
+                        color: OPAQUE,
+                    }),
+            );
             if self.styles[n].font.writing != crate::style::WritingMode::Horizontal {
                 let inside = items.split_off(first);
                 items.push(Item::Transform {

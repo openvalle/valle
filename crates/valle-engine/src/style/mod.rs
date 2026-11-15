@@ -13,6 +13,7 @@ pub mod color;
 mod computed;
 pub(crate) mod css;
 mod declaration;
+pub(crate) mod emphasis;
 pub mod filter;
 mod font;
 pub mod gradient;

@@ -244,6 +244,29 @@ This is vertical **Text/Span** layout; vertical container layout and vertical SV
 text are not implemented and report an error. Use flex or grid to position separate
 text blocks. `sideways-rl`, `sideways-lr` and `text-combine-upright` are not supported.
 
+### Emphasis marks
+
+`Text` and `Span` support `textEmphasis`, `textEmphasisStyle`, `textEmphasisColor`
+and `textEmphasisPosition`. Marks inherit, stay upright in vertical text, and
+use synthesized built-in shapes or a custom character from the text font at half size. Spaces and ordinary punctuation are skipped;
+combining characters share one mark. Ligatures receive one mark per grapheme.
+
+```tsx
+<Text style={{ textEmphasis: "filled dot crimson", textEmphasisPosition: "over right" }}>
+  重点<Span style={{ textEmphasisStyle: "open circle" }}>内容</Span>
+</Text>
+```
+
+Styles are `none`, `filled`/`open` plus `dot`, `circle`, `double-circle`,
+`triangle` or `sesame`, or a quoted custom character such as `"'★'"`.
+A custom string uses its first grapheme; write literal characters, not CSS string
+escapes. Position is `over`/`under` for horizontal text, optionally `right`/`left`
+for vertical text. The shorthand resets style and color, but not position.
+`currentColor` follows each span's text color. Marks participate in text shadows
+and text clips. Adjacent lines gain space when necessary; marks on the first and
+last lines can extend outside the text box. Use explicit roomy `lineHeight` when
+matching layouts across browsers, whose annotation spacing and mark fonts differ.
+
 ### Paragraph alignment and wrapping
 
 `textAlignLast` sets alignment on the last line of each paragraph, including a line

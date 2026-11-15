@@ -22,6 +22,14 @@ const CASES: {
   nativeResources?: Record<string, string>;
   pixels?: { maxDifference: number; maxPixels: number };
 }[] = [
+  {
+    entry: "tests/cases/css/text/emphasis/scene.motion.tsx",
+    frames: [0, 5, 2, 7, 0],
+    nativeResources: {
+      Sans: "tests/resources/NotoSans.ttf",
+      CJK: "tests/resources/NotoSansSC.ttf",
+    },
+  },
   { entry: "tests/cases/svg/text-baselines/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/text-baselines/file/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/nested-viewports/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },

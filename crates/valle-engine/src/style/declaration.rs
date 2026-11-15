@@ -149,6 +149,9 @@ pub(super) struct Declared {
     pub(super) masks: background::Declared,
     /// `text-decoration-*`: its lines (under, over, through), its style, its color (`None` is
     /// `currentcolor`) and its thickness.
+    pub(super) emphasis: Option<super::emphasis::Mark>,
+    pub(super) emphasis_color: Option<Option<Rgba>>,
+    pub(super) emphasis_position: Option<super::emphasis::Position>,
     pub(super) decoration_lines: [bool; 3],
     pub(super) decoration_style: DecorationStyle,
     pub(super) decoration_color: Option<Rgba>,
@@ -290,6 +293,9 @@ impl Default for Declared {
             backdrop: Vec::new(),
             clip: None,
             masks: background::Declared::default(),
+            emphasis: None,
+            emphasis_color: None,
+            emphasis_position: None,
             decoration_lines: [false; 3],
             decoration_style: DecorationStyle::Solid,
             decoration_color: None,
@@ -1449,6 +1455,16 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
                     ("capitalize", TextTransform::Capitalize),
                 ],
             )?)
+        }
+        F::TextEmphasis => {
+            let (mark, color) = super::emphasis::shorthand(&text(v)?)?;
+            d.emphasis = Some(mark);
+            d.emphasis_color = Some(color);
+        }
+        F::TextEmphasisStyle => d.emphasis = Some(super::emphasis::style(&text(v)?)?),
+        F::TextEmphasisColor => d.emphasis_color = Some(current_color(v)?),
+        F::TextEmphasisPosition => {
+            d.emphasis_position = Some(super::emphasis::position(&text(v)?)?)
         }
         F::TextDecoration => {
             (

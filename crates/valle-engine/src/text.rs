@@ -9,6 +9,7 @@
 //! lines again. Its line boxes stack as Chrome stacks them, each from the paragraph's own font
 //! (CSS's strut) and the runs of glyphs on it.
 
+pub(crate) mod emphasis;
 mod vertical;
 
 use std::borrow::Cow;
@@ -205,6 +206,7 @@ pub struct Lines {
     pub text: Vec<Range<usize>>,
     /// Its text decorations, which layout gives it.
     pub decorations: Vec<Stripe>,
+    pub marks: Vec<emphasis::Mark>,
 }
 
 /// What shaping a piece and breaking it into lines depend on.
@@ -593,12 +595,13 @@ impl Text {
             let wide = lines.runs.iter().map(|r| r.x[1]).fold(0.0, f32::max);
             return Ok([(wide * 64.0).ceil() / 64.0, height]);
         }
+        let marks = emphasis::shapes(self, content)?;
         let strut = self.strut(content.font)?;
         let p = self.paragraph(content, width, min)?;
         if p.empty {
             return Ok([0.0, 0.0]);
         }
-        let boxes = stack(&p.layout, content, strut);
+        let boxes = stack(&p.layout, content, strut, &marks, &p.string);
         let shown = &boxes[..content.clamp.unwrap_or(usize::MAX).min(boxes.len())];
         let height = shown.last().map_or(0.0, |[top, h]| top + h);
         let widest = (p.layout.width() * 64.0).ceil() / 64.0;
@@ -638,6 +641,7 @@ impl Text {
             TextAlign::Center => Alignment::Center,
             TextAlign::Justify => Alignment::Justify,
         };
+        let marks = emphasis::shapes(self, content)?;
         let strut = self.strut(content.font)?;
         let p = self.paragraph(content, Some(width), false)?;
         let string = p.string.clone();
@@ -650,6 +654,7 @@ impl Text {
                 string,
                 text: Vec::new(),
                 decorations: Vec::new(),
+                marks: Vec::new(),
             });
         }
         p.layout.align(
@@ -659,7 +664,7 @@ impl Text {
                 ..AlignmentOptions::default()
             },
         );
-        let boxes = stack(&p.layout, content, strut);
+        let boxes = stack(&p.layout, content, strut, &marks, &p.string);
         let text = p.layout.lines().map(|line| line.text_range()).collect();
         let mut baselines = Vec::new();
         let mut runs = Vec::new();
@@ -724,7 +729,7 @@ impl Text {
                 upright: false,
             }));
         }
-        Ok(Lines {
+        let mut lines = Lines {
             glyphs,
             runs,
             boxes,
@@ -732,7 +737,10 @@ impl Text {
             string,
             text,
             decorations: Vec::new(),
-        })
+            marks: Vec::new(),
+        };
+        emphasis::horizontal(&mut lines, content, &marks);
+        Ok(lines)
     }
 
     /// The left and right, px from its origin, of where glyph `id` of `faces()[face]` at `size`
@@ -873,6 +881,9 @@ impl Text {
             d.rect[2] = d.rect[2].min(c);
             d.rect[0] < d.rect[2]
         });
+        lines
+            .marks
+            .retain(|m| cuts[m.line as usize].is_none_or(|c| m.inline[1] <= c));
         for (l, cut) in cuts.into_iter().enumerate() {
             let Some(c) = cut else {
                 continue;
@@ -1496,14 +1507,40 @@ fn extent(line: &parley::Line<'_, u32>, content: &Content, strut: [f32; 2]) -> [
 }
 
 /// Each line box's top and height, stacked from 0.
-fn stack(layout: &parley::Layout<u32>, content: &Content, strut: [f32; 2]) -> Vec<[f32; 2]> {
-    let mut top = 0.0;
+fn stack(
+    layout: &parley::Layout<u32>,
+    content: &Content,
+    strut: [f32; 2],
+    marks: &HashMap<u32, emphasis::Shape>,
+    string: &str,
+) -> Vec<[f32; 2]> {
+    let (mut top, mut previous) = (0.0, 0.0);
     layout
         .lines()
-        .map(|line| {
+        .enumerate()
+        .map(|(index, line)| {
             let [a, b] = extent(&line, content, strut);
+            let mut extra = [0.0_f32; 2];
+            for item in line.items() {
+                if let PositionedLayoutItem::GlyphRun(run) = item {
+                    let piece = &content.pieces[run.style().brush as usize];
+                    if let Some(mark) = marks.get(&piece.node) {
+                        let range = run.run().text_range();
+                        if string[range].graphemes(true).any(emphasis::eligible) {
+                            let required = emphasis::leading(mark, piece.font, [a, b]);
+                            for k in 0..2 {
+                                extra[k] = extra[k].max(required[k]);
+                            }
+                        }
+                    }
+                }
+            }
+            if index > 0 {
+                top += previous + extra[0];
+            }
             let line_box = [top, a + b];
             top += a + b;
+            previous = extra[1];
             line_box
         })
         .collect()
@@ -1570,6 +1607,9 @@ mod tests {
             line_break: parley::LineBreak::Strict,
             writing: WritingMode::Horizontal,
             orientation: crate::style::Orientation::Mixed,
+            emphasis: crate::style::emphasis::Mark::None,
+            emphasis_color: None,
+            emphasis_position: Default::default(),
             indent: None,
             spacing: 0.0,
             word_spacing: 0.0,
@@ -1589,6 +1629,92 @@ mod tests {
             skip_ink: crate::style::SkipInk::Auto,
             underline_offset: None,
         }
+    }
+
+    #[test]
+    fn emphasis_marks_graphemes_without_changing_advances() {
+        let mut t = text();
+        let plain_font = font(32.0);
+        let marked = Font {
+            emphasis: crate::style::emphasis::Mark::Text("•".into()),
+            ..plain_font.clone()
+        };
+        let value = "office á, ! #";
+        let a = t.lines(&plain(value, &plain_font), 600.0).unwrap();
+        let b = t.lines(&plain(value, &marked), 600.0).unwrap();
+        assert_eq!(a.glyphs, b.glyphs);
+        assert_eq!(a.boxes, b.boxes);
+        assert_eq!(b.marks.len(), 8); // six letters, one combining grapheme, #
+        for mark in &b.marks {
+            let [x, y, w, h] = crate::svg::bounds(&mark.path);
+            assert!(
+                (x + w / 2.0 - f64::from((mark.inline[0] + mark.inline[1]) / 2.0)).abs() < 0.01
+            );
+            assert!(y + h <= f64::from(b.baselines[0]));
+        }
+        let under = Font {
+            emphasis_position: crate::style::emphasis::Position {
+                under: true,
+                left: false,
+            },
+            ..marked.clone()
+        };
+        let c = t.lines(&plain(value, &under), 600.0).unwrap();
+        assert!(
+            c.marks
+                .iter()
+                .all(|m| crate::svg::bounds(&m.path)[1] > f64::from(c.baselines[0]))
+        );
+        assert_eq!(b, t.lines(&plain(value, &marked), 600.0).unwrap());
+    }
+
+    #[test]
+    fn vertical_emphasis_keeps_marks_upright_on_the_selected_side() {
+        let mut t = text();
+        let marked = Font {
+            writing: WritingMode::VerticalRl,
+            emphasis: crate::style::emphasis::Mark::Symbol("▲"),
+            ..font(24.0)
+        };
+        let right = t.lines(&plain("春，风", &marked), 300.0).unwrap();
+        let left_font = Font {
+            emphasis_position: crate::style::emphasis::Position {
+                under: false,
+                left: true,
+            },
+            ..marked.clone()
+        };
+        let left = t.lines(&plain("春，风", &left_font), 300.0).unwrap();
+        assert_eq!(right.marks.len(), 2);
+        assert_eq!(right.glyphs, left.glyphs);
+        for (a, b) in right.marks.iter().zip(&left.marks) {
+            let a = crate::svg::bounds(&a.path);
+            let b = crate::svg::bounds(&b.path);
+            assert!(a[1] + a[3] < b[1]);
+            assert_eq!(a[0], b[0]);
+        }
+    }
+
+    #[test]
+    fn emphasis_reserves_interline_space_and_truncates_with_text() {
+        let mut t = text();
+        let marked = Font {
+            emphasis: crate::style::emphasis::Mark::Text("•".into()),
+            collapse: Collapse::Preserve,
+            ..font(32.0)
+        };
+        let a = t.lines(&plain("ABC\nDEF", &marked), 600.0).unwrap();
+        let unmarked = Font {
+            emphasis: crate::style::emphasis::Mark::None,
+            ..marked.clone()
+        };
+        let b = t.lines(&plain("ABC\nDEF", &unmarked), 600.0).unwrap();
+        assert!(a.baselines[1] > b.baselines[1]);
+        assert_eq!(a.baselines[0], b.baselines[0]);
+        let mut a = t.lines(&plain("ABCDEFG", &marked), 600.0).unwrap();
+        t.truncate(&mut a, &marked, 0, 55.0, true, None).unwrap();
+        assert!(a.marks.len() < 7);
+        assert!(a.marks.iter().all(|m| m.inline[1] <= 55.0));
     }
 
     #[test]

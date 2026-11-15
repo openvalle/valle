@@ -517,6 +517,12 @@ pub(super) fn compute(
         line_break: d.line_break.unwrap_or(inherited.line_break),
         writing: d.writing.unwrap_or(inherited.writing),
         orientation: d.orientation.unwrap_or(inherited.orientation),
+        emphasis: d
+            .emphasis
+            .clone()
+            .unwrap_or_else(|| inherited.emphasis.clone()),
+        emphasis_color: d.emphasis_color.unwrap_or(inherited.emphasis_color),
+        emphasis_position: d.emphasis_position.unwrap_or(inherited.emphasis_position),
         indent: match &d.text_indent {
             None => inherited.indent.clone(),
             Some(l) => Some(l.calc(units(size))),
