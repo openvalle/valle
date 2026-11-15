@@ -825,6 +825,11 @@ fn bind(
     for (key, prop, what, attribute) in written {
         let field = (Field::by_name(&key))
             .ok_or_else(|| format!("{place}: {}", unsupported(&what, &key)))?;
+        if field == Field::XmlSpace && (!attribute || tag.is_none()) {
+            return Err(format!(
+                "{place}: xmlSpace is an SVG attribute, not a CSS property"
+            ));
+        }
         let unit = matches!(node.kind, Kind::Span { unit: true, .. });
         if unit && !field.textual() && !field.on_units() {
             return Err(format!(

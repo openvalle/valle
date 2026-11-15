@@ -16,6 +16,7 @@ use crate::template::{Kind, Node, Prop, Tag, Template, V};
 
 const SVG: &str = "http://www.w3.org/2000/svg";
 const XLINK: &str = "http://www.w3.org/1999/xlink";
+const XML: &str = "http://www.w3.org/XML/1998/namespace";
 
 /// An SVG file's elements, in preorder from its root `<svg>`, and their styles.
 #[derive(Debug)]
@@ -149,6 +150,7 @@ fn element(
         let key = match a.namespace() {
             None => camel(a.name()),
             Some(XLINK) if a.name() == "href" => "xlinkHref".into(),
+            Some(XML) if a.name() == "space" => "xmlSpace".into(),
             Some(_) => continue,
         };
         let root = parent.is_none() && matches!(&*key, "x" | "y" | "width" | "height");
@@ -429,7 +431,7 @@ mod tests {
             unreachable!()
         };
         let names: Vec<&str> = attributes.iter().map(|(k, _)| &**k).collect();
-        assert_eq!(names, ["viewBox"]);
+        assert_eq!(names, ["viewBox", "xmlSpace"]);
         assert_eq!(d.natural, Natural::Size([24.0, 12.0]));
         // The style attribute, as a style; the circle inherits its fill.
         let circle = &d.styles[5];
@@ -446,6 +448,26 @@ mod tests {
             unreachable!()
         };
         assert_eq!(*view_box, Some([0.0, 0.0, 24.0, 12.0]));
+    }
+
+    #[test]
+    fn xml_space_inherits_and_css_overrides_it() {
+        let source = indoc::indoc! {r#"
+            <svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve">
+              <text>A   B<tspan xml:space="default"> C   D </tspan><tspan xml:space="default" style="white-space:pre"> E   F </tspan></text>
+            </svg>
+        "#};
+        let d = Document::parse(source, &mut vec![]).unwrap();
+        use crate::style::Collapse::{Collapse, Preserve};
+        assert_eq!(
+            d.styles.iter().map(|s| s.font.collapse).collect::<Vec<_>>(),
+            [
+                Preserve, Preserve, Preserve, Collapse, Collapse, Preserve, Preserve
+            ]
+        );
+        let error =
+            Document::parse(&source.replace("preserve", "invalid"), &mut vec![]).unwrap_err();
+        assert!(error.contains("xmlSpace"), "{error}");
     }
 
     #[test]

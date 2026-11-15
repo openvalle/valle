@@ -371,6 +371,12 @@ by the output canvas size. Very large tiles can therefore lose fine detail.
 
 ### SVG text
 
+`xmlSpace="preserve"` (XML files: `xml:space="preserve"`) preserves leading,
+trailing and repeated spaces and converts tabs and line breaks to spaces. It
+inherits through SVG groups and text spans. `"default"` removes line breaks,
+converts tabs to spaces and collapses spaces. An explicit CSS `whiteSpace`
+declaration overrides the attribute.
+
 `<text>` sets a baseline position with `x` and `y`; `<tspan>` changes its font or
 paint and continues at the current text position. `x`, `y`, `dx`, `dy` and `rotate`
 accept SVG number lists (lengths can also use px or percentages). A final `rotate`

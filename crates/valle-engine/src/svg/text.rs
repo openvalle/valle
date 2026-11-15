@@ -375,6 +375,9 @@ fn subtree(
                 let collapse = styles[node].font.collapse == Collapse::Collapse;
                 let mut text = String::new();
                 for c in value.chars() {
+                    if collapse && matches!(c, '\n' | '\r') {
+                        continue;
+                    }
                     let c = if matches!(c, '\n' | '\r' | '\t') {
                         ' '
                     } else {
@@ -1063,5 +1066,27 @@ mod tests {
         assert!(
             Position::parse(Tag::TextPath, &[("href", &V::Str("other.svg#x".into()))]).is_err()
         );
+    }
+
+    #[test]
+    fn xml_space_preserves_spaces_and_default_removes_newlines() {
+        let draw = |mode: &str, value: &str| {
+            let source = format!(
+                "export const composition={{width:240,height:80,fps:1,duration:1}}; \
+                 export default function Scene() {{ return <svg width={{240}} height={{80}}>\
+                 <text x={{10}} y={{40}} fontSize={{24}} xmlSpace={mode:?}>{{{value:?}}}</text></svg>; }}"
+            );
+            let mut scene = Scene::load(
+                "space.motion.tsx",
+                &|_| Some(source.as_bytes().to_vec()),
+                &Inputs::default(),
+                crate::testing::fonts(),
+            )
+            .unwrap();
+            scene.frame(Tick::ZERO).unwrap().items
+        };
+        assert_eq!(draw("preserve", " A\n\t B "), draw("preserve", " A   B "));
+        assert_eq!(draw("default", "  A\nB\t  C  "), draw("preserve", "AB C"));
+        assert_ne!(draw("preserve", " A   B "), draw("default", " A   B "));
     }
 }

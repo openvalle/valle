@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" font-size="24" fill="#182433">
+<rect width="320" height="180" fill="white"/>
+<g xml:space="preserve"><text x="16" y="40"> A   B </text><text x="16" y="80">C<tspan xml:space="default">   D   E </tspan> F </text></g>
+<text x="16" y="120" xml:space="default">GH   I</text>
+<text x="16" y="160" xml:space="preserve">J K   L</text></svg>

@@ -1056,6 +1056,15 @@ pub(super) fn inherits(v: &V) -> bool {
 pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
     use Field as F;
     match field {
+        F::XmlSpace => {
+            d.collapse = Some(keyword(
+                v,
+                &[
+                    ("default", Collapse::Collapse),
+                    ("preserve", Collapse::Preserve),
+                ],
+            )?);
+        }
         F::Display => d.display = display(v)?,
         F::Position => d.position = position(v)?,
         F::Inset(s) => set_sides(&mut d.inset, s, v, "lengths", |v| length(v, INSET))?,

@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/text.html#WhiteSpace",
+  "assertion": "XML whitespace inherits through SVG groups, preserves spaces and converts newlines in preserve mode, and removes newlines and collapses spaces in default mode.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "The reference encodes the specification-derived character sequences with NBSP because browsers disagree on xml:space. It preserves one glyph advance for each expected space. Unit tests separately verify default-mode newline removal, preservation, inheritance and CSS precedence. Reviewed native differences are confined to glyph edges (1058 pixels, maximum channel delta 143); character positions and solid regions agree.",
+    "pixels": {
+      "maxDifference": 145,
+      "maxPixels": 1100
+    }
+  }
+}

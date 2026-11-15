@@ -1,0 +1,27 @@
+<!doctype html><meta charset="utf-8" /><style>
+  @font-face {
+    font-family: TestSans;
+    src: url("/tests/resources/NotoSans.ttf");
+  }
+  body {
+    margin: 0;
+  }
+  #canvas {
+    width: 320px;
+    height: 180px;
+  }
+  svg {
+    font-family: TestSans;
+    display: block;
+  }
+</style>
+<div id="canvas">
+  <svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" font-size="24" fill="#182433">
+    <rect width="320" height="180" fill="white" />
+    <!-- Expected character sequences after SVG 1.1 whitespace processing; NBSP preserves each expected space across browser implementations. -->
+    <text x="16" y="40">&#160;A&#160;&#160;&#160;B&#160;</text>
+    <text x="16" y="80">C&#160;D&#160;E&#160;&#160;F&#160;</text>
+    <text x="16" y="120">GH&#160;I</text>
+    <text x="16" y="160">J&#160;K&#160;&#160;&#160;L</text>
+  </svg>
+</div>
