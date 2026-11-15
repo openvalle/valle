@@ -1,0 +1,11 @@
+{
+  "size": [400, 120],
+  "sources": {
+    "tests/baselines/browser/svg/escaped-selectors/file/scene.html": "6ff73ce931f07322eeb1de39588af21beb0ec04967903ee1589d2a2fbf4db93b",
+    "tests/cases/svg/escaped-selectors/file/source.svg": "d7924977e0d47dda716ba0fb55b93dcf37b86cab46ccf3d5f213b3583c1d353d"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

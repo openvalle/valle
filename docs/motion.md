@@ -431,7 +431,11 @@ Static structural pseudo-classes are supported: `:root`, `:empty`,
 `:nth-last-of-type(An+B)` (including `odd` and `even`). They count element
 siblings; `:empty` still treats whitespace text as content.
 
-Interactive pseudo-classes, escaped selector identifiers, at-rules and conditional media are
+Selector identifiers and attribute strings accept CSS escapes, including one to six
+hex digits and their optional whitespace terminator: `#\31 23` selects `id="123"`,
+`.panel\+hero` selects `class="panel+hero"`. Unicode names can also be written directly.
+
+Interactive pseudo-classes, at-rules and conditional media are
 not supported and report errors. Stylesheets are resolved when the SVG is loaded;
 there is no DOM or selector matching on every animation frame.
 

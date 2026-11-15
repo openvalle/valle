@@ -115,7 +115,7 @@ impl Sheet {
 impl Selector {
     fn parse(text: &str) -> Result<Self, String> {
         // A comment separates tokens, but does not create a descendant combinator.
-        let ident = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '-');
+        let ident = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-');
         let mut selector = String::new();
         for part in text.split('\0') {
             if let (Some(a), Some(b)) = (selector.chars().last(), part.chars().next())
@@ -167,16 +167,10 @@ impl Selector {
                     continue;
                 }
                 let start = at + usize::from(matches!(marker, b'.' | b'#'));
-                let count = token[start..]
-                    .bytes()
-                    .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
-                    .count();
-                if count == 0 || (at > 0 && !matches!(marker, b'.' | b'#')) {
-                    return Err(format!(
-                        "SVG selector {text:?}: use type, *, .class or #id selectors with descendant, >, + or ~ combinators"
-                    ));
+                if at > 0 && !matches!(marker, b'.' | b'#') {
+                    return Err(format!("invalid compound SVG selector {text:?}"));
                 }
-                let name = token[start..start + count].to_string();
+                let (name, count) = identifier(&token[start..])?;
                 match marker {
                     b'.' => compound.classes.push(name),
                     b'#' => compound.ids.push(name),
@@ -262,40 +256,136 @@ impl Selector {
 /// End of one compound, retaining quoted attribute values and function arguments.
 fn compound_end(text: &str) -> Result<usize, String> {
     let mut quote = None;
-    let mut escaped = false;
     let mut stack = Vec::new();
-    for (i, c) in text.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
+    let mut at = 0;
+    while at < text.len() {
+        let c = text[at..].chars().next().unwrap();
         if c == '\\' {
-            escaped = true;
+            at += escape(&text[at..], quote.is_some())?.1;
             continue;
         }
         if let Some(q) = quote {
             if c == q {
                 quote = None;
             }
-            continue;
-        }
-        if stack.is_empty() && (c.is_ascii_whitespace() || matches!(c, '>' | '+' | '~')) {
-            return Ok(i);
-        }
-        match c {
-            '\'' | '"' => quote = Some(c),
-            '[' => stack.push(']'),
-            '(' => stack.push(')'),
-            ']' | ')' if stack.pop() != Some(c) => {
-                return Err("mismatched SVG selector brackets".into());
+        } else {
+            if stack.is_empty() && (c.is_ascii_whitespace() || matches!(c, '>' | '+' | '~')) {
+                return Ok(at);
             }
-            _ => {}
+            match c {
+                '\'' | '"' => quote = Some(c),
+                '[' => stack.push(']'),
+                '(' => stack.push(')'),
+                ']' | ')' if stack.pop() != Some(c) => {
+                    return Err("mismatched SVG selector brackets".into());
+                }
+                _ => {}
+            }
         }
+        at += c.len_utf8();
     }
-    if quote.is_some() || escaped || !stack.is_empty() {
+    if quote.is_some() || !stack.is_empty() {
         return Err("unclosed SVG selector".into());
     }
     Ok(text.len())
+}
+
+/// CSS escapes consume up to six hex digits and one optional whitespace terminator.
+/// Newline escapes are string continuations, never valid identifier characters.
+fn escape(text: &str, string: bool) -> Result<(Option<char>, usize), String> {
+    let rest = text.strip_prefix('\\').ok_or("expected CSS escape")?;
+    let first = rest.chars().next().ok_or("incomplete CSS escape")?;
+    let count = rest
+        .bytes()
+        .take(6)
+        .take_while(u8::is_ascii_hexdigit)
+        .count();
+    if count > 0 {
+        let code = u32::from_str_radix(&rest[..count], 16).unwrap();
+        let mut end = count;
+        if rest[end..].starts_with("\r\n") {
+            end += 2;
+        } else if rest[end..].starts_with([' ', '\t', '\n', '\r', '\x0c']) {
+            end += 1;
+        }
+        return Ok((
+            Some(
+                char::from_u32(code)
+                    .filter(|c| *c != '\0')
+                    .unwrap_or('\u{fffd}'),
+            ),
+            end + 1,
+        ));
+    }
+    if matches!(first, '\n' | '\r' | '\x0c') {
+        if !string {
+            return Err("newline is not a CSS identifier escape".into());
+        }
+        return Ok((None, if rest.starts_with("\r\n") { 3 } else { 2 }));
+    }
+    Ok((
+        Some(if first == '\0' { '\u{fffd}' } else { first }),
+        first.len_utf8() + 1,
+    ))
+}
+
+fn identifier(text: &str) -> Result<(String, usize), String> {
+    let start = |c: char| c.is_ascii_alphabetic() || c == '_' || !c.is_ascii();
+    let mut chars = text.chars();
+    let valid = match chars.next() {
+        Some('\\') => true,
+        Some('-') => chars
+            .next()
+            .is_some_and(|c| start(c) || matches!(c, '-' | '\\')),
+        Some(c) => start(c),
+        None => false,
+    };
+    if !valid {
+        return Err(format!("invalid CSS identifier {text:?}"));
+    }
+    let mut out = String::new();
+    let mut at = 0;
+    while let Some(c) = text[at..].chars().next() {
+        if c == '\\' {
+            let (c, count) = escape(&text[at..], false)?;
+            out.push(c.unwrap());
+            at += count;
+        } else if start(c) || c.is_ascii_digit() || c == '-' {
+            out.push(c);
+            at += c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    Ok((out, at))
+}
+
+fn string(text: &str) -> Result<(String, usize), String> {
+    let quote = text
+        .chars()
+        .next()
+        .filter(|c| matches!(c, '\'' | '"'))
+        .ok_or("expected CSS string")?;
+    let mut at = 1;
+    let mut out = String::new();
+    while let Some(c) = text[at..].chars().next() {
+        match c {
+            c if c == quote => return Ok((out, at + 1)),
+            '\\' => {
+                let (c, n) = escape(&text[at..], true)?;
+                if let Some(c) = c {
+                    out.push(c);
+                }
+                at += n;
+            }
+            '\n' | '\r' | '\x0c' => return Err("newline in CSS string".into()),
+            c => {
+                out.push(c);
+                at += c.len_utf8();
+            }
+        }
+    }
+    Err("unclosed CSS string".into())
 }
 
 enum Pseudo {
@@ -314,10 +404,8 @@ enum Pseudo {
 
 impl Pseudo {
     fn parse(text: &str) -> Result<(Self, usize), String> {
-        let end = text
-            .find(|c: char| !(c.is_ascii_alphabetic() || c == '-'))
-            .unwrap_or(text.len());
-        let name = text[..end].to_ascii_lowercase();
+        let (name, end) = identifier(text)?;
+        let name = name.to_ascii_lowercase();
         let of_type = name.ends_with("of-type");
         let last = name.contains("last");
         let simple = match name.as_str() {
@@ -430,13 +518,7 @@ struct Attribute {
 impl Attribute {
     fn parse(text: &str) -> Result<Self, String> {
         let text = text.trim();
-        let end = text
-            .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_')))
-            .unwrap_or(text.len());
-        if end == 0 {
-            return Err("attribute selector needs an unqualified name".into());
-        }
-        let name = text[..end].to_string();
+        let (name, end) = identifier(text)?;
         let rest = text[end..].trim();
         if rest.is_empty() {
             return Ok(Self { name, test: None });
@@ -446,22 +528,14 @@ impl Attribute {
             .find(|op| rest.starts_with(op))
             .ok_or("unsupported SVG attribute selector operator")?;
         let value = rest[op.len()..].trim();
-        let value = if let Some(q @ ('\'' | '"')) = value.chars().next() {
-            value
-                .strip_prefix(q)
-                .and_then(|v| v.strip_suffix(q))
-                .filter(|v| !v.contains(q) && !v.contains('\\'))
-                .ok_or("attribute selector needs a quoted string without trailing flags")?
-                .to_string()
-        } else if !value.is_empty()
-            && value
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
-        {
-            value.to_string()
+        let (value, end) = if value.starts_with(['\'', '"']) {
+            string(value)?
         } else {
-            return Err("attribute selector needs an identifier or quoted string".into());
+            identifier(value)?
         };
+        if !rest[op.len()..].trim()[end..].trim().is_empty() {
+            return Err("attribute selector has trailing tokens or unsupported flags".into());
+        }
         Ok(Self {
             name,
             test: Some((op.to_string(), value)),
@@ -608,6 +682,40 @@ fn comments(text: &str) -> Result<String, String> {
 mod tests {
     use super::*;
     use indoc::indoc;
+
+    #[test]
+    fn escaped_identifiers_remain_one_token_and_match_decoded_xml_names() {
+        let xml = roxmltree::Document::parse(r#"<svg xmlns="http://www.w3.org/2000/svg"><rect id="123:a" class="panel+hero 山水" data-role="A&amp;B"/><rect id="last"/></svg>"#).unwrap();
+        let node = xml
+            .descendants()
+            .find(|n| n.has_tag_name((SVG, "rect")))
+            .unwrap();
+        for selector in [
+            r"#\31 23\:a",
+            r".panel\+hero",
+            ".山水",
+            r".\5c71 \6c34",
+            r"[data-\72 ole='A\26 B']",
+            r"r\65 ct:\66 irst-child",
+            r"#\00003123\3a a",
+        ] {
+            assert!(
+                Selector::parse(selector).unwrap().matches(node),
+                "{selector}"
+            );
+        }
+        assert!(
+            Selector::parse(r".panel\+hero + rect")
+                .unwrap()
+                .matches(node.next_sibling_element().unwrap())
+        );
+        assert_eq!(identifier(r"\0 ").unwrap().0, "\u{fffd}");
+        assert_eq!(identifier(r"\110000").unwrap().0, "\u{fffd}");
+        assert_eq!(string("\"a\\\nb\"").unwrap().0, "ab");
+        for bad in ["#123", ".-1a", ".x\\", ".x\\\ny", "[x='a\nb']"] {
+            assert!(Selector::parse(bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn structural_selectors_count_elements_and_types_in_both_directions() {

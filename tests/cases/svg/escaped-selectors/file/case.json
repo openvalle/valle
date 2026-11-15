@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/selectors-3/",
+  "assertion": "Escaped digits, punctuation and Unicode identifiers decode before matching. A hex escape terminator is part of the token, not a descendant combinator; escaped attribute names, values and pseudo-class names also match.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All three browser captures agree exactly on decoded identifiers, punctuation, Unicode names, attribute strings and the following-sibling combinator. Parser tests also cover invalid escapes and string continuations."
+  }
+}
