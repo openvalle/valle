@@ -711,9 +711,16 @@ mod tests {
             },
             &[2, 2],
         );
-        for _ in 0..3 {
+        let mut allocated = None;
+        for _ in 0..8 {
             let pixels = draw(&mut renderer, vec![red.clone(), alias.clone()], vec![]);
             close(&pixels[0..4], [255, 0, 0, 191]);
+            let bytes = renderer.bytes();
+            assert_eq!(
+                bytes,
+                *allocated.get_or_insert(bytes),
+                "unread filter targets must be reused on the next frame"
+            );
         }
         // Preserve-alpha convolves straight RGB and applies bias before repremultiplication.
         let kernel = crate::svg::filter::convolve::Kernel {

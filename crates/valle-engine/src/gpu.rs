@@ -2098,6 +2098,10 @@ impl<'a> Renderer<'a> {
         let Some(draw) = &self.draw else {
             return;
         };
+        // Layer contents never survive a frame. Reclaim even targets with no reader;
+        // queue ordering keeps their earlier draws ahead of this frame's reuse.
+        self.free.clear();
+        self.free.extend(0..self.pool.len());
         // Each layer's pool texture once it has one, whether a pass drew into each target, and
         // the last step that reads each layer, after which its texture goes back to the pool.
         let mut surfaces: Vec<Option<usize>> = vec![None; plan.targets];
