@@ -1132,10 +1132,19 @@ pub(crate) fn length(v: &V) -> Result<Length, String> {
             ..Length::default()
         });
     }
-    let (number, percent) = match (s.strip_suffix('%'), s.strip_suffix("px")) {
-        (Some(n), _) => (n, true),
-        (None, Some(n)) => (n, false),
-        (None, None) => (s, false),
+    let (number, percent, factor) = match s.strip_suffix('%') {
+        Some(n) => (n, true, 1.0),
+        None => [
+            ("px", 1.0),
+            ("cm", 96.0 / 2.54),
+            ("mm", 96.0 / 25.4),
+            ("in", 96.0),
+            ("pt", 96.0 / 72.0),
+            ("pc", 16.0),
+        ]
+        .into_iter()
+        .find_map(|(unit, factor)| Some((s.strip_suffix(unit)?, false, factor)))
+        .unwrap_or((s, false, 1.0)),
     };
     match path::numbers(number).as_deref() {
         Some(&[n]) if percent => Ok(Length {
@@ -1145,11 +1154,11 @@ pub(crate) fn length(v: &V) -> Result<Length, String> {
         }),
         Some(&[n]) => Ok(Length {
             em: 0.0,
-            units: f64::from(n),
+            units: f64::from(n) * factor,
             percent: 0.0,
         }),
         _ => Err(format!(
-            "{} is not a length: a number, px, em or a percentage",
+            "{} is not a length: a number, px, em, cm, mm, in, pt, pc or a percentage",
             v.text()
         )),
     }

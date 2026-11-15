@@ -98,6 +98,17 @@ mod tests {
     use crate::template::V;
 
     #[test]
+    fn physical_lengths_use_the_css_reference_pixel() {
+        for text in ["2.54cm", "25.4mm", "1in", "72pt", "6pc"] {
+            let l = crate::svg::length(&V::Str(text.into())).unwrap();
+            assert!((l.resolve(123.0) - 96.0).abs() < 0.00001, "{text}: {l:?}");
+        }
+        let l = crate::svg::length(&V::Str("-1in".into())).unwrap();
+        assert_eq!(l.resolve(123.0), -96.0);
+        assert!(l.nonnegative("width").is_err());
+    }
+
+    #[test]
     fn em_resolves_after_font_inheritance_and_rejects_negative_sizes() {
         let mut length = crate::svg::length(&V::Str("1.5em".into())).unwrap();
         length.resolve_font(24.0);

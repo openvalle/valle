@@ -381,7 +381,8 @@ content by default; `style={{ overflow: "visible" }}` shows it outside the viewp
 Nested SVG accepts transforms and can contain further nested viewports. The same
 rules apply when loading an SVG file.
 
-SVG geometry lengths accept `em`, resolved against the element's computed font size.
+SVG geometry lengths accept numbers, `px`, percentages and the absolute units
+`cm`, `mm`, `in`, `pt`, `pc` (`1in = 96px`). They also accept `em`, resolved against the element's computed font size.
 Inherited fonts, `use` instances and nested viewports keep the same rule.
 
 SVG image resources also work in `backgroundImage: "url(resource://icon)"`.

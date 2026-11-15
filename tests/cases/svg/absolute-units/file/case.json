@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/coords.html#Units",
+  "assertion": "Five equivalent physical lengths each span 96 CSS pixels. Nested viewBox scaling doubles a 24-unit rectangle to 48 pixels.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three captures: all five bars are 96 pixels wide and the nested rectangle is 48 pixels wide. All browser pixels agree."
+  }
+}

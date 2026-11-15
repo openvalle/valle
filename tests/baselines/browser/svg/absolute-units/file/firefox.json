@@ -1,0 +1,11 @@
+{
+  "size": [320, 160],
+  "sources": {
+    "tests/baselines/browser/svg/absolute-units/file/scene.html": "8988c7cfc0253375cfc0f2ba7eda754ab7ba810df0730815d37973fa5e627945",
+    "tests/cases/svg/absolute-units/file/source.svg": "3efdfd4e5ee00f4609529f6e714184daf49fa3cb58934cc5eb06f9cd806349a4"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}
