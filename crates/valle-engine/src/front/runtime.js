@@ -2062,7 +2062,7 @@
             "> href is a literal image resource" +
             (type === "feImage" ? " or #element reference" : ""),
         );
-      if (type === "image" || !href.startsWith("#")) {
+      if (type === "image" || (!href.startsWith("#") && !/^resource:\/\/[^#]+#[^#]+$/.test(href))) {
         const source = pictureOf(href);
         if (source === null)
           fail(

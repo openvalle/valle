@@ -23,7 +23,7 @@ const XLINK: &str = "http://www.w3.org/1999/xlink";
 const XML: &str = "http://www.w3.org/XML/1998/namespace";
 
 /// An SVG file's elements, in preorder from its root `<svg>`, and their styles.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Document {
     pub template: Template,
     pub styles: Vec<Style>,
@@ -34,7 +34,7 @@ pub struct Document {
 }
 
 /// An image element or filter primitive and its decoded raster or vector content.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Embedded {
     pub node: u32,
     pub picture: Picture,
@@ -91,11 +91,25 @@ impl Document {
             nodes, embedded, ..
         } = out;
         let mut natural_size = natural(sides(&xml, root, 16.0)?, root.attribute("viewBox"));
-        let template = Template {
-            nodes,
-            roots: vec![0],
-            ..Template::default()
-        };
+        let bundle = super::references::expand(
+            super::references::Bundle {
+                template: Template {
+                    nodes,
+                    roots: vec![0],
+                    ..Template::default()
+                },
+                embedded,
+            },
+            |href| match load(href, images)? {
+                Picture::Svg(doc) => Ok(super::references::Bundle {
+                    template: doc.template,
+                    embedded: doc.embedded,
+                }),
+                _ => Err("a fragment reference needs an SVG file".into()),
+            },
+        )?;
+        let template = bundle.template;
+        let embedded = bundle.embedded;
         let viewport = match natural_size {
             Natural::Size(size) => size,
             Natural::Ratio(_) => [300.0, 150.0],
@@ -184,7 +198,14 @@ fn element(
     for a in x.attributes() {
         let key = match a.namespace() {
             None => camel(a.name()),
-            Some(XLINK) if a.name() == "href" => "xlinkHref".into(),
+            Some(XLINK)
+                if a.name() == "href"
+                    && !x
+                        .attributes()
+                        .any(|a| a.name() == "href" && a.namespace().is_none()) =>
+            {
+                "xlinkHref".into()
+            }
             Some(XML) if a.name() == "space" => "xmlSpace".into(),
             Some(_) => continue,
         };
@@ -212,9 +233,13 @@ fn element(
     }
     let index = out.nodes.len();
     if matches!(tag, Tag::Image | Tag::FeImage) {
-        let href = (x.attribute("href")).or_else(|| x.attribute((XLINK, "href")));
+        let href = x
+            .attributes()
+            .find(|a| a.name() == "href" && a.namespace().is_none())
+            .map(|a| a.value())
+            .or_else(|| x.attribute((XLINK, "href")));
         let href = href.ok_or_else(|| format!("{}: <{name}> needs an href", place(xml, x)))?;
-        if tag != Tag::FeImage || !href.trim().starts_with('#') {
+        if tag != Tag::FeImage || !href.contains('#') {
             let picture = (out.load)(href.trim(), out.images)
                 .map_err(|e| format!("{}: <{name}> {e}", place(xml, x)))?;
             out.embedded.push(Embedded {
@@ -311,16 +336,52 @@ pub(crate) fn resolve(origin: &str, href: &str) -> Result<String, String> {
 /// Image dependencies for packaging; callers deduplicate and walk these transitively.
 pub(crate) fn dependencies(origin: &str, text: &str) -> Result<Vec<String>, String> {
     let xml = roxmltree::Document::parse(text).map_err(|e| format!("{origin}: {e}"))?;
-    xml.descendants()
-        .filter(|n| {
-            n.is_element()
-                && n.tag_name().namespace() == Some(SVG)
-                && matches!(n.tag_name().name(), "image" | "feImage")
-        })
-        .filter_map(|n| n.attribute("href").or_else(|| n.attribute((XLINK, "href"))))
-        .filter(|href| !href.starts_with("data:") && !href.starts_with('#'))
-        .map(|href| resolve(origin, href))
-        .collect()
+    let stylesheet = css::Sheet::read(&xml)?;
+    let mut paths = Vec::new();
+    for n in xml
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().namespace() == Some(SVG))
+    {
+        let Some(tag) = Tag::by_name(n.tag_name().name()) else {
+            continue;
+        };
+        let style = stylesheet.style(n)?;
+        let attrs = n.attributes().filter_map(|a| {
+            let key = match a.namespace() {
+                None => camel(a.name()),
+                Some(XLINK)
+                    if a.name() == "href"
+                        && !n
+                            .attributes()
+                            .any(|a| a.name() == "href" && a.namespace().is_none()) =>
+                {
+                    "xlinkHref".into()
+                }
+                _ => return None,
+            };
+            Some((key, a.value().to_string()))
+        });
+        let styles = style.iter().filter_map(|(key, value)| match value {
+            Prop::Const(V::Str(v)) => Some((key.to_string(), v.to_string())),
+            _ => None,
+        });
+        for (key, value) in attrs.chain(styles) {
+            let href = super::references::external(tag, &key, &value)
+                .map(|(file, _)| file)
+                .or_else(|| {
+                    (matches!(tag, Tag::Image | Tag::FeImage)
+                        && matches!(&*key, "href" | "xlinkHref")
+                        && !value.starts_with('#'))
+                    .then_some(value)
+                });
+            if let Some(href) = href.filter(|s| !s.starts_with("data:")) {
+                paths.push(resolve(origin, &href)?);
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
 }
 
 /// The bytes base64 `text` holds, white space left out; `None` if it is not base64.

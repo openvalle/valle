@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/linking.html#IRIReference",
+  "assertion": "External fragments reuse shapes, inherited styles, gradients, clipping and patterns with isolated document IDs. Missing references and cycles are errors; loading is independent of frame time.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three browsers. Chromium preserves the referenced elements stylesheet declarations on use instances, as SVG 1.1 requires; Firefox and WebKit omit the external class stroke here. All three agree on the external gradient, clip and pattern geometry. Native differences are confined to 3285 gradient pixels with a one-level channel rounding difference; reviewed actual and difference images.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 3300
+    }
+  }
+}

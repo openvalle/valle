@@ -26,6 +26,7 @@ use video::Shown;
 pub use video::Video;
 
 mod check;
+mod references;
 pub use check::Checker;
 
 /// Variants whose sheets are kept, as many as the frontend keeps.
@@ -95,6 +96,7 @@ pub struct Scene {
     retained: Option<RetainedLayout>,
     /// Most recently used first.
     sheets: Vec<(Rc<Template>, Sheet, Measured)>,
+    imported: references::Imported,
 }
 
 impl Scene {
@@ -198,6 +200,7 @@ impl Scene {
             images,
             text,
             sheets: Vec::new(),
+            imported: references::Imported::default(),
             paint: Cache::default(),
             retained: None,
         })
@@ -295,7 +298,8 @@ impl Scene {
             let _span = crate::perf::span("eval.values");
             self.front.frame(at)?
         };
-        self.lay(at, frame.template, frame.values)
+        let template = self.expand(frame.template)?;
+        self.lay(at, template, frame.values)
     }
 
     /// `template`, a variant, with its `values` at `at`, styled and laid out.
@@ -1107,6 +1111,74 @@ mod tests {
                 };
                 let error = Scene::load("s.motion.tsx", &read, &Inputs::default(), fonts())
                     .and_then(|mut s| s.frame(Tick(0)).map(drop))
+                    .unwrap_err();
+                assert!(error.contains(expected), "{error}");
+            }
+        });
+    }
+
+    #[test]
+    fn external_svg_fragments_share_scopes_resources_and_checking() {
+        big_stack(|| {
+            let source = indoc! {r##"
+                export const composition = { width: 120, height: 80, fps: 1, duration: 2 };
+                export const controls = { resources: { shapes: resource({kind:'image', default:'./shapes.svg'}) } };
+                export default function Scene() {
+                  const {seconds} = useCurrentTime();
+                  return <svg width="120" height="80">
+                    <defs><rect id="tile" width="100" height="100" fill="red"/></defs>
+                    <use href="resource://shapes#tile" x={10 + seconds * 10} fill="blue"/>
+                    <rect x="50" width="40" height="20" fill="url(resource://shapes#ink)"/>
+                  </svg>;
+                }
+            "##};
+            let shapes = r##"<svg xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="ink"><stop stop-color="blue"/><stop offset="1" stop-color="lime"/></linearGradient></defs><g id="tile"><rect width="20" height="20"/><image href="./tile.svg" x="20" width="20" height="20"/></g></svg>"##;
+            let tile = r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><rect width="20" height="20" fill="orange"/></svg>"##;
+            let reads = std::cell::Cell::new(0);
+            let read = |path: &str| match path {
+                "scene.motion.tsx" => Some(source.as_bytes().to_vec()),
+                "shapes.svg" => {
+                    reads.set(reads.get() + 1);
+                    Some(shapes.as_bytes().to_vec())
+                }
+                "tile.svg" => Some(tile.as_bytes().to_vec()),
+                _ => None,
+            };
+            let mut scene =
+                Scene::load("scene.motion.tsx", &read, &Inputs::default(), fonts()).unwrap();
+            let first = scene.frame(Tick(0)).unwrap();
+            assert!(!first.items.is_empty());
+            let at = scene.front.composition.fps.frame_start(1).unwrap();
+            assert_ne!(first.items, scene.frame(at).unwrap().items);
+            assert_eq!(first.items, scene.frame(Tick(0)).unwrap().items);
+            assert_eq!(reads.get(), 1);
+            let count = scene.pictures.len();
+            scene.into_checker().check_frames(0, 1).unwrap();
+            assert_eq!(count, 2); // The declared SVG and its one embedded vector image.
+            for (find, replace, expected) in [
+                (
+                    "shapes#tile",
+                    "shapes#missing",
+                    "declares no element missing",
+                ),
+                ("shapes#tile", "absent#tile", "declares no resource absent"),
+                (
+                    "resource://shapes#tile",
+                    "./shapes.svg#tile",
+                    "resource://name#id",
+                ),
+            ] {
+                let bad = source.replace(find, replace);
+                let files = |path: &str| {
+                    if path == "scene.motion.tsx" {
+                        Some(bad.as_bytes().to_vec())
+                    } else {
+                        read(path)
+                    }
+                };
+                let error = Scene::load("scene.motion.tsx", &files, &Inputs::default(), fonts())
+                    .unwrap()
+                    .frame(Tick(0))
                     .unwrap_err();
                 assert!(error.contains(expected), "{error}");
             }

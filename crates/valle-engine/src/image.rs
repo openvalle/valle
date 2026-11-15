@@ -19,7 +19,7 @@ pub mod orientation;
 pub mod yuv;
 
 /// What a resource shows: one of the scene's images, by its index there, an SVG file, or nothing.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Picture {
     Image {
         image: u32,

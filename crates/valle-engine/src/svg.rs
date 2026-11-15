@@ -4,6 +4,7 @@
 pub mod file;
 pub mod filter;
 mod length;
+pub(crate) mod references;
 mod template;
 pub(crate) mod text;
 

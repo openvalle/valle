@@ -160,7 +160,7 @@ impl Checker {
         // Evaluate all operations, even unused fallible expressions. A successful first frame
         // is not evidence that a changing value or a later branch is valid.
         let frame = self.scene.front.frame(at)?;
-        let template = frame.template;
+        let template = self.scene.expand(frame.template)?;
         if self
             .plan
             .as_ref()

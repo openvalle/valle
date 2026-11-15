@@ -403,7 +403,15 @@ JPEG, WebP or another SVG through the host resource reader. Paths are relative t
 the containing SVG, including nested files. Base64 data URIs also work. Project
 file discovery includes referenced images; missing files and circular SVG image
 references report their paths. Referenced SVGs keep vector shapes and their own
-styles. External document fragments (`other.svg#id`) are not supported.
+styles. External fragments (`other.svg#id`) also work in `use`, `textPath`,
+gradient/pattern `href` and paint, clip, mask, marker or filter URLs. Files resolve
+these relative to the containing SVG. Inline scenes name an explicitly declared
+image resource instead: `<use href="resource://shapes#star" />` or
+`fill="url(resource://shapes#ink)"`. The referenced resource must be SVG.
+References are fixed when the variant loads; placement and inherited styles can
+animate. Each imported document keeps private IDs and its stylesheet declarations.
+Missing IDs, files and external-reference cycles report errors. Discovery includes
+transitive SVG dependencies; no files are read while evaluating frames.
 
 SVG files can contain `<style>` blocks and `class` attributes. Supported selectors
 are type names, `*`, `.class`, `#id`, compound selectors such as `rect.icon`, comma
@@ -600,7 +608,7 @@ source's color or alpha. Specular lighting produces a highlight map whose alpha 
 the largest RGB component; composite it over the source or add it with `feComposite`. Kernel size and octave count increase GPU work; keep
 convolution kernels and noise octaves small unless the effect needs more detail.
 
-Not supported: external filter references, filter URLs on CSS boxes/the outer SVG,
+Not supported: filter URLs on CSS boxes/the outer SVG,
 URL/function lists, `BackgroundImage`/`BackgroundAlpha`/`FillPaint`/`StrokePaint`,
 blur
 edge modes other than `none`. These produce errors rather than a partial effect.
