@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/text.html#DirectionProperty",
+  "assertion": "SVG direction and unicode-bidi reorder glyphs while x/y lists still address logical characters. Text anchors respect direction; independent positioned spans, mixed Hebrew/Latin runs and textLength remain deterministic.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Chrome and Firefox agree on logical character coordinates and directional text anchors. WebKit incorrectly joins separately positioned RTL tspan chunks; Chrome is selected after checking the logical positions against SVG text chunk rules. Native differences are confined to glyph antialiasing edges (4628 pixels, maximum channel delta 166); positions and glyph ordering are also asserted independently in unit tests.",
+    "pixels": {
+      "maxDifference": 170,
+      "maxPixels": 4800
+    }
+  }
+}

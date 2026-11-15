@@ -436,21 +436,23 @@ fn subtree(
     {
         last.text.truncate(last.text.trim_end_matches(' ').len());
     }
+    let font = |font: &crate::style::Font| {
+        let mut f = font.clone();
+        f.wrap = false;
+        f.wrap_style = crate::style::WrapStyle::Auto;
+        f.align = TextAlign::Left;
+        f.align_last = None;
+        f.indent = None;
+        f.collapse = Collapse::Preserve;
+        f
+    };
+    let base = font(&styles[root].font);
     let fonts: Vec<_> = leaves
         .iter()
-        .map(|leaf| {
-            let mut f = (*styles[leaf.node].font).clone();
-            f.wrap = false;
-            f.wrap_style = crate::style::WrapStyle::Auto;
-            f.align = TextAlign::Left;
-            f.align_last = None;
-            f.indent = None;
-            f.collapse = Collapse::Preserve;
-            f
-        })
+        .map(|leaf| font(&styles[leaf.node].font))
         .collect();
     let content = Content {
-        font: &fonts[0],
+        font: &base,
         clamp: None,
         pieces: leaves
             .iter()
@@ -494,70 +496,129 @@ fn subtree(
             );
         }
     }
-    let mut placed = Vec::<Placed>::new();
-    let mut chunks = Vec::<(usize, f64)>::new();
-    let mut shift = [0.0; 2];
-    let mut previous_track = None;
-    let mut previous_character = None;
-    for run in &lines.runs {
-        let glyphs = &lines.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize];
-        for (k, glyph) in glyphs.iter().enumerate() {
-            let node = glyph.node as usize;
-            let leaf = leaves
-                .iter()
-                .find(|leaf| leaf.node == node)
-                .expect("shaped leaf");
-            let character = char_at[glyph.cluster as usize];
-            let mut absolute = [None; 2];
-            let mut delta = [0.0; 2];
-            let mut angle = 0.0;
-            let mut track = None;
+    // SVG positions address logical characters, while the shaper returns visual glyph
+    // order. Partition at absolute positions before placing bidi runs, so a root x/y
+    // applies to its entire chunk even when its first logical character draws last.
+    #[derive(Clone, Default)]
+    struct Address {
+        node: usize,
+        absolute: [Option<f64>; 2],
+        delta: [f64; 2],
+        angle: f64,
+        track: Option<usize>,
+    }
+    let mut addresses = Vec::new();
+    for leaf in &leaves {
+        for _ in leaf.text.chars() {
+            let character = addresses.len();
+            let mut address = Address {
+                node: leaf.node,
+                ..Address::default()
+            };
             for &ancestor in &leaf.ancestors {
                 let Element::Text(p) = &styles[ancestor].svg.as_deref().unwrap().element else {
                     continue;
                 };
                 let index = character.saturating_sub(ranges[&ancestor].start);
-                for axis in 0..2 {
+                for (axis, &basis) in size.iter().enumerate() {
                     if let Some(v) = p.xy[axis].get(index) {
-                        absolute[axis] = Some(v.resolve(size[axis]));
+                        address.absolute[axis] = Some(v.resolve(basis));
                     }
                     if let Some(v) = p.delta[axis].get(index) {
-                        delta[axis] = v.resolve(size[axis]);
+                        address.delta[axis] = v.resolve(basis);
                     }
                 }
                 if let Some(v) = p.rotate.get(index).or(p.rotate.last()) {
-                    angle = *v;
+                    address.angle = *v;
                 }
                 if p.path.is_some() {
-                    track = Some(ancestor);
+                    address.track = Some(ancestor);
                 }
             }
-            if previous_character == Some(character) {
-                absolute = [None; 2];
-                delta = [0.0; 2];
+            addresses.push(address);
+        }
+    }
+    let starts: Vec<_> = addresses
+        .iter()
+        .enumerate()
+        .filter_map(|(i, a)| {
+            (i == 0 || a.absolute.iter().any(Option::is_some) || a.track != addresses[i - 1].track)
+                .then_some(i)
+        })
+        .collect();
+    let mut glyphs = Vec::new();
+    for run in &lines.runs {
+        let row = &lines.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize];
+        for (k, glyph) in row.iter().enumerate() {
+            let character = char_at[glyph.cluster as usize];
+            let chunk = starts.partition_point(|s| *s <= character) - 1;
+            let advance = f64::from(row.get(k + 1).map_or(run.x[1], |g| g.x) - glyph.x);
+            glyphs.push((chunk, glyph, character, advance));
+        }
+    }
+    glyphs.sort_by_key(|g| g.0);
+    let mut placed = Vec::<Placed>::new();
+    let mut chunks = Vec::<(usize, f64)>::new();
+    let mut cursor = [0.0; 2];
+    let mut previous_track = None;
+    let mut remaining = &glyphs[..];
+    let mut displacements = vec![[0.0; 2]; addresses.len()];
+    for (chunk, &start) in starts.iter().enumerate() {
+        let (row, rest) = remaining.split_at(remaining.partition_point(|g| g.0 == chunk));
+        remaining = rest;
+        if row.is_empty() {
+            continue;
+        }
+        let end = starts.get(chunk + 1).copied().unwrap_or(addresses.len());
+        let first_address = &addresses[start];
+        let track = first_address.track;
+        let style = &styles[first_address.node];
+        let rtl = style.font.rtl;
+        let sign = if rtl { -1.0 } else { 1.0 };
+        let min = row
+            .iter()
+            .map(|g| f64::from(g.1.x))
+            .fold(f64::INFINITY, f64::min);
+        let max = row
+            .iter()
+            .map(|g| f64::from(g.1.x) + g.3)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let width = max - min;
+        if track != previous_track
+            && let Some(n) = track
+        {
+            let Element::Text(p) = &styles[n].svg.as_deref().unwrap().element else {
+                unreachable!()
+            };
+            cursor = [tracks[&n].offset(p.offset), 0.0];
+        }
+        for (axis, c) in cursor.iter_mut().enumerate() {
+            if let Some(value) = first_address.absolute[axis] {
+                *c = value;
             }
-            let new_track = track != previous_track;
-            if new_track && let Some(n) = track {
-                let Element::Text(p) = &styles[n].svg.as_deref().unwrap().element else {
-                    unreachable!()
-                };
-                shift[0] = tracks[&n].offset(p.offset) - f64::from(glyph.x);
-                shift[1] = 0.0;
+        }
+        let offset = [cursor[0] - min - if rtl { width } else { 0.0 }, cursor[1]];
+        let mut delta = [0.0; 2];
+        for (a, position) in addresses[start..end]
+            .iter()
+            .zip(&mut displacements[start..end])
+        {
+            for (d, add) in delta.iter_mut().zip(a.delta) {
+                *d += add;
             }
-            let new_chunk = placed.is_empty() || absolute.iter().any(Option::is_some) || new_track;
-            if new_chunk {
-                chunks.push((placed.len(), styles[node].text_anchor));
-            }
-            if let Some(x) = absolute[0] {
-                shift[0] = x - f64::from(glyph.x);
-            }
-            if let Some(y) = absolute[1] {
-                shift[1] = y;
-            }
-            for axis in 0..2 {
-                shift[axis] += delta[axis];
-            }
-            let advance = f64::from(glyphs.get(k + 1).map_or(run.x[1], |g| g.x) - glyph.x);
+            *position = delta;
+        }
+        chunks.push((placed.len(), style.text_anchor * sign));
+        cursor[0] += sign * width + delta[0];
+        cursor[1] += delta[1];
+        for &(_, glyph, character, advance) in row {
+            let node = glyph.node as usize;
+            let leaf = leaves
+                .iter()
+                .find(|leaf| leaf.node == node)
+                .expect("shaped leaf");
+            let angle = addresses[character].angle;
+            let shift = displacements[character];
             let font = &styles[node].font;
             let mut baselines = Vec::new();
             let mut baseline = 0.0;
@@ -612,8 +673,8 @@ fn subtree(
                 character,
                 path,
                 at: [
-                    f64::from(glyph.x) + shift[0],
-                    f64::from(glyph.y - first) + shift[1] + baseline,
+                    f64::from(glyph.x) + offset[0] + shift[0],
+                    f64::from(glyph.y - first) + offset[1] + shift[1] + baseline,
                 ],
                 advance,
                 cell: [ascent, descent],
@@ -622,9 +683,8 @@ fn subtree(
                 scale: 1.0,
                 track,
             });
-            previous_track = track;
-            previous_character = Some(character);
         }
+        previous_track = track;
     }
     // Apply textLength from inner spans outward. The spacing form changes positions only.
     let mut adjusting: Vec<_> = ranges.keys().copied().collect();
@@ -661,12 +721,22 @@ fn subtree(
                 placed[i].at[0] += gap * k as f64;
             }
         }
-        let end = chunks
-            .iter()
-            .find(|c| c.0 > b)
-            .map_or(placed.len(), |c| c.0);
-        for glyph in &mut placed[b + 1..end] {
-            glyph.at[0] += width - natural;
+        if styles[n].font.rtl {
+            for &i in &indices {
+                placed[i].at[0] -= width - natural;
+            }
+            let begin = chunks.iter().rev().find(|c| c.0 <= a).map_or(0, |c| c.0);
+            for glyph in &mut placed[begin..a] {
+                glyph.at[0] -= width - natural;
+            }
+        } else {
+            let end = chunks
+                .iter()
+                .find(|c| c.0 > b)
+                .map_or(placed.len(), |c| c.0);
+            for glyph in &mut placed[b + 1..end] {
+                glyph.at[0] += width - natural;
+            }
         }
     }
     for k in 0..chunks.len() {
@@ -771,6 +841,93 @@ mod tests {
     use crate::front::Inputs;
     use crate::scene::Scene;
     use crate::time::Tick;
+
+    #[test]
+    fn changing_svg_text_direction_keeps_seek_results_independent() {
+        let source = indoc::indoc! {r#"
+            export const composition = {width:320,height:120,fps:4,duration:2};
+            export default function Scene() {
+              const {seconds} = useCurrentTime();
+              return <svg width="320" height="120" fontFamily="monospace" fontSize="20">
+                <text x={180 + seconds * 10} y="40" direction={seconds < 1 ? "rtl" : "ltr"} unicodeBidi="bidi-override">AB<tspan x="260">CD</tspan></text>
+              </svg>;
+            }
+        "#};
+        let load = || {
+            Scene::load(
+                "bidi.motion.tsx",
+                &|_| Some(source.as_bytes().to_vec()),
+                &Inputs::default(),
+                crate::testing::fonts(),
+            )
+            .unwrap()
+        };
+        let mut scene = load();
+        for at in [1.0, 0.25, 1.75, 0.0] {
+            let at = Tick::from_seconds(at).unwrap();
+            assert_eq!(
+                scene.frame(at).unwrap().items,
+                load().frame(at).unwrap().items
+            );
+        }
+    }
+
+    #[test]
+    fn bidi_chunks_keep_logical_positions_and_directional_anchors() {
+        let paths = |markup: &str| {
+            let source = format!(
+                "export const composition = {{width:320,height:120,fps:1,duration:1}}; export default function Scene() {{return <svg width=\"320\" height=\"120\" fontFamily=\"monospace\" fontSize=\"20\">{markup}</svg>;}}"
+            );
+            let frame = Scene::load(
+                "bidi.motion.tsx",
+                &|_| Some(source.as_bytes().to_vec()),
+                &Inputs::default(),
+                crate::testing::fonts(),
+            )
+            .unwrap()
+            .frame(Tick::ZERO)
+            .unwrap();
+            let mut joined = Path::default();
+            for style in &*frame.styles {
+                if let Some(Element::Shape(Shape::Text { path, .. })) =
+                    style.svg.as_deref().map(|s| &s.element)
+                {
+                    joined
+                        .0
+                        .extend(path.mapped(|p| p.map(|v| (v * 1000.0).round() / 1000.0)).0);
+                }
+            }
+            joined
+        };
+        for (actual, expected) in [
+            (
+                r#"<text x="100" y="40" direction="rtl" unicodeBidi="bidi-override">ABC</text>"#,
+                r#"<text x="100" y="40" textAnchor="end">CBA</text>"#,
+            ),
+            (
+                r#"<text x="100" y="40" direction="rtl">ABC</text>"#,
+                r#"<text x="100" y="40" textAnchor="end">ABC</text>"#,
+            ),
+            (
+                r#"<text x="100" y="40" direction="rtl" unicodeBidi="bidi-override" textAnchor="end">ABC</text>"#,
+                r#"<text x="100" y="40">CBA</text>"#,
+            ),
+            (
+                r#"<text x="100 120 140" y="40" direction="rtl" unicodeBidi="bidi-override">ABC</text>"#,
+                r#"<text y="40" textAnchor="end"><tspan x="100">A</tspan><tspan x="120">B</tspan><tspan x="140">C</tspan></text>"#,
+            ),
+            (
+                r#"<text x="100" y="40" direction="rtl" unicodeBidi="bidi-override">AB<tspan x="200">CD</tspan></text>"#,
+                r#"<text x="100" y="40" textAnchor="end">BA<tspan x="200">DC</tspan></text>"#,
+            ),
+            (
+                r#"<text x="100" y="40" direction="rtl" unicodeBidi="bidi-override" textLength="90" lengthAdjust="spacingAndGlyphs">ABC</text>"#,
+                r#"<text x="100" y="40" textAnchor="end" textLength="90" lengthAdjust="spacingAndGlyphs">CBA</text>"#,
+            ),
+        ] {
+            assert_eq!(paths(actual), paths(expected), "{actual}");
+        }
+    }
 
     #[test]
     fn alignment_baseline_places_the_requested_typographic_edge() {

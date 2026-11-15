@@ -1050,7 +1050,10 @@ fn bind(
         logical,
         base: RefCell::default(),
         declared,
-        text: matches!(node.kind, Kind::Text { .. }),
+        text: matches!(
+            node.kind,
+            Kind::Text { .. } | Kind::Svg { tag: Tag::Text, .. }
+        ),
         textual: matches!(node.kind, Kind::Text { .. } | Kind::Span { .. }),
         rest,
         place,

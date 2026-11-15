@@ -764,6 +764,8 @@ impl Field {
             self,
             Field::Font
                 | Field::XmlSpace
+                | Field::Direction
+                | Field::UnicodeBidi
                 | Field::TextAnchor
                 | Field::DominantBaseline
                 | Field::AlignmentBaseline

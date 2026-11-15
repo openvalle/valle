@@ -36,6 +36,22 @@ const CASES: {
   { entry: "tests/cases/svg/color-interpolation/file/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/marker-overflow/inline/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/marker-overflow/file/scene.motion.tsx", frames: [0] },
+  {
+    entry: "tests/cases/svg/text-direction/inline/scene.motion.tsx",
+    frames: [0],
+    nativeResources: {
+      Latin: "tests/resources/NotoSans.ttf",
+      Hebrew: "tests/resources/NotoSansHebrew.ttf",
+    },
+  },
+  {
+    entry: "tests/cases/svg/text-direction/file/scene.motion.tsx",
+    frames: [0],
+    nativeResources: {
+      Latin: "tests/resources/NotoSans.ttf",
+      Hebrew: "tests/resources/NotoSansHebrew.ttf",
+    },
+  },
   { entry: "tests/cases/svg/filter-tile/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/filter-image/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/filter-specular/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },

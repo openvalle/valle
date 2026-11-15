@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="360" font-family="Latin, Hebrew" font-size="24" fill="#17365d">
+<path d="M180 10V330 M350 130V170" fill="none" stroke="#ddd"/>
+<text x="180" y="35" direction="rtl">ABC 123</text>
+<text x="180" y="75" direction="rtl" unicode-bidi="bidi-override">ABC 123</text>
+<text x="180" y="115" direction="rtl" unicode-bidi="bidi-override" text-anchor="middle">ABC 123</text>
+<text x="180" y="155" direction="rtl" unicode-bidi="bidi-override">AB<tspan x="350">CD</tspan></text>
+<text x="80 140 200" y="195" direction="rtl" unicode-bidi="bidi-override">ABC</text>
+<text x="180" y="235" direction="rtl">אבג 123</text>
+<text x="20" y="275">LEFT [<tspan direction="rtl" unicode-bidi="embed">אבג 123</tspan>] RIGHT</text>
+<text x="180" y="315" direction="rtl" unicode-bidi="bidi-override" textLength="120" lengthAdjust="spacingAndGlyphs">ABC 123</text>
+</svg>

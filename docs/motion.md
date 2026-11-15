@@ -343,8 +343,8 @@ New `Text` blocks establish separate paragraphs.
 
 Declare a font resource containing the needed script; bidi layout does not add
 new built-in fallback fonts. Source character offsets remain unchanged by the
-internal bidi controls. SVG `direction`/`unicodeBidi` attributes are not included
-in this Text/Span implementation.
+internal bidi controls. SVG also accepts these properties; its logical character
+positions and directional anchors are described under SVG text.
 
 ### Paragraph alignment and wrapping
 
@@ -454,6 +454,14 @@ the marker's `viewBox`, reference point, orientation or scaling with stroke widt
 CSS style overrides the presentation attribute.
 
 ### SVG text
+
+SVG text accepts `direction="ltr"` / `"rtl"` and `unicodeBidi`, including
+`normal`, `embed` and `bidi-override`. Text and spans use the same Unicode shaping
+and explicit font resources as `<Text>`. `textAnchor="start"` / `"end"` follows
+the direction of each text chunk; `x`, `y`, `dx`, `dy` and `rotate` lists continue
+to address characters in the authored logical order, after whitespace handling.
+An absolute position starts a new independently anchored chunk. Changing direction
+or seeking backwards does not depend on a previous frame.
 
 `xmlSpace="preserve"` (XML files: `xml:space="preserve"`) preserves leading,
 trailing and repeated spaces and converts tabs and line breaks to spaces. It

@@ -231,7 +231,7 @@ pub struct Computed {
 
 /// Presentation attributes: style properties of the same name, which the element's style
 /// overrides. Every SVG element takes them.
-const PRESENTATION: [&str; 53] = [
+const PRESENTATION: [&str; 55] = [
     "xmlSpace",
     "fill",
     "fillOpacity",
@@ -251,6 +251,8 @@ const PRESENTATION: [&str; 53] = [
     "letterSpacing",
     "wordSpacing",
     "textAnchor",
+    "direction",
+    "unicodeBidi",
     "dominantBaseline",
     "alignmentBaseline",
     "baselineShift",
