@@ -124,6 +124,23 @@ pub struct Piece<'a> {
     pub font: &'a Font,
     /// An inline box edge occupies space but is not part of the authored text.
     pub edge: Option<Edge>,
+    pub atom: Option<Atom>,
+}
+
+/// A measured inline margin box, in the paragraph's logical axes.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Atom {
+    pub size: [f32; 2],
+    pub baseline: f32,
+    pub offset: [f32; 2],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct InlineBox {
+    pub at: u32,
+    pub node: u32,
+    pub line: u32,
+    pub rect: crate::layout::Rect,
 }
 
 #[derive(Clone)]
@@ -255,6 +272,7 @@ pub(crate) fn cjk_ranges(text: &str) -> Vec<Range<usize>> {
 /// A paragraph broken into lines at a width and aligned in it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lines {
+    pub atoms: Vec<InlineBox>,
     /// Baseline displacements of inline scopes, indexed by node and line.
     pub offsets: Vec<(u32, u32, f32)>,
     pub glyphs: Vec<Glyph>,
@@ -357,11 +375,13 @@ type ParagraphKey = (
         Shaping,
         Rc<[crate::style::bidi::Scope]>,
         Option<(u32, bool)>,
+        Option<[u32; 3]>,
     )>,
 );
 
 /// A paragraph shaped: its glyph runs' brushes are the pieces they are in.
 struct Paragraph {
+    ranges: Vec<Range<usize>>,
     positions: Vec<Option<position::Adjustment>>,
     layout: parley::Layout<u32>,
     string: Rc<str>,
@@ -671,6 +691,7 @@ impl Text {
                     .pieces
                     .iter()
                     .map(|p| Piece {
+                        atom: p.atom,
                         edge: p.edge.clone(),
                         text: p.text.clone(),
                         node: p.node,
@@ -769,6 +790,7 @@ impl Text {
         let string = p.source.clone();
         if p.empty {
             return Ok(Lines {
+                atoms: Vec::new(),
                 glyphs: Vec::new(),
                 runs: Vec::new(),
                 boxes: Vec::new(),
@@ -802,12 +824,13 @@ impl Text {
             .lines()
             .map(|line| {
                 let r = line.text_range();
-                p.map.at(r.start)..p.map.at(r.end)
+                p.map.at(r.start).min(p.source.len())..p.map.at(r.end).min(p.source.len())
             })
             .collect();
         let mut baselines = Vec::new();
         let mut runs = Vec::new();
         let mut shaped = Vec::new();
+        let mut atoms = Vec::new();
         for (i, (line, [top, _])) in p.layout.lines().zip(&boxes).enumerate() {
             let baseline = top + extent(&line, content, strut, &edges, &p.string, &p.positions)[0];
             baselines.push(baseline);
@@ -817,8 +840,32 @@ impl Text {
             let mut starts = Vec::new().into_iter();
             let mut from = None;
             for item in line.items() {
-                let PositionedLayoutItem::GlyphRun(run) = item else {
-                    continue;
+                let run = match item {
+                    PositionedLayoutItem::GlyphRun(run) => run,
+                    PositionedLayoutItem::InlineBox(b) => {
+                        let piece = &content.pieces[b.id as usize];
+                        let atom = piece.atom.expect("inline box piece");
+                        atoms.push(InlineBox {
+                            at: p.map.at(p.ranges[b.id as usize].start) as u32,
+                            node: piece.node,
+                            line: i as u32,
+                            rect: crate::layout::Rect {
+                                x: b.x + shift,
+                                y: baseline - atom.baseline,
+                                width: atom.size[0],
+                                height: atom.size[1],
+                            },
+                        });
+                        runs.push(Run {
+                            node: piece.node,
+                            line: i as u32,
+                            edge: None,
+                            x: [b.x + shift, b.x + shift + atom.size[0]],
+                            glyphs: [0, 0],
+                        });
+                        shaped.push(None);
+                        continue;
+                    }
                 };
                 let piece = &content.pieces[run.style().brush as usize];
                 let (node, face) = (piece.node, Face::of(run.run(), piece.font));
@@ -862,7 +909,7 @@ impl Text {
                     x: [run.offset() + shift, x],
                     glyphs: [0, 0],
                 });
-                shaped.push((face, node, run.run().font_size(), offset, glyphs));
+                shaped.push(Some((face, node, run.run().font_size(), offset, glyphs)));
             }
             // White space that hangs past the end of the line is not in its runs' boxes.
             let mut hanging = line.metrics().hanging_advance;
@@ -885,7 +932,11 @@ impl Text {
             }
         }
         let mut glyphs = Vec::new();
-        for (run, (face, node, size, offset, list)) in runs.iter_mut().zip(shaped) {
+        for (run, shape) in runs.iter_mut().zip(shaped) {
+            let Some((face, node, size, offset, list)) = shape else {
+                run.glyphs = [glyphs.len() as u32; 2];
+                continue;
+            };
             run.glyphs = [glyphs.len() as u32, (glyphs.len() + list.len()) as u32];
             let face = self.face(face);
             glyphs.extend((list.into_iter()).map(|(id, x, y, cluster)| Glyph {
@@ -903,6 +954,7 @@ impl Text {
             }));
         }
         let mut lines = Lines {
+            atoms,
             glyphs,
             runs,
             boxes,
@@ -1039,6 +1091,12 @@ impl Text {
                 continue;
             }
             'fit: for run in runs {
+                if lines.atoms.iter().any(|a| a.node == run.node) {
+                    if run.x[1] > width - advance {
+                        break;
+                    }
+                    at = run.x[1];
+                }
                 for g in run.glyphs[0] as usize..run.glyphs[1] as usize {
                     let end = right(lines, run, g);
                     if end > width - advance {
@@ -1071,6 +1129,10 @@ impl Text {
         lines
             .marks
             .retain(|m| cuts[m.line as usize].is_none_or(|c| m.inline[1] <= c));
+        lines.atoms.retain(|a| {
+            clamp.is_none_or(|n| (a.line as usize) < n)
+                && cuts[a.line as usize].is_none_or(|c| a.rect.x + a.rect.width <= c)
+        });
         for (l, cut) in cuts.into_iter().enumerate() {
             let Some(c) = cut else {
                 continue;
@@ -1194,7 +1256,7 @@ impl Text {
 
     /// What the line box of a paragraph in `font` takes above and below its baseline, with no
     /// text in it.
-    fn strut(&mut self, font: &Font) -> Result<[f32; 2], Error> {
+    pub(crate) fn strut(&mut self, font: &Font) -> Result<[f32; 2], Error> {
         Ok(placed(self.metrics(font)?, font))
     }
 
@@ -1233,6 +1295,13 @@ impl Text {
                                 e.start,
                             )
                         }),
+                        p.atom.map(|a| {
+                            [
+                                a.size[0].to_bits(),
+                                a.size[1].to_bits(),
+                                a.baseline.to_bits(),
+                            ]
+                        }),
                     )
                 })
                 .collect(),
@@ -1241,9 +1310,15 @@ impl Text {
             for piece in &content.pieces {
                 self.give(piece.font)?;
             }
-            let pieces = (content.pieces.iter())
-                .map(|p| (p.text.as_ref(), p.font.collapse, p.font.transform));
-            let (string, ranges) = prepare(pieces)?;
+            let pieces = (content.pieces.iter()).map(|p| {
+                (
+                    p.text.as_ref(),
+                    p.font.collapse,
+                    p.font.transform,
+                    p.atom.is_some(),
+                )
+            });
+            let (string, ranges) = prepare_inline(pieces)?;
             let mut input = bidi::Input::new(string, ranges, content);
             let caps = caps::prepare(self, &mut input, content)?;
             let positions = position::prepare(self, content, &input)?;
@@ -1277,6 +1352,17 @@ impl Text {
                     .zip(ranges.iter().cloned())
                     .enumerate()
                 {
+                    if let Some(atom) = piece.atom {
+                        builder.push_inline_box(parley::InlineBox {
+                            id: k as u64,
+                            kind: parley::InlineBoxKind::InFlow,
+                            index: range.start,
+                            width: atom.size[0],
+                            height: atom.size[1],
+                            baseline: Some(atom.baseline),
+                            vertical_align: parley::VerticalAlign::BASELINE,
+                        });
+                    }
                     if range.is_empty() {
                         continue;
                     }
@@ -1426,9 +1512,10 @@ impl Text {
             };
             covered(&layout, &string)?;
             let paragraph = Paragraph {
+                ranges,
                 positions,
                 layout,
-                empty: string.is_empty(),
+                empty: string.is_empty() && content.pieces.iter().all(|p| p.atom.is_none()),
                 source,
                 map,
                 string,
@@ -1641,14 +1728,33 @@ fn balanced(layout: &mut parley::Layout<u32>, narrow: f32, width: f32) {
 pub fn prepare<'a>(
     pieces: impl Iterator<Item = (&'a str, Collapse, TextTransform)>,
 ) -> Result<(String, Vec<Range<usize>>), Error> {
+    prepare_inline(pieces.map(|(s, c, t)| (s, c, t, false)))
+}
+
+fn prepare_inline<'a>(
+    pieces: impl Iterator<Item = (&'a str, Collapse, TextTransform, bool)>,
+) -> Result<(String, Vec<Range<usize>>), Error> {
     let mut out = String::new();
     let mut ranges: Vec<Range<usize>> = Vec::new();
     // The piece a run of collapsible white space started in, until something follows it.
     let mut space: Option<usize> = None;
     // Whether the last character is in a word, so capitalizing leaves the next one.
     let mut word = false;
-    for (k, (text, collapse, transform)) in pieces.enumerate() {
+    let mut boundary = false;
+    for (k, (text, collapse, transform, atom)) in pieces.enumerate() {
         ranges.push(out.len()..out.len());
+        if atom {
+            if let Some(j) = space.take() {
+                out.push(' ');
+                ranges[j].end = out.len();
+                for r in &mut ranges[j + 1..] {
+                    *r = out.len()..out.len();
+                }
+            }
+            boundary = true;
+            word = false;
+            continue;
+        }
         for c in text.chars() {
             let collapsible = match collapse {
                 Collapse::Collapse => matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0C'),
@@ -1656,7 +1762,7 @@ pub fn prepare<'a>(
                 Collapse::Preserve | Collapse::BreakSpaces => false,
             };
             if collapsible {
-                if space.is_none() && !(out.is_empty() || out.ends_with('\n')) {
+                if space.is_none() && (boundary || !(out.is_empty() || out.ends_with('\n'))) {
                     space = Some(k);
                 }
                 word = false;
@@ -1665,6 +1771,7 @@ pub fn prepare<'a>(
             if c == '\t' {
                 return Err("tabs in white space that stays are not supported yet".into());
             }
+            boundary = false;
             match space.take() {
                 // A line break takes the spaces before it.
                 Some(_) if c == '\n' => {}
@@ -1886,6 +1993,15 @@ fn extent(
 ) -> [f32; 2] {
     let mut out = strut;
     for item in line.items() {
+        if let PositionedLayoutItem::InlineBox(b) = &item {
+            let atom = content.pieces[b.id as usize]
+                .atom
+                .expect("inline box piece");
+            out = [
+                out[0].max(atom.baseline),
+                out[1].max(atom.size[1] - atom.baseline),
+            ];
+        }
         if let PositionedLayoutItem::GlyphRun(run) = item {
             let piece = &content.pieces[run.style().brush as usize];
             if piece.edge.is_some() {
@@ -2000,6 +2116,7 @@ mod tests {
             scopes: Vec::new(),
             font,
             pieces: vec![Piece {
+                atom: None,
                 edge: None,
                 text: Cow::Borrowed(text),
                 node: 0,
@@ -2483,6 +2600,7 @@ mod tests {
         let mut t = text();
         let (normal, big) = (font(16.0), font(32.0));
         let piece = |text: &'static str, node, font| Piece {
+            atom: None,
             edge: None,
             text: Cow::Borrowed(text),
             node,

@@ -73,9 +73,10 @@ pub(super) const NO_FLOW: &str = "there is no document flow";
 
 pub(super) const USE_FLEX: &str = "use flex or grid layout";
 
-pub(super) const NO_INLINE: &str = "there is no HTML inline flow";
+pub(super) const NO_INLINE: &str = "inline boxes need a Text or Span paragraph";
 
-pub(super) const INLINE_INSTEAD: &str = "use flex layout, and Span for styled runs of text";
+pub(super) const INLINE_INSTEAD: &str =
+    "use Text with inline-block, inline-flex or inline-grid boxes, or use a flex/grid container";
 
 /// Whether a class's declaration `property: value` is one the engine takes, which errors call
 /// `what`; what an element's kind allows is checked when its style is.

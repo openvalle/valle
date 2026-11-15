@@ -1,0 +1,48 @@
+<!doctype html><meta charset="utf-8" /><title>Inline writing modes</title>
+<style>
+  @font-face {
+    font-family: Test;
+    src: url("/tests/resources/NotoSans.ttf");
+    font-weight: 100 900;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+  }
+  #canvas {
+    width: 520px;
+    height: 300px;
+    position: relative;
+    background: white;
+    font: 20px/32px Test;
+    color: #17365d;
+  }
+  .column {
+    position: absolute;
+    top: 12px;
+    width: 120px;
+    height: 180px;
+  }
+  .box {
+    display: inline-block;
+    width: 30px;
+    height: 40px;
+    writing-mode: horizontal-tb;
+    background: #ffe7ad;
+    vertical-align: middle;
+  }
+  .label {
+    font-size: 14px;
+    line-height: 20px;
+  }
+</style>
+<div id="canvas">
+  <!-- prettier-ignore -->
+  <div class="column" data-key="column0" style="left:12px;writing-mode:vertical-rl">AB <div class="box"><div class="label">OK</div></div> CD EF GH</div>
+  <!-- prettier-ignore -->
+  <div class="column" data-key="column1" style="left:172px;writing-mode:vertical-lr">AB <div class="box"><div class="label">OK</div></div> CD EF GH</div>
+  <!-- prettier-ignore -->
+  <div data-key="rtl" style="position:absolute;left:12px;top:212px;width:496px;height:76px;direction:rtl">AB <span style="background:#ffe7ad;padding:0 4px;vertical-align:super"><div style="display:inline-block;width:30px;height:28px;background:#27ae80;vertical-align:middle"></div></span> CD <div style="display:inline-grid;grid-template-columns:16px 16px;gap:3px;padding:3px;background:#d6eaf8;vertical-align:bottom"><div style="height:16px;background:#2b71b8"></div><div style="height:16px;background:#27ae80"></div></div> EF</div>
+</div>

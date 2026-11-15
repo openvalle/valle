@@ -195,7 +195,7 @@ CSS properties accept `inherit`, `initial` and `unset`, including shorthands.
 `unset` inherits inherited properties and resets the others. Later declarations
 override earlier shorthand longhands as usual. This does not enable otherwise
 unsupported layout modes: `display: initial` means inline and therefore still
-requires a flex/grid parent or an out-of-flow box. `boxSizing: initial` means
+requires a flex/grid parent, an out-of-flow box, or an Image/SVG inside a Text paragraph. `boxSizing: initial` means
 `content-box`, although Valle's default element style is `border-box`.
 
 Not supported: CSS variables (use JavaScript constants), `@keyframes` and CSS transitions
@@ -311,6 +311,38 @@ Positive lengths raise the inline box; percentages use its own line height.
 Nested offsets accumulate, while `top` and `bottom` align the entire inline
 subtree to its line. Alignment can enlarge the line box; backgrounds, borders
 and decorations follow their declaring Span. The property does not inherit.
+
+`Text` and `Span` can also contain `Image`, `svg`, and `View` boxes. A View uses
+`display: "inline-block"`, `"inline-flex"`, or `"inline-grid"`; its children use
+ordinary Valle layout. Images and SVGs are inline replaced content. These boxes
+wrap as whole units with surrounding text; margins, percentage sizes,
+`verticalAlign` and relative positioning participate in placement. An auto-width
+View shrinks to fit the paragraph. Inline-blocks align on their last text line,
+or their bottom margin edge when empty or clipped; inline flex/grid boxes use
+the first baseline. Their contents retain their own writing mode.
+
+```tsx
+<Text style={{ width: 360, fontSize: 24, lineHeight: "40px" }}>
+  Status{" "}
+  <View
+    style={{
+      display: "inline-flex",
+      gap: 6,
+      padding: "2px 8px",
+      verticalAlign: "middle",
+      background: "#def7e8",
+    }}
+  >
+    <View style={{ width: 12, height: 12, borderRadius: 6, background: "green" }} />
+    <Text style={{ fontSize: "small" }}>Ready</Text>
+  </View>{" "}
+  to render.
+</Text>
+```
+
+A normal block View and absolute/fixed boxes directly inside a paragraph are
+rejected. Put independently positioned content beside the Text, or inside an
+inline View. A Span itself remains a styled text run, not an independent box.
 
 ### Vertical text
 

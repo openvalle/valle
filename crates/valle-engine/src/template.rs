@@ -762,6 +762,8 @@ impl Tag {
 pub enum Piece {
     Text(Prop),
     Span(u32),
+    /// An independently laid-out box participating in the paragraph.
+    Box(u32),
 }
 
 #[derive(Clone, Debug, PartialEq)]

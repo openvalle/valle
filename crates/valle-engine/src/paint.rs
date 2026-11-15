@@ -1850,6 +1850,15 @@ impl Painter<'_> {
             }
         }
         for (k, run) in lines.runs.iter().enumerate() {
+            if !matches!(
+                self.template.nodes[run.node as usize].kind,
+                Kind::Text { .. } | Kind::Span { .. }
+            ) {
+                if lines.atoms.iter().any(|a| a.node == run.node) {
+                    self.layer(run.node as usize, out);
+                }
+                continue;
+            }
             let s = &self.styles[run.node as usize];
             if !s.visible {
                 continue;

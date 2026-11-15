@@ -1730,12 +1730,20 @@
         if (["Echo", "Shutter", "World", "Transition"].includes(c.type)) {
           fail(here, "<" + c.type + "> cannot be inside <" + tag + ">: put the <Text> in it");
         }
-        if ((INTRINSIC[c.type] && c.type !== "Span") || c.type in SVG) {
-          fail(here, "<" + c.type + "> cannot be inside <" + tag + ">: it holds text and <Span>s");
+        const box = ["View", "Image", "svg"].includes(c.type);
+        if (!box && ((INTRINSIC[c.type] && c.type !== "Span") || c.type in SVG)) {
+          fail(
+            here,
+            "<" +
+              c.type +
+              "> cannot be inside <" +
+              tag +
+              ">: it holds text, <Span>s and inline View/Image/svg boxes",
+          );
         }
         flush();
         element(c.type, c.props, c.children, node.children, here, true);
-        content.push({ span: node.children[node.children.length - 1] });
+        content.push({ [box ? "box" : "span"]: node.children[node.children.length - 1] });
         return;
       }
       if (typeof c === "object" && !isT(c)) fail(at, "<" + tag + "> holds text, not an object");
@@ -2785,7 +2793,11 @@
         // Its children are its Spans, in the order its content has them.
         let k = 0;
         out.content = n.content.map((p) =>
-          "span" in p ? { span: out.children[k++] } : { text: ref(p.text) },
+          "span" in p
+            ? { span: out.children[k++] }
+            : "box" in p
+              ? { box: out.children[k++] }
+              : { text: ref(p.text) },
         );
       }
       return index;

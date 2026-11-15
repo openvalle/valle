@@ -1,0 +1,79 @@
+{
+  "size": [
+    520,
+    260
+  ],
+  "sources": {
+    "tests/baselines/browser/css/text/inline-boxes/scene.html": "ef00aa0622cd5e9581992933bba5e0fc391b120a96d1fc2ba80de1e368bd1352",
+    "tests/resources/svg/pixels.png": "d8f66d52df52b8a99d21ba37b5f535585d6a2889925ee919edf84aa36bc4516d",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "row0",
+        "border": {
+          "x": 12,
+          "y": 12,
+          "width": 496,
+          "height": 64
+        },
+        "padding": {
+          "x": 12,
+          "y": 12,
+          "width": 496,
+          "height": 64
+        },
+        "content": {
+          "x": 12,
+          "y": 12,
+          "width": 496,
+          "height": 64
+        }
+      },
+      {
+        "key": "row1",
+        "border": {
+          "x": 12,
+          "y": 82,
+          "width": 220,
+          "height": 150
+        },
+        "padding": {
+          "x": 12,
+          "y": 82,
+          "width": 220,
+          "height": 150
+        },
+        "content": {
+          "x": 12,
+          "y": 82,
+          "width": 220,
+          "height": 150
+        }
+      },
+      {
+        "key": "row2",
+        "border": {
+          "x": 260,
+          "y": 82,
+          "width": 248,
+          "height": 150
+        },
+        "padding": {
+          "x": 260,
+          "y": 82,
+          "width": 248,
+          "height": 150
+        },
+        "content": {
+          "x": 260,
+          "y": 82,
+          "width": 248,
+          "height": 150
+        }
+      }
+    ],
+    "lines": []
+  }
+}

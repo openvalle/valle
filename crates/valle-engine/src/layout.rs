@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 
+mod atoms;
 pub mod inline;
 mod writing;
 
@@ -184,7 +185,7 @@ pub fn layout(
         placements: vec![WritingMode::Horizontal; n + 1],
         replaced,
         children,
-        contents: &contents,
+        contents,
         text,
         caches: vec![Cache::new(); n + 1],
         layouts: vec![taffy::Layout::with_order(0); n + 1],
@@ -214,6 +215,8 @@ pub fn layout(
         }
     }
     let Tree {
+        text,
+        contents,
         children,
         layouts,
         placements,
@@ -230,7 +233,7 @@ pub fn layout(
     for (i, node) in template.nodes.iter().enumerate() {
         if let Kind::Text { content } | Kind::Span { content, .. } = &node.kind {
             for piece in content {
-                if let template::Piece::Span(s) = piece {
+                if let template::Piece::Span(s) | template::Piece::Box(s) = piece {
                     parents[*s as usize] = Some(i);
                 }
             }
@@ -242,12 +245,55 @@ pub fn layout(
     // Containers come in preorder, the canvas first, so a box's container is placed before it.
     let mut origins: Vec<Option<[f32; 2]>> = vec![None; n + 1];
     origins[n] = Some([0.0, 0.0]);
+    let mut atomic_lines = vec![None; n];
     let shown = |i: usize| styles[i].layout.display != Display::None;
     let in_flow = |i: &usize| !styles[*i].layout.position.is_out_of_flow();
     for id in std::iter::once(n).chain(0..n) {
         let Some(at) = origins[id] else {
             continue;
         };
+        if let Some(c) = contents
+            .get(id)
+            .and_then(Option::as_ref)
+            .filter(|c| c.pieces.iter().any(|p| p.atom.is_some()))
+        {
+            let l = &layouts[id];
+            let area = inside(
+                inside(
+                    Rect {
+                        x: at[0],
+                        y: at[1],
+                        width: l.size.width,
+                        height: l.size.height,
+                    },
+                    l.border,
+                ),
+                l.padding,
+            );
+            let vertical = writing::vertical(c.font.writing);
+            let resolved = c.with_inline_basis(area.width);
+            let c = resolved.as_ref().unwrap_or(c);
+            let laid = text.lines(c, if vertical { area.height } else { area.width })?;
+            for a in &laid.atoms {
+                let p = c.pieces.iter().find(|p| p.node == a.node).unwrap();
+                let atom = p.atom.unwrap();
+                let mut r = a.rect;
+                if c.font.writing == WritingMode::VerticalLr {
+                    let b = laid.boxes[a.line as usize];
+                    r.y += area.width - 2.0 * b[0] - b[1];
+                }
+                r.x += area.x + atom.offset[0];
+                r.y += area.y + atom.offset[1];
+                let size = layouts[a.node as usize].size;
+                r.width = if vertical { size.height } else { size.width };
+                r.height = if vertical { size.width } else { size.height };
+                if vertical {
+                    r = vertical_matrix(area).bounds(r);
+                }
+                origins[a.node as usize] = Some([r.x, r.y]);
+            }
+            atomic_lines[id] = Some(laid);
+        }
         if let Some(source) = styles.get(id).and_then(|s| s.source) {
             origins[source.root] = Some(at);
         }
@@ -290,7 +336,10 @@ pub fn layout(
             let resolved = c.with_inline_basis(inline);
             let c = resolved.as_ref().unwrap_or(c);
             let place = |e| format!("{}: {e}", template.nodes[i].place());
-            let mut laid = text.lines(c, inline).map_err(place)?;
+            let mut laid = match atomic_lines[i].take() {
+                Some(laid) => laid,
+                None => text.lines(c, inline).map_err(place)?,
+            };
             if c.font.writing == WritingMode::VerticalLr {
                 for (k, b) in laid.boxes.iter_mut().enumerate() {
                     let shift = content.width - 2.0 * b[0] - b[1];
@@ -376,6 +425,7 @@ fn pieces_of<'a>(
     for piece in content {
         match piece {
             template::Piece::Text(prop) => out.push(Piece {
+                atom: None,
                 edge: None,
                 text: match prop {
                     Prop::Const(v) => v.text(),
@@ -385,6 +435,15 @@ fn pieces_of<'a>(
                 font: &styles[i].font,
             }),
             template::Piece::Span(s) => pieces_of(template, values, styles, *s as usize, out),
+            template::Piece::Box(b) if styles[*b as usize].layout.display != Display::None => out
+                .push(Piece {
+                    text: "".into(),
+                    node: *b,
+                    font: &styles[*b as usize].font,
+                    edge: None,
+                    atom: Some(crate::text::Atom::default()),
+                }),
+            template::Piece::Box(_) => {}
         }
     }
     if span {
@@ -419,6 +478,9 @@ fn decorations(
     let mut extents = HashMap::new();
     let mut ems = HashMap::new();
     for run in &lines.runs {
+        if lines.atoms.iter().any(|a| a.node == run.node) {
+            continue;
+        }
         for d in &styles[run.node as usize].decorations {
             let [ascent, descent, _] = text.metrics(&styles[run.node as usize].font)?;
             ems.entry((run.line, d.by))
@@ -449,6 +511,9 @@ fn decorations(
         Vec::new()
     };
     for (k, run) in lines.runs.iter().enumerate() {
+        if lines.atoms.iter().any(|a| a.node == run.node) {
+            continue;
+        }
         let style = &styles[run.node as usize];
         if style.decorations.is_empty() {
             continue;
@@ -623,7 +688,7 @@ struct Tree<'a> {
     /// Each node's children in the order it lays them out, the canvas's last.
     children: Vec<Vec<NodeId>>,
     /// Each Text's paragraph.
-    contents: &'a [Option<Content<'a>>],
+    contents: Vec<Option<Content<'a>>>,
     text: &'a mut Text,
     caches: Vec<Cache>,
     layouts: Vec<taffy::Layout>,
@@ -744,7 +809,15 @@ impl Tree<'_> {
         if let Some(r) = self.replaced.get(i).copied().flatten() {
             return self.replaced(i, inputs, r);
         }
-        let (styles, contents) = (self.styles, self.contents);
+        if self
+            .contents
+            .get(i)
+            .and_then(Option::as_ref)
+            .is_some_and(|c| c.pieces.iter().any(|p| p.atom.is_some()))
+        {
+            return self.inline_leaf(i, inputs);
+        }
+        let (styles, contents) = (self.styles, &self.contents);
         let (Some(style), Some(Some(c))) = (styles.get(i), contents.get(i)) else {
             let style = self.style(NodeId::from(i));
             let calc = |h, basis| self.calc(h, basis);

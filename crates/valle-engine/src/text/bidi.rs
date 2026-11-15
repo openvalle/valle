@@ -230,6 +230,7 @@ mod tests {
             font: &style.font,
             clamp: None,
             pieces: vec![crate::text::Piece {
+                atom: None,
                 edge: None,
                 text: Cow::Borrowed(value),
                 node: 0,

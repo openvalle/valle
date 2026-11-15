@@ -1,0 +1,78 @@
+{
+  "spec": "https://www.w3.org/TR/css-writing-modes-3/#inline-alignment",
+  "assertion": "Inline boxes retain independent writing modes while their margin boxes participate in vertical and RTL paragraphs, including nested inline alignment and backgrounds.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three browser images and native differences. Chromium and WebKit agree on vertical middle alignment and RTL placement; Firefox uses different vertical font metrics. Remaining native differences are glyph edges and subpixel rounding.",
+    "pixels": {
+      "maxDifference": 170,
+      "maxPixels": 2100
+    }
+  },
+  "layout": [
+    {
+      "key": "column0",
+      "border": {
+        "x": 12,
+        "y": 12,
+        "width": 120,
+        "height": 180
+      },
+      "padding": {
+        "x": 12,
+        "y": 12,
+        "width": 120,
+        "height": 180
+      },
+      "content": {
+        "x": 12,
+        "y": 12,
+        "width": 120,
+        "height": 180
+      }
+    },
+    {
+      "key": "column1",
+      "border": {
+        "x": 172,
+        "y": 12,
+        "width": 120,
+        "height": 180
+      },
+      "padding": {
+        "x": 172,
+        "y": 12,
+        "width": 120,
+        "height": 180
+      },
+      "content": {
+        "x": 172,
+        "y": 12,
+        "width": 120,
+        "height": 180
+      }
+    },
+    {
+      "key": "rtl",
+      "border": {
+        "x": 12,
+        "y": 212,
+        "width": 496,
+        "height": 76
+      },
+      "padding": {
+        "x": 12,
+        "y": 212,
+        "width": 496,
+        "height": 76
+      },
+      "content": {
+        "x": 12,
+        "y": 212,
+        "width": 496,
+        "height": 76
+      }
+    }
+  ]
+}

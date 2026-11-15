@@ -106,6 +106,8 @@ pub(super) struct Bound {
     pub(super) updates: Option<cache::Updates>,
     /// Whether it is a Text.
     pub(super) text: bool,
+    inline_content: bool,
+    view: bool,
     /// Full declaration order only when a Text has flow-relative box properties.
     logical: Vec<([Field; 6], Prop, Rc<str>, bool)>,
     /// Each with what errors call it, and whether it is a presentation attribute.
@@ -480,6 +482,31 @@ impl Sheet {
             } else {
                 declared
             };
+        if parent.is_some_and(|p| p.inline_content) && !b.inline_content {
+            if b.view
+                && !matches!(
+                    declared.display,
+                    super::declaration::Shown::InlineBlock
+                        | super::declaration::Shown::InlineFlex
+                        | super::declaration::Shown::InlineGrid
+                        | super::declaration::Shown::None
+                )
+            {
+                return Err(format!(
+                    "{}: a View inside Text needs display: inline-block, inline-flex or inline-grid",
+                    b.place
+                ));
+            }
+            if matches!(
+                declared.position,
+                taffy::Position::Absolute | taffy::Position::Fixed
+            ) {
+                return Err(format!(
+                    "{}: out-of-flow boxes inside Text are not supported; position the box beside the Text or inside an inline View",
+                    b.place
+                ));
+            }
+        }
         let (canvas, resources) = (frame.canvas, frame.resources);
         let mut base = b.base.borrow_mut();
         let kept = base.as_ref().and_then(|s| {
@@ -528,6 +555,7 @@ impl Sheet {
                 b.place
             ));
         }
+        style.inline_content = b.inline_content;
         if let Some(g) = &b.svg {
             // Character data is not an element: it uses its containing text element's pen.
             if g.tag == Tag::TextRun {
@@ -1084,6 +1112,8 @@ fn bind(
         logical,
         base: RefCell::default(),
         declared,
+        view: matches!(node.kind, Kind::View),
+        inline_content: matches!(node.kind, Kind::Text { .. } | Kind::Span { .. }),
         text: matches!(
             node.kind,
             Kind::Text { .. } | Kind::Svg { tag: Tag::Text, .. }

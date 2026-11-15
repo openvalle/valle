@@ -1,0 +1,45 @@
+<!doctype html><meta charset="utf-8" /><title>Inline boxes</title>
+<style>
+  @font-face {
+    font-family: Test;
+    src: url("/tests/resources/NotoSans.ttf");
+    font-weight: 100 900;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+  }
+  #canvas {
+    width: 520px;
+    height: 260px;
+    position: relative;
+    background: white;
+    font: 20px/32px Test;
+    color: #17365d;
+  }
+  .text {
+    position: absolute;
+  }
+  .box {
+    display: inline-block;
+  }
+  .text div {
+    margin: 0;
+  }
+  .flex {
+    display: inline-flex;
+  }
+  .grid {
+    display: inline-grid;
+  }
+</style>
+<div id="canvas">
+  <!-- prettier-ignore -->
+  <div class="text" data-key="row0" style="left:12px;top:12px;width:496px;height:64px">A<div class="box" style="padding:2px 6px;border:2px solid #c87816;background:#ffe7ad"><div>badge</div></div>B <img src="/tests/resources/svg/pixels.png" style="width:40px;height:30px;margin:0 6px;image-rendering:pixelated;vertical-align:middle"> <svg viewBox="0 0 40 40" style="width:40px;height:40px;vertical-align:top"><circle cx="20" cy="20" r="17" fill="#27ae80"/></svg> end</div>
+  <!-- prettier-ignore -->
+  <div class="text" data-key="row1" style="left:12px;top:82px;width:220px;height:150px">Words <div class="box" style="width:80px;padding:4px;background:#d6eaf8"><div style="font-size:14px;line-height:20px">two lines inside</div></div> and more words wrap.</div>
+  <!-- prettier-ignore -->
+  <div class="text" data-key="row2" style="left:260px;top:82px;width:248px;height:150px">A<span style="vertical-align:8px"><div class="flex" style="padding:4px;gap:4px;align-items:center;background:#ffe7ad"><div style="width:14px;height:14px;border-radius:7px;background:#27ae80"></div><div style="font-size:14px">OK</div></div></span>B <div class="grid" style="grid-template-columns:16px 16px;gap:3px;padding:3px;vertical-align:bottom;background:#d6eaf8"><div style="height:16px;background:#2b71b8"></div><div style="height:16px;background:#27ae80"></div></div> end</div>
+</div>

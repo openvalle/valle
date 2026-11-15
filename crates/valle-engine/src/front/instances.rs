@@ -206,7 +206,7 @@ pub(crate) fn pack(t: &mut Template) -> Result<(), Error> {
             Kind::Mask { source, .. } => *source = ids[*source as usize],
             Kind::Text { content } | Kind::Span { content, .. } => {
                 for p in content {
-                    if let Piece::Span(i) = p {
+                    if let Piece::Span(i) | Piece::Box(i) = p {
                         *i = ids[*i as usize];
                     }
                 }
@@ -361,7 +361,7 @@ fn expand(t: &mut Template, select: impl Fn(&Kind) -> bool) -> Result<(), Error>
             Kind::Mask { source, .. } => *source = ids[*source as usize].start,
             Kind::Text { content } | Kind::Span { content, .. } => {
                 for p in content {
-                    if let Piece::Span(i) = p {
+                    if let Piece::Span(i) | Piece::Box(i) = p {
                         *i = ids[*i as usize].start;
                     }
                 }

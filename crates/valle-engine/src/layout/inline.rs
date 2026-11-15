@@ -60,6 +60,7 @@ pub(super) fn edge(styles: &[Style], i: usize, start: bool) -> Option<Piece<'_>>
         return None;
     }
     Some(Piece {
+        atom: None,
         text: Cow::Borrowed(""),
         node: i as u32,
         font: &s.font,
@@ -107,7 +108,11 @@ pub(super) fn spans(
         let hangs = x[1] <= x[0];
         let extents = if hangs { &mut hanging } else { &mut extents };
         let baseline = at.y + lines.baselines[run.line as usize];
-        let mut span = Some(run.node as usize);
+        let mut span = if lines.atoms.iter().any(|a| a.node == run.node) {
+            parents[run.node as usize]
+        } else {
+            Some(run.node as usize)
+        };
         while let Some(s) = span.filter(|&s| parents[s].is_some()) {
             let [ascent, descent, _] = text.metrics(&styles[s].font)?;
             let baseline = baseline + lines.offset(s as u32, run.line);
@@ -214,8 +219,9 @@ pub(super) fn scopes<'a>(
     use crate::template::Kind;
     fn needed(t: &crate::template::Template, s: &[Style], i: usize) -> bool {
         t.nodes[i].children.iter().any(|&c| {
-            matches!(t.nodes[c as usize].kind, Kind::Span { .. })
-                && (s[c as usize].vertical_align != Align::Baseline || needed(t, s, c as usize))
+            !matches!(t.nodes[c as usize].kind, Kind::Span { .. })
+                || s[c as usize].vertical_align != Align::Baseline
+                || needed(t, s, c as usize)
         })
     }
     fn visit<'a>(
@@ -232,8 +238,8 @@ pub(super) fn scopes<'a>(
             font: &s[i].font,
             align: &s[i].vertical_align,
         });
-        for &c in &t.nodes[i].children {
-            if matches!(t.nodes[c as usize].kind, Kind::Span { .. }) {
+        if matches!(t.nodes[i].kind, Kind::Text { .. } | Kind::Span { .. }) {
+            for &c in &t.nodes[i].children {
                 visit(t, s, c as usize, Some(at), out);
             }
         }

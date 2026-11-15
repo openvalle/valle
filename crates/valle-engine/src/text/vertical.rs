@@ -15,6 +15,7 @@ use crate::style::{
 };
 
 struct Cluster {
+    atom: Option<super::Atom>,
     range: std::ops::Range<usize>,
     edge: Option<(bool, u32)>,
     node: u32,
@@ -136,6 +137,7 @@ fn layout(
             .iter()
             .zip(&plain)
             .map(|(p, font)| super::Piece {
+                atom: p.atom,
                 edge: p.edge.as_ref().map(|e| super::Edge {
                     width: crate::style::math::Math::Sum([
                         e.width.resolve(width.unwrap_or(0.0)) as f64,
@@ -158,6 +160,7 @@ fn layout(
         .collect();
     let base = text.lines(&horizontal, f32::MAX)?;
     let mut out = Lines {
+        atoms: Vec::new(),
         offsets: Vec::new(),
         glyphs: Vec::new(),
         runs: Vec::new(),
@@ -182,12 +185,42 @@ fn layout(
                 .iter()
                 .find(|p| p.node == run.node)
                 .map_or(content.font, |p| p.font);
+            if let Some(a) = base.atoms.iter().find(|a| a.node == run.node) {
+                let atom = content
+                    .pieces
+                    .iter()
+                    .find(|p| p.node == run.node)
+                    .unwrap()
+                    .atom
+                    .unwrap();
+                if let Some(c) = clusters.last_mut() {
+                    c.break_after = true;
+                }
+                clusters.push(Cluster {
+                    atom: Some(atom),
+                    range: a.at as usize..a.at as usize,
+                    edge: None,
+                    node: a.node,
+                    glyphs: Vec::new(),
+                    advance: atom.size[0],
+                    upright: false,
+                    combined: false,
+                    space: false,
+                    collapse: false,
+                    wrap: font.wrap,
+                    emergency: false,
+                    break_after: true,
+                    extent: [atom.baseline, atom.size[1] - atom.baseline],
+                });
+                continue;
+            }
             let glyphs = &base.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize];
             if let Some((start, at)) = run.edge {
                 if !start && let Some(c) = clusters.last_mut() {
                     c.break_after = false;
                 }
                 clusters.push(Cluster {
+                    atom: None,
                     range: at as usize..at as usize,
                     edge: run.edge,
                     node: run.node,
@@ -267,6 +300,7 @@ fn layout(
                     _ => breaks.contains(&end),
                 };
                 clusters.push(Cluster {
+                    atom: None,
                     edge: None,
                     range: start..end,
                     node: run.node,
@@ -302,7 +336,7 @@ fn layout(
         let mut from = 0;
         while from < clusters.len() {
             let font = font_of(clusters[from].node);
-            if !combines(font) || clusters[from].edge.is_some() {
+            if !combines(font) || clusters[from].edge.is_some() || clusters[from].atom.is_some() {
                 from += 1;
                 continue;
             }
@@ -310,6 +344,7 @@ fn layout(
             while to < clusters.len()
                 && clusters[to].node == clusters[from].node
                 && clusters[to].edge.is_none()
+                && clusters[to].atom.is_none()
             {
                 to += 1;
             }
@@ -493,6 +528,19 @@ fn layout(
             let index = out.boxes.len() as u32;
             let mut cursor = indent + alignment;
             for c in slice {
+                if let Some(a) = c.atom {
+                    out.atoms.push(super::InlineBox {
+                        at: c.range.start as u32,
+                        node: c.node,
+                        line: index,
+                        rect: crate::layout::Rect {
+                            x: cursor,
+                            y: baseline - a.baseline,
+                            width: a.size[0],
+                            height: a.size[1],
+                        },
+                    });
+                }
                 let first = out.glyphs.len() as u32;
                 out.glyphs.extend(c.glyphs.iter().map(|g| {
                     if c.upright {
@@ -549,11 +597,16 @@ fn layout(
             }
             out.boxes.push([top, height]);
             out.baselines.push(baseline);
+            // Bidi runs are in visual order. Their first/last clusters need not be
+            // the first/last bytes, especially around an atomic inline box.
+            let bytes = &clusters[start..end];
             out.text.push(
-                clusters.get(start).map_or(range.start, |c| c.range.start)
-                    ..clusters
-                        .get(end.wrapping_sub(1))
-                        .map_or(range.end, |c| c.range.end),
+                bytes
+                    .iter()
+                    .map(|c| c.range.start)
+                    .min()
+                    .unwrap_or(range.start)
+                    ..bytes.iter().map(|c| c.range.end).max().unwrap_or(range.end),
             );
             top += height;
             if end >= clusters.len() {

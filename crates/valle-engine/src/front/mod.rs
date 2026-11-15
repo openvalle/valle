@@ -708,6 +708,7 @@ mod tests {
                     match piece {
                         Piece::Text(t) => out.push_str(&text(value(frame, t))),
                         Piece::Span(s) => of(frame, *s as usize, out),
+                        Piece::Box(_) => {}
                     }
                 }
             }
@@ -1992,7 +1993,7 @@ mod tests {
                 (content.iter())
                     .filter_map(|p| match p {
                         Piece::Span(s) => Some(*s as usize),
-                        Piece::Text(_) => None,
+                        Piece::Text(_) | Piece::Box(_) => None,
                     })
                     .collect()
             };
@@ -2339,11 +2340,11 @@ mod tests {
                     "<View>hello</View>",
                     "text must be inside <Text>: \"hello\"",
                 ),
-                ("<Text><View /></Text>", "<View> cannot be inside <Text>"),
+                ("<Text><Video /></Text>", "<Video> cannot be inside <Text>"),
                 ("<Span>a</Span>", "<Span> must be inside <Text>"),
                 (
-                    "<Text><Span><View /></Span></Text>",
-                    "<View> cannot be inside <Span>",
+                    "<Text><Span><Video /></Span></Text>",
+                    "<Video> cannot be inside <Span>",
                 ),
                 ("<Text><span /></Text>", "use <Span> instead of <span>"),
                 ("<Mask />", "<Mask> needs a source"),
@@ -2396,7 +2397,10 @@ mod tests {
                     "<svg><foreignObject /></svg>",
                     "<foreignObject> is not supported: put HTML-like content",
                 ),
-                ("<Text><svg /></Text>", "<svg> cannot be inside <Text>"),
+                (
+                    "<Text><circle /></Text>",
+                    "<circle> cannot be inside <Text>",
+                ),
             ] {
                 let e = element(jsx);
                 assert!(e.starts_with("scene.motion.tsx:3:"), "{jsx}: {e}");

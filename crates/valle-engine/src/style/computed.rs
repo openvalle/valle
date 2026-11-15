@@ -88,6 +88,8 @@ pub enum Join {
 /// A node's computed style.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Style {
+    /// Text and Span establish an inline formatting context for authored boxes.
+    pub(crate) inline_content: bool,
     /// Selected font x-height in CSS pixels, for relative lengths and explicit inheritance.
     pub(crate) x_height: f64,
     pub(crate) specified: Option<Rc<super::cascade::Snapshot>>,
@@ -287,6 +289,7 @@ impl Style {
     /// takes a side.
     pub fn lays_out_as(&self, other: &Style) -> bool {
         let Style {
+            inline_content: _,
             x_height: _,
             specified: _,
             instances: _,
@@ -692,7 +695,10 @@ pub(super) fn compute(
         Shown::None => Display::None,
         inline => {
             let out_of_flow = matches!(d.position, Position::Absolute | Position::Fixed);
-            if !out_of_flow && !matches!(container, Display::Flex | Display::Grid) {
+            if !out_of_flow
+                && !matches!(container, Display::Flex | Display::Grid)
+                && !parent.is_some_and(|p| p.inline_content)
+            {
                 let name = match inline {
                     Shown::InlineFlex => "inline-flex",
                     Shown::InlineGrid => "inline-grid",
@@ -826,6 +832,7 @@ pub(super) fn compute(
         ..taffy::Style::DEFAULT
     };
     Ok(Style {
+        inline_content: false,
         x_height,
         specified: None,
         instances: None,
@@ -1064,8 +1071,8 @@ mod tests {
         assert_eq!(
             tree("block", &[("display", text("inline-flex"))]),
             Err(
-                "s.tsx:1:1: display: inline-flex needs a flex or grid parent: there is no HTML \
-             inline flow; use flex layout, and Span for styled runs of text"
+                "s.tsx:1:1: display: inline-flex needs a flex or grid parent: inline boxes need a Text or Span paragraph; \
+             use Text with inline-block, inline-flex or inline-grid boxes, or use a flex/grid container"
                     .into()
             )
         );

@@ -511,6 +511,7 @@ struct TracedShader {
 #[serde(untagged)]
 enum TracedPiece {
     Span { span: u32 },
+    Box { r#box: u32 },
     Text { text: Ref },
 }
 
@@ -570,6 +571,7 @@ pub fn variant(
     let content = |pieces: Option<Vec<TracedPiece>>| -> Result<Vec<Piece>, Error> {
         (pieces.ok_or("a text node without content")?.into_iter())
             .map(|p| match p {
+                TracedPiece::Box { r#box } => Ok(Piece::Box(node_id(r#box)?)),
                 TracedPiece::Span { span } => Ok(Piece::Span(node_id(span)?)),
                 TracedPiece::Text { text } => Ok(Piece::Text(prop(text)?)),
             })

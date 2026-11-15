@@ -1,0 +1,78 @@
+{
+  "spec": "https://www.w3.org/TR/CSS2/visudet.html#inlineblock-width",
+  "assertion": "Replaced content and inline block, flex and grid boxes wrap with text, use their margins and appropriate baselines, and retain nested content and Span alignment.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All three browsers agree on wrapping, box dimensions and baseline positions. Reviewed native and difference images show only font and curve rasterization differences.",
+    "pixels": {
+      "maxDifference": 130,
+      "maxPixels": 3500
+    }
+  },
+  "layout": [
+    {
+      "key": "row0",
+      "border": {
+        "x": 12,
+        "y": 12,
+        "width": 496,
+        "height": 64
+      },
+      "padding": {
+        "x": 12,
+        "y": 12,
+        "width": 496,
+        "height": 64
+      },
+      "content": {
+        "x": 12,
+        "y": 12,
+        "width": 496,
+        "height": 64
+      }
+    },
+    {
+      "key": "row1",
+      "border": {
+        "x": 12,
+        "y": 82,
+        "width": 220,
+        "height": 150
+      },
+      "padding": {
+        "x": 12,
+        "y": 82,
+        "width": 220,
+        "height": 150
+      },
+      "content": {
+        "x": 12,
+        "y": 82,
+        "width": 220,
+        "height": 150
+      }
+    },
+    {
+      "key": "row2",
+      "border": {
+        "x": 260,
+        "y": 82,
+        "width": 248,
+        "height": 150
+      },
+      "padding": {
+        "x": 260,
+        "y": 82,
+        "width": 248,
+        "height": 150
+      },
+      "content": {
+        "x": 260,
+        "y": 82,
+        "width": 248,
+        "height": 150
+      }
+    }
+  ]
+}

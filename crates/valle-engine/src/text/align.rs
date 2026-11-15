@@ -15,11 +15,13 @@ pub struct Scope<'a> {
 }
 
 pub(super) fn needed(content: &Content) -> bool {
-    content
-        .scopes
-        .iter()
-        .skip(1)
-        .any(|s| s.align != &Align::Baseline)
+    !content.scopes.is_empty()
+        && (content.pieces.iter().any(|p| p.atom.is_some())
+            || content
+                .scopes
+                .iter()
+                .skip(1)
+                .any(|s| s.align != &Align::Baseline))
 }
 
 pub(super) fn apply(text: &mut Text, content: &Content, lines: &mut Lines) -> Result<(), String> {
@@ -35,7 +37,16 @@ pub(super) fn apply(text: &mut Text, content: &Content, lines: &mut Lines) -> Re
     let mut metrics = Vec::new();
     for s in scopes {
         let m = text.metrics(s.font)?;
-        metrics.push((m, super::placed(m, s.font), text.x_height(s.font)?));
+        let extent = content
+            .pieces
+            .iter()
+            .find(|p| p.node == s.node)
+            .and_then(|p| p.atom)
+            .map_or_else(
+                || super::placed(m, s.font),
+                |a| [a.baseline, a.size[1] - a.baseline],
+            );
+        metrics.push((m, extent, text.x_height(s.font)?));
     }
     let mut top = 0.0;
     let mut previous_end = 0.0;
@@ -58,14 +69,25 @@ pub(super) fn apply(text: &mut Text, content: &Content, lines: &mut Lines) -> Re
             let [above, below] = metrics[k].1;
             if let Some(parent) = s.parent {
                 let (m, _, x_height) = metrics[parent];
+                let central = content.font.writing != crate::style::WritingMode::Horizontal;
+                let center = (metrics[parent].1[0] - metrics[parent].1[1]) * 0.5;
+                let base = if central {
+                    (above - below) * 0.5 - center
+                } else {
+                    0.0
+                };
                 let shift = match s.align {
-                    Align::Baseline => 0.0,
-                    Align::Middle => (above - below - x_height) * 0.5,
-                    Align::Sub => scopes[parent].font.size as f32 * 0.2 + 1.0,
-                    Align::Super => -(scopes[parent].font.size as f32 / 3.0 + 1.0),
+                    Align::Baseline => base,
+                    Align::Middle => {
+                        (above - below - x_height) * 0.5 - if central { center } else { 0.0 }
+                    }
+                    Align::Sub => base + scopes[parent].font.size as f32 * 0.2 + 1.0,
+                    Align::Super => base - (scopes[parent].font.size as f32 / 3.0 + 1.0),
                     Align::TextTop => above - m[0].round(),
                     Align::TextBottom => m[1].round() - below,
-                    Align::Offset(value) => -value.resolve(above + below),
+                    Align::Offset(value) => {
+                        base - value.resolve(super::placed(metrics[k].0, s.font).iter().sum())
+                    }
                     Align::Top | Align::Bottom => 0.0,
                 };
                 if matches!(s.align, Align::Top | Align::Bottom) {
@@ -116,6 +138,9 @@ pub(super) fn apply(text: &mut Text, content: &Content, lines: &mut Lines) -> Re
             for g in &mut lines.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize] {
                 g.y += shift;
             }
+        }
+        for atom in lines.atoms.iter_mut().filter(|a| a.line as usize == line) {
+            atom.rect.y += baseline - old + indices.get(&atom.node).map_or(0.0, |&k| offsets[k]);
         }
         for mark in lines.marks.iter_mut().filter(|m| m.line as usize == line) {
             let shift = baseline - old + indices.get(&mark.node).map_or(0.0, |&k| offsets[k]);
