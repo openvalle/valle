@@ -30,6 +30,11 @@ const CASES: {
     nativeResources: { Hebrew: "tests/resources/NotoSansHebrew.ttf" },
   },
   { entry: "tests/cases/css/text/font-size-adjust/scene.motion.tsx", frames: [0] },
+  {
+    entry: "tests/cases/css/text/caps/scene.motion.tsx",
+    frames: [0],
+    nativeResources: { Sans: "tests/resources/NotoSans.ttf" },
+  },
   { entry: "tests/cases/svg/font-units/inline/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/font-units/file/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/absolute-units/inline/scene.motion.tsx", frames: [0] },

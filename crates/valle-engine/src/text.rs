@@ -10,6 +10,7 @@
 //! (CSS's strut) and the runs of glyphs on it.
 
 mod bidi;
+mod caps;
 pub(crate) mod emphasis;
 mod vertical;
 
@@ -1173,12 +1174,14 @@ impl Text {
             let pieces = (content.pieces.iter())
                 .map(|p| (p.text.as_ref(), p.font.collapse, p.font.transform));
             let (string, ranges) = prepare(pieces)?;
+            let mut input = bidi::Input::new(string, ranges, content);
+            let caps = caps::prepare(self, &mut input, content)?;
             let bidi::Input {
                 source,
                 text: string,
                 ranges,
                 map,
-            } = bidi::Input::new(string, ranges, content);
+            } = input;
             self.give_fallbacks(&string)?;
             let families = (content.pieces.iter())
                 .map(|p| families(&p.font.family, &self.named))
@@ -1290,6 +1293,21 @@ impl Text {
                     }
                     builder.push(StyleProperty::Brush(k as u32), range);
                 }
+                for c in &caps {
+                    if let Some(features) = &c.features {
+                        let list = features
+                            .iter()
+                            .map(|f| FontFeature::new(Tag::new(&f.tag), f.value))
+                            .collect();
+                        builder.push(
+                            StyleProperty::FontFeatures(FontFeatures::List(Cow::Owned(list))),
+                            c.range.clone(),
+                        );
+                    }
+                    if let Some(size) = c.size {
+                        builder.push(StyleProperty::FontSize(size), c.range.clone());
+                    }
+                }
                 if let Some(sizes) = &sizes {
                     for (range, size) in sizes {
                         builder.push(StyleProperty::FontSize(*size), range.clone());
@@ -1373,7 +1391,7 @@ fn adjusted_sizes<'a>(
             let size = if nominal == 0.0 {
                 0.0
             } else {
-                font.size * aspect * f64::from(nominal / x)
+                f64::from(nominal) * aspect * f64::from(nominal / x)
             };
             if !size.is_finite() || size > f64::from(f32::MAX) {
                 return Err("font-size-adjust produces a font size too large to render".into());
@@ -2797,6 +2815,57 @@ mod tests {
         assert!(wide(75.0) < wide(100.0));
         assert_eq!(wide(150.0), wide(100.0));
         assert_eq!(wide(50.0), wide(62.5));
+    }
+
+    #[test]
+    fn caps_fallback_uses_native_small_caps_or_synthesizes_without_losing_source() {
+        let mut t = text();
+        let caps = |tags: &[[u8; 4]]| {
+            let mut f = font(32.0);
+            f.variants[crate::style::Variant::Caps as usize] =
+                tags.iter().map(|&tag| Feature { tag, value: 1 }).collect();
+            f
+        };
+        for (asked, fallback) in [
+            (vec![*b"pcap"], vec![*b"smcp"]),
+            (vec![*b"c2pc", *b"pcap"], vec![*b"c2sc", *b"smcp"]),
+            (vec![*b"unic"], vec![*b"c2sc"]),
+        ] {
+            let a = t.lines(&plain("Abc DEf", &caps(&asked)), 1000.0).unwrap();
+            let b = t
+                .lines(&plain("Abc DEf", &caps(&fallback)), 1000.0)
+                .unwrap();
+            assert_eq!(a.glyphs, b.glyphs);
+        }
+        t.add_font("CJK", "CJK.ttf", crate::testing::built_in(5))
+            .unwrap();
+        let f = Font {
+            family: Rc::new([Family::Named("CJK".into())]),
+            ..caps(&[*b"pcap"])
+        };
+        let source = "Abc ß 文";
+        let a = t.lines(&plain(source, &f), 1000.0).unwrap();
+        assert_eq!(&*a.string, source);
+        for g in &a.glyphs {
+            let c = source[g.cluster as usize..].chars().next().unwrap();
+            let size = if c.is_lowercase() { 25.6 } else { 32.0 };
+            assert!((g.size - size).abs() < 0.001, "{c}: {}", g.size);
+        }
+        let at = source.find('ß').unwrap() as u32;
+        assert_eq!(a.glyphs.iter().filter(|g| g.cluster == at).count(), 2);
+        let vertical = Font {
+            writing: WritingMode::VerticalRl,
+            orientation: crate::style::Orientation::Upright,
+            ..f
+        };
+        let v = t.lines(&plain(source, &vertical), 500.0).unwrap();
+        assert_eq!(&*v.string, source);
+        assert_eq!(v.glyphs.iter().filter(|g| g.cluster == at).count(), 2);
+        assert!(
+            v.glyphs
+                .iter()
+                .all(|g| source.is_char_boundary(g.cluster as usize))
+        );
     }
 
     #[test]

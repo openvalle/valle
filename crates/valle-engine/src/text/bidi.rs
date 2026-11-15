@@ -12,6 +12,14 @@ pub(super) struct Map {
 }
 
 impl Map {
+    /// Compose a shaping transformation with the bidi/control map already in place.
+    pub fn remap(&self, bytes: &[usize]) -> Self {
+        Self {
+            offsets: bytes.iter().map(|&i| self.at(i)).collect(),
+            inserted: bytes.iter().map(|&i| self.inserted(i)).collect(),
+        }
+    }
+
     pub fn at(&self, byte: usize) -> usize {
         self.offsets.get(byte).copied().unwrap_or(byte)
     }

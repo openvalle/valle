@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/css-fonts-3/#propdef-font-variant-caps",
+  "assertion": "Petite/all-petite/unicase use native small-cap fallbacks where present. Each row matches its explicit OpenType-feature control. Synthetic casing, caseless characters and byte indices are covered by text unit tests.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Chrome applies all three specified fallbacks, including unicase to small-cap uppercase glyphs. Firefox leaves unicase unchanged and WebKit differs in petite fallback. Same fixed font and OpenType control in each row; only glyph edge rasterization is allowed.",
+    "pixels": {
+      "maxDifference": 180,
+      "maxPixels": 4700
+    }
+  }
+}

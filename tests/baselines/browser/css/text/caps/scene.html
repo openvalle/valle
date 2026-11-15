@@ -1,0 +1,107 @@
+<!doctype html><meta charset="utf-8" /><title>Caps variants</title
+><style>
+  @font-face {
+    font-family: Sans;
+    src: url("/tests/resources/NotoSans.ttf");
+  }
+  body {
+    margin: 0;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  #canvas {
+    position: relative;
+    width: 560px;
+    height: 210px;
+    background: white;
+  }
+</style>
+<div id="canvas">
+  <div
+    style="
+      position: absolute;
+      left: 12px;
+      top: 8px;
+      font-family: Sans;
+      font-size: 32px;
+      line-height: 52px;
+      font-variant-caps: petite-caps;
+      color: #17365d;
+    "
+  >
+    Abc DEf ß
+  </div>
+  <div
+    style="
+      position: absolute;
+      left: 12px;
+      top: 72px;
+      font-family: Sans;
+      font-size: 32px;
+      line-height: 52px;
+      font-variant-caps: all-petite-caps;
+      color: #17365d;
+    "
+  >
+    Abc DEf ß
+  </div>
+  <div
+    style="
+      position: absolute;
+      left: 12px;
+      top: 136px;
+      font-family: Sans;
+      font-size: 32px;
+      line-height: 52px;
+      font-variant-caps: unicase;
+      color: #17365d;
+    "
+  >
+    Abc DEf ß
+  </div>
+  <div
+    style="
+      position: absolute;
+      left: 292px;
+      top: 8px;
+      font-family: Sans;
+      font-size: 32px;
+      line-height: 52px;
+      font-feature-settings: &quot;smcp&quot; 1;
+      color: #17365d;
+    "
+  >
+    Abc DEf ß
+  </div>
+  <div
+    style="
+      position: absolute;
+      left: 292px;
+      top: 72px;
+      font-family: Sans;
+      font-size: 32px;
+      line-height: 52px;
+      font-feature-settings:
+        &quot;smcp&quot; 1,
+        &quot;c2sc&quot; 1;
+      color: #17365d;
+    "
+  >
+    Abc DEf ß
+  </div>
+  <div
+    style="
+      position: absolute;
+      left: 292px;
+      top: 136px;
+      font-family: Sans;
+      font-size: 32px;
+      line-height: 52px;
+      font-feature-settings: &quot;c2sc&quot; 1;
+      color: #17365d;
+    "
+  >
+    Abc DEf ß
+  </div>
+</div>

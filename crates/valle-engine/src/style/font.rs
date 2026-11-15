@@ -630,6 +630,9 @@ const CAPS: Groups = &[&[
     ("small-caps", &[(b"smcp", 1)]),
     ("all-small-caps", &[(b"c2sc", 1), (b"smcp", 1)]),
     ("titling-caps", &[(b"titl", 1)]),
+    ("petite-caps", &[(b"pcap", 1)]),
+    ("all-petite-caps", &[(b"c2pc", 1), (b"pcap", 1)]),
+    ("unicase", &[(b"unic", 1)]),
 ]];
 
 const NUMERIC: Groups = &[
@@ -730,10 +733,6 @@ pub(super) fn variants(v: &V, variant: Option<Variant>, d: &mut Declared) -> Res
                 });
                 let Some((l, g, (_, features))) = found else {
                     return Err(match (word, variant) {
-                        ("petite-caps" | "all-petite-caps" | "unicase", _) => format!(
-                            "{word} is not supported yet: Chrome falls back to small capitals in \
-                             fonts without its own; use small-caps or all-small-caps"
-                        ),
                         (w, _) if css::function(w).is_some() => format!(
                             "{w} needs @font-feature-values, which a style cannot declare; use \
                              font-feature-settings"
@@ -923,6 +922,29 @@ mod tests {
 
     use super::*;
     use crate::testing::styles::{error, num, one, styles, text, view};
+
+    #[test]
+    fn caps_keywords_select_standard_opentype_features() {
+        for (name, tags) in [
+            ("petite-caps", vec![*b"pcap"]),
+            ("all-petite-caps", vec![*b"c2pc", *b"pcap"]),
+            ("unicase", vec![*b"unic"]),
+        ] {
+            let s = one(&[("fontVariantCaps", text(name))]);
+            assert_eq!(
+                s.font.variants[Variant::Caps as usize]
+                    .iter()
+                    .map(|f| f.tag)
+                    .collect::<Vec<_>>(),
+                tags
+            );
+            assert_eq!(
+                s.font.variants,
+                one(&[("fontVariant", text(name))]).font.variants
+            );
+        }
+        assert!(error(&[("fontVariantCaps", text("petite-caps unicase"))]).contains("same"));
+    }
 
     #[test]
     fn size_adjust_inherits_and_font_shorthand_resets_it() {
@@ -1563,12 +1585,6 @@ mod tests {
             variants(&[("fontKerning", text("auto"))])
         );
         for (key, bad, message) in [
-            (
-                "fontVariantCaps",
-                "petite-caps",
-                "petite-caps is not supported yet",
-            ),
-            ("fontVariant", "unicase", "unicase is not supported yet"),
             (
                 "fontVariantAlternates",
                 "swash(fancy)",

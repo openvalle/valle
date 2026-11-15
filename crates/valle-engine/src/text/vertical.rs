@@ -357,6 +357,7 @@ fn layout(
                 && clusters[to].upright
                 && !clusters[to].combined
                 && clusters[to].glyphs[0].face == face
+                && clusters[to].glyphs[0].size == clusters[from].glyphs[0].size
                 && font_of(clusters[to].node) == font
             {
                 to += 1;
@@ -586,12 +587,19 @@ fn upright_glyphs(
             .map(|&c| harfrust::NormalizedCoord::from_bits(c)),
     );
     let shaper = data.shaper(&file).instance(Some(&instance)).build();
-    let mut features: Vec<_> = font
+    let caps = super::caps::vertical(font, face, value);
+    let value = caps.as_ref().map_or(value, |c| c.0.as_str());
+    let original: Vec<_> = font
         .variants
         .iter()
-        .flat_map(|f| f.iter())
+        .flat_map(|v| v.iter())
         .chain(font.features.iter())
-        .map(|f| harfrust::Feature::new(harfrust::Tag::new(&f.tag), f.value as u32, ..))
+        .copied()
+        .collect();
+    let selected = caps.as_ref().map_or(&original, |c| &c.1);
+    let mut features: Vec<_> = selected
+        .iter()
+        .map(|f| harfrust::Feature::new(harfrust::Tag::new(&f.tag), u32::from(f.value), ..))
         .collect();
     let contextual = file
         .gpos()
@@ -632,7 +640,12 @@ fn upright_glyphs(
                 id: g.glyph_id,
                 x: p.x_offset as f32 * scale,
                 y: cursor - p.y_offset as f32 * scale,
-                cluster: first.cluster + g.cluster,
+                cluster: first.cluster
+                    + caps.as_ref().map_or(g.cluster, |c| {
+                        c.2.get(g.cluster as usize)
+                            .copied()
+                            .unwrap_or(g.cluster as usize) as u32
+                    }),
                 ..first
             };
             cursor -= p.y_advance as f32 * scale;

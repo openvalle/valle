@@ -164,6 +164,12 @@ each selected face, including fallback faces. It inherits; the `font` shorthand
 resets it to `none`. Computed `fontSize`, `em` and numeric `lineHeight` stay
 unchanged; glyph sizes and `ex` use the adjustment. A value of `0` hides glyphs.
 
+`fontVariantCaps` also accepts `petite-caps`, `all-petite-caps` and `unicase`.
+It uses the font’s OpenType forms when present. Missing petite forms fall back to
+small capitals; missing unicase forms apply small capitals to uppercase letters.
+If the font lacks small-cap forms, cased letters are synthesized; caseless text
+stays unchanged. `fontVariant` accepts the same keywords.
+
 Supported, among others:
 
 - Layout: `display` `flex`, `grid`, `block`, `none`; flexbox and grid properties, `gap`,
