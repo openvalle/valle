@@ -1,0 +1,36 @@
+<!doctype html><meta charset="utf-8" /><title>Typographic positions</title
+><style>
+  @font-face {
+    font-family: Test;
+    src: url("/tests/resources/NotoSans.ttf");
+    font-weight: 100 900;
+  }
+  body {
+    margin: 0;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  #canvas {
+    width: 520px;
+    height: 280px;
+    padding: 12px;
+    background: white;
+    font-family: Test;
+    color: #17365d;
+  }
+  .line {
+    font-size: 48px;
+    line-height: 64px;
+  }
+</style>
+<div id="canvas">
+  <!-- prettier-ignore -->
+  <div data-key="row0" class="line">A<span style="font-variant-position:super">123</span> B<span style="font-variant-position:sub">123</span></div>
+  <!-- prettier-ignore -->
+  <div data-key="row1" class="line">A<span style="font-variant-position:super">12Q?</span> B<span style="font-variant-position:sub">12Q?</span></div>
+  <!-- prettier-ignore -->
+  <div data-key="row2" class="line" style="font-size:30px;font-size-adjust:1.072">A<span style="font-variant-position:super">Q?</span> B<span style="font-variant-position:sub">Q?</span></div>
+  <!-- prettier-ignore -->
+  <div data-key="row3" class="line">A<span style="font-variant-position:super;font-variant-caps:small-caps">Q?</span></div>
+</div>

@@ -1,0 +1,99 @@
+{
+  "spec": "https://www.w3.org/TR/css-fonts-3/#font-variant-position-prop",
+  "assertion": "Native numeral variants remain native; incomplete runs synthesize all glyphs without changing line metrics, including adjusted sizes and caps.",
+  "at": [0],
+  "browser": {
+    "selected": "firefox",
+    "reason": "Reviewed all three captures, native pixels and differences. Firefox synthesizes an entire incomplete run as CSS Fonts 3 requires; Chromium and WebKit mix native variants with full-size glyphs. Allow the reviewed font rasterization and fractional baseline differences. Independent tests assert unchanged line metrics, native substitutions, whole-run scaling, adjusted sizes and vertical reshaping.",
+    "pixels": {
+      "maxDifference": 232,
+      "maxPixels": 5000
+    }
+  },
+  "layout": [
+    {
+      "key": "row0",
+      "border": {
+        "x": 12,
+        "y": 12,
+        "width": 496,
+        "height": 64
+      },
+      "padding": {
+        "x": 12,
+        "y": 12,
+        "width": 496,
+        "height": 64
+      },
+      "content": {
+        "x": 12,
+        "y": 12,
+        "width": 496,
+        "height": 64
+      }
+    },
+    {
+      "key": "row1",
+      "border": {
+        "x": 12,
+        "y": 76,
+        "width": 496,
+        "height": 64
+      },
+      "padding": {
+        "x": 12,
+        "y": 76,
+        "width": 496,
+        "height": 64
+      },
+      "content": {
+        "x": 12,
+        "y": 76,
+        "width": 496,
+        "height": 64
+      }
+    },
+    {
+      "key": "row2",
+      "border": {
+        "x": 12,
+        "y": 140,
+        "width": 496,
+        "height": 64
+      },
+      "padding": {
+        "x": 12,
+        "y": 140,
+        "width": 496,
+        "height": 64
+      },
+      "content": {
+        "x": 12,
+        "y": 140,
+        "width": 496,
+        "height": 64
+      }
+    },
+    {
+      "key": "row3",
+      "border": {
+        "x": 12,
+        "y": 204,
+        "width": 496,
+        "height": 64
+      },
+      "padding": {
+        "x": 12,
+        "y": 204,
+        "width": 496,
+        "height": 64
+      },
+      "content": {
+        "x": 12,
+        "y": 204,
+        "width": 496,
+        "height": 64
+      }
+    }
+  ]
+}

@@ -601,6 +601,11 @@ fn upright_glyphs(
         .iter()
         .map(|f| harfrust::Feature::new(harfrust::Tag::new(&f.tag), u32::from(f.value), ..))
         .collect();
+    if first.position_shift.is_some() {
+        features.extend(
+            [b"subs", b"sups"].map(|tag| harfrust::Feature::new(harfrust::Tag::new(tag), 0, ..)),
+        );
+    }
     let contextual = file
         .gpos()
         .ok()
@@ -638,7 +643,7 @@ fn upright_glyphs(
         .map(|(g, p)| {
             let glyph = Glyph {
                 id: g.glyph_id,
-                x: p.x_offset as f32 * scale,
+                x: p.x_offset as f32 * scale - first.position_shift.unwrap_or(0.0),
                 y: cursor - p.y_offset as f32 * scale,
                 cluster: first.cluster
                     + caps.as_ref().map_or(g.cluster, |c| {

@@ -12,6 +12,7 @@
 mod bidi;
 mod caps;
 pub(crate) mod emphasis;
+mod position;
 mod vertical;
 
 use std::borrow::Cow;
@@ -146,6 +147,8 @@ pub struct Glyph {
     pub vertical_cell: Option<[f32; 2]>,
     /// Horizontal glyph compression for combined upright text; advances are already scaled.
     pub scale_x: f32,
+    /// Synthetic sub/superscript displacement; vertical reshaping keeps it.
+    pub position_shift: Option<f32>,
 }
 
 /// A run of glyphs of one node on a line, with its left and right edges, less the white space
@@ -344,6 +347,7 @@ type ParagraphKey = (
 
 /// A paragraph shaped: its glyph runs' brushes are the pieces they are in.
 struct Paragraph {
+    positions: Vec<Option<position::Adjustment>>,
     layout: parley::Layout<u32>,
     string: Rc<str>,
     source: Rc<str>,
@@ -675,7 +679,15 @@ impl Text {
         if p.empty {
             return Ok([0.0, 0.0]);
         }
-        let boxes = stack(&p.layout, content, strut, &edges, &marks, &p.string);
+        let boxes = stack(
+            &p.layout,
+            content,
+            strut,
+            &edges,
+            &marks,
+            &p.string,
+            &p.positions,
+        );
         let shown = &boxes[..content.clamp.unwrap_or(usize::MAX).min(boxes.len())];
         let height = shown.last().map_or(0.0, |[top, h]| top + h);
         let widest = (p.layout.width() * 64.0).ceil() / 64.0;
@@ -704,7 +716,7 @@ impl Text {
         Ok(p.layout
             .lines()
             .next()
-            .map(|line| extent(&line, content, strut, &edges, &p.string)[0]))
+            .map(|line| extent(&line, content, strut, &edges, &p.string, &p.positions)[0]))
     }
 
     /// `content` broken to fit `width` px and aligned in it.
@@ -745,7 +757,15 @@ impl Text {
                 ..AlignmentOptions::default()
             },
         );
-        let boxes = stack(&p.layout, content, strut, &edges, &marks, &p.string);
+        let boxes = stack(
+            &p.layout,
+            content,
+            strut,
+            &edges,
+            &marks,
+            &p.string,
+            &p.positions,
+        );
         let text = p
             .layout
             .lines()
@@ -758,7 +778,7 @@ impl Text {
         let mut runs = Vec::new();
         let mut shaped = Vec::new();
         for (i, (line, [top, _])) in p.layout.lines().zip(&boxes).enumerate() {
-            let baseline = top + extent(&line, content, strut, &edges, &p.string)[0];
+            let baseline = top + extent(&line, content, strut, &edges, &p.string, &p.positions)[0];
             baselines.push(baseline);
             let shift = bidi::shift(content.font, &line, &p.string);
             // Where each glyph's characters start: the clusters of a shaping run in visual
@@ -781,12 +801,23 @@ impl Text {
                         .collect::<Vec<_>>()
                         .into_iter();
                 }
+                let position = p
+                    .positions
+                    .get(run.style().brush as usize)
+                    .copied()
+                    .flatten();
+                let offset = position.map(|p| p.shift);
                 let mut x = run.offset() + shift;
                 let mut glyphs = Vec::new();
                 for g in run.glyphs() {
                     let at = starts.next().unwrap_or(run.run().text_range().end as u32);
                     if !p.map.inserted(at as usize) {
-                        glyphs.push((g.id, x + g.x, baseline + g.y, p.map.at(at as usize) as u32));
+                        glyphs.push((
+                            g.id,
+                            x + g.x,
+                            baseline + g.y + offset.unwrap_or(0.0),
+                            p.map.at(at as usize) as u32,
+                        ));
                     }
                     x += g.advance;
                 }
@@ -800,7 +831,7 @@ impl Text {
                     x: [run.offset() + shift, x],
                     glyphs: [0, 0],
                 });
-                shaped.push((face, node, run.run().font_size(), glyphs));
+                shaped.push((face, node, run.run().font_size(), offset, glyphs));
             }
             // White space that hangs past the end of the line is not in its runs' boxes.
             let mut hanging = line.metrics().hanging_advance;
@@ -823,7 +854,7 @@ impl Text {
             }
         }
         let mut glyphs = Vec::new();
-        for (run, (face, node, size, list)) in runs.iter_mut().zip(shaped) {
+        for (run, (face, node, size, offset, list)) in runs.iter_mut().zip(shaped) {
             run.glyphs = [glyphs.len() as u32, (glyphs.len() + list.len()) as u32];
             let face = self.face(face);
             glyphs.extend((list.into_iter()).map(|(id, x, y, cluster)| Glyph {
@@ -837,6 +868,7 @@ impl Text {
                 upright: false,
                 vertical_cell: None,
                 scale_x: 1.0,
+                position_shift: offset,
             }));
         }
         let mut lines = Lines {
@@ -1022,6 +1054,7 @@ impl Text {
                 upright: false,
                 vertical_cell: None,
                 scale_x: 1.0,
+                position_shift: None,
             }));
             lines.runs.push(Run {
                 edge: None,
@@ -1180,6 +1213,7 @@ impl Text {
             let (string, ranges) = prepare(pieces)?;
             let mut input = bidi::Input::new(string, ranges, content);
             let caps = caps::prepare(self, &mut input, content)?;
+            let positions = position::prepare(self, content, &input)?;
             let bidi::Input {
                 source,
                 text: string,
@@ -1216,7 +1250,13 @@ impl Text {
                     let font = piece.font;
                     let family = FontFamily::List(Cow::Borrowed(&families[k]));
                     builder.push(StyleProperty::FontFamily(family), range.clone());
-                    builder.push(StyleProperty::FontSize(font.size as f32), range.clone());
+                    builder.push(
+                        StyleProperty::FontSize(
+                            font.size as f32
+                                * positions.get(k).copied().flatten().map_or(1.0, |p| p.scale),
+                        ),
+                        range.clone(),
+                    );
                     let weight = FontWeight::new(font.weight as f32);
                     builder.push(StyleProperty::FontWeight(weight), range.clone());
                     let width = FontWidth::from_percentage(font.stretch as f32);
@@ -1269,6 +1309,13 @@ impl Text {
                         let features = (features)
                             .map(|f| FontFeature::new(Tag::new(&f.tag), f.value))
                             .collect();
+                        let mut features: Vec<FontFeature> = features;
+                        if positions.get(k).copied().flatten().is_some() {
+                            features.extend([
+                                FontFeature::new(Tag::new(b"subs"), 0),
+                                FontFeature::new(Tag::new(b"sups"), 0),
+                            ]);
+                        }
                         let features = FontFeatures::List(Cow::Owned(features));
                         builder.push(StyleProperty::FontFeatures(features), range.clone());
                     }
@@ -1298,18 +1345,33 @@ impl Text {
                     builder.push(StyleProperty::Brush(k as u32), range);
                 }
                 for c in &caps {
+                    let k = ranges
+                        .iter()
+                        .position(|r| r.contains(&c.range.start))
+                        .unwrap();
                     if let Some(features) = &c.features {
-                        let list = features
+                        let mut list: Vec<_> = features
                             .iter()
                             .map(|f| FontFeature::new(Tag::new(&f.tag), f.value))
                             .collect();
+                        if positions.get(k).copied().flatten().is_some() {
+                            list.extend([
+                                FontFeature::new(Tag::new(b"subs"), 0),
+                                FontFeature::new(Tag::new(b"sups"), 0),
+                            ]);
+                        }
                         builder.push(
                             StyleProperty::FontFeatures(FontFeatures::List(Cow::Owned(list))),
                             c.range.clone(),
                         );
                     }
                     if let Some(size) = c.size {
-                        builder.push(StyleProperty::FontSize(size), c.range.clone());
+                        builder.push(
+                            StyleProperty::FontSize(
+                                size * positions.get(k).copied().flatten().map_or(1.0, |p| p.scale),
+                            ),
+                            c.range.clone(),
+                        );
                     }
                 }
                 if let Some(sizes) = &sizes {
@@ -1331,6 +1393,7 @@ impl Text {
             };
             covered(&layout, &string)?;
             let paragraph = Paragraph {
+                positions,
                 layout,
                 empty: string.is_empty(),
                 source,
@@ -1786,6 +1849,7 @@ fn extent(
     strut: [f32; 2],
     edges: &HashMap<u32, [f32; 2]>,
     string: &str,
+    positions: &[Option<position::Adjustment>],
 ) -> [f32; 2] {
     let mut out = strut;
     for item in line.items() {
@@ -1805,7 +1869,15 @@ fn extent(
             }
             let m = run.run().font_metrics();
             let font = piece.font;
-            let [a, b] = placed([m.ascent, m.descent, m.leading], font);
+            let scale = positions
+                .get(run.style().brush as usize)
+                .copied()
+                .flatten()
+                .map_or(1.0, |p| p.scale);
+            let [a, b] = placed(
+                [m.ascent / scale, m.descent / scale, m.leading / scale],
+                font,
+            );
             out = [out[0].max(a), out[1].max(b)];
         }
     }
@@ -1820,13 +1892,14 @@ fn stack(
     edges: &HashMap<u32, [f32; 2]>,
     marks: &HashMap<u32, emphasis::Shape>,
     string: &str,
+    positions: &[Option<position::Adjustment>],
 ) -> Vec<[f32; 2]> {
     let (mut top, mut previous) = (0.0, 0.0);
     layout
         .lines()
         .enumerate()
         .map(|(index, line)| {
-            let [a, b] = extent(&line, content, strut, edges, string);
+            let [a, b] = extent(&line, content, strut, edges, string, positions);
             let mut extra = [0.0_f32; 2];
             for item in line.items() {
                 if let PositionedLayoutItem::GlyphRun(run) = item {
@@ -2869,6 +2942,72 @@ mod tests {
             v.glyphs
                 .iter()
                 .all(|g| source.is_char_boundary(g.cluster as usize))
+        );
+    }
+
+    #[test]
+    fn position_variants_keep_line_metrics_and_synthesize_the_whole_run() {
+        let mut t = text();
+        let normal = font(48.0);
+        for tag in [*b"subs", *b"sups"] {
+            let mut variant = normal.clone();
+            variant.variants[crate::style::Variant::Position as usize] =
+                Rc::from([Feature { tag, value: 1 }]);
+            let native = t.lines(&plain("123", &variant), 600.0).unwrap();
+            assert!(native.glyphs.iter().all(|g| g.position_shift.is_none()));
+            let source = "12Q?";
+            let plain = t.lines(&plain(source, &normal), 600.0).unwrap();
+            let small = t.lines(&self::plain(source, &variant), 600.0).unwrap();
+            assert_eq!(small.boxes, plain.boxes);
+            assert_eq!(small.baselines, plain.baselines);
+            assert_eq!(small.string, plain.string);
+            assert!(
+                small
+                    .glyphs
+                    .iter()
+                    .all(|g| (g.size - 48.0 * 0.667).abs() < 0.001)
+            );
+            assert_eq!(
+                small.glyphs.iter().map(|g| g.id).collect::<Vec<_>>(),
+                plain.glyphs.iter().map(|g| g.id).collect::<Vec<_>>()
+            );
+            assert!(small.glyphs.iter().all(|g| {
+                g.position_shift
+                    .is_some_and(|v| (v < 0.0) == (tag == *b"sups"))
+            }));
+            let again = t.lines(&self::plain("123", &variant), 600.0).unwrap();
+            assert_eq!(native, again);
+        }
+    }
+
+    #[test]
+    fn synthesized_positions_survive_adjusted_fonts_and_vertical_reshaping() {
+        let mut t = text();
+        let mut f = font(30.0);
+        f.variants[crate::style::Variant::Position as usize] = Rc::from([Feature {
+            tag: *b"sups",
+            value: 1,
+        }]);
+        f.size_adjust = Some(1.072);
+        let horizontal = t.lines(&plain("Q?", &f), 500.0).unwrap();
+        assert!(
+            horizontal
+                .glyphs
+                .iter()
+                .all(|g| (g.size - 45.528).abs() < 0.001)
+        );
+        f.writing = WritingMode::VerticalRl;
+        f.orientation = crate::style::Orientation::Upright;
+        let vertical = t.lines(&plain("Q?", &f), 500.0).unwrap();
+        assert!(
+            vertical
+                .glyphs
+                .iter()
+                .all(|g| g.upright && g.position_shift.is_some())
+        );
+        assert_eq!(
+            horizontal.glyphs.iter().map(|g| g.id).collect::<Vec<_>>(),
+            vertical.glyphs.iter().map(|g| g.id).collect::<Vec<_>>()
         );
     }
 

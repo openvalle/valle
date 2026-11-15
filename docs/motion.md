@@ -271,6 +271,12 @@ and `xx-large`, mapped to 9, 10, 13, 16, 18, 24, and 32px. `larger` multiplies
 the parent computed size by 1.2; `smaller` divides it by 1.2. These keywords also
 work in the `font` shorthand and resolve before `em`, `ex`, and line heights.
 
+`fontVariantPosition: "sub"` or `"super"` uses native OpenType variants when
+every character in the run has one. Otherwise the entire run uses synthesized
+smaller glyphs, preserving computed font size, line height and authored indices.
+Synthesis does not accumulate through inherited spans. Font-size adjustment and
+vertical text also apply to these glyphs.
+
 ### Inline text boxes
 
 `Span` accepts CSS background, padding and border properties, including gradients
