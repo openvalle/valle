@@ -1,0 +1,11 @@
+{
+  "size": [340, 130],
+  "sources": {
+    "tests/baselines/browser/svg/filter-specular/file/scene.html": "efe6e3fccf81a42881646a397de510135b9b9b45446c7ad014c389b8d8c52669",
+    "tests/cases/svg/filter-specular/file/source.svg": "bc17a5e76df9218252ce0e6656f657696ba8ffa5d94beab824cf123a9eb65618"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

@@ -18,6 +18,7 @@ pub enum Light {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lighting {
     pub surface: f64,
+    pub specular: Option<f64>,
     pub constant: f64,
     pub unit: Option<[f64; 2]>,
     pub light: Option<Light>,
@@ -25,10 +26,21 @@ pub struct Lighting {
 }
 
 impl Lighting {
-    pub(super) fn parse(a: &Attributes<'_>) -> Result<Self, String> {
-        let constant = a.number("diffuseConstant", 1.)?;
+    pub(super) fn parse(tag: Tag, a: &Attributes<'_>) -> Result<Self, String> {
+        let specular = (tag == Tag::FeSpecularLighting)
+            .then(|| a.number("specularExponent", 1.))
+            .transpose()?;
+        if specular.is_some_and(|v| !(1. ..=128.).contains(&v)) {
+            return Err("specularExponent: must be between 1 and 128".into());
+        }
+        let name = if specular.is_some() {
+            "specularConstant"
+        } else {
+            "diffuseConstant"
+        };
+        let constant = a.number(name, 1.)?;
         if constant < 0. {
-            return Err("diffuseConstant: must not be negative".into());
+            return Err(format!("{name}: must not be negative"));
         }
         let unit = a
             .get("kernelUnitLength")
@@ -39,6 +51,7 @@ impl Lighting {
         }
         Ok(Self {
             surface: a.number("surfaceScale", 1.)?,
+            specular,
             constant,
             unit,
             light: None,

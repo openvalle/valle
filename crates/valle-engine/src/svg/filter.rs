@@ -117,7 +117,9 @@ pub fn primitive(tag: Tag, attributes: &[(&str, &V)]) -> Result<Primitive, Strin
         Tag::FeOffset => Operation::Offset([a.number("dx", 0.0)?, a.number("dy", 0.0)?]),
         Tag::FeFlood => Operation::Flood,
         Tag::FeTile => Operation::Tile,
-        Tag::FeDiffuseLighting => Operation::Lighting(lighting::Lighting::parse(&a)?),
+        Tag::FeDiffuseLighting | Tag::FeSpecularLighting => {
+            Operation::Lighting(lighting::Lighting::parse(tag, &a)?)
+        }
         Tag::FeDistantLight | Tag::FePointLight | Tag::FeSpotLight => {
             Operation::Light(lighting::Light::parse(tag, &a)?)
         }
@@ -688,6 +690,21 @@ mod tests {
                 Tag::FeDiffuseLighting,
                 vec![("kernelUnitLength", "0")],
                 "positive",
+            ),
+            (
+                Tag::FeSpecularLighting,
+                vec![("specularExponent", "0")],
+                "between 1 and 128",
+            ),
+            (
+                Tag::FeSpecularLighting,
+                vec![("specularExponent", "129")],
+                "between 1 and 128",
+            ),
+            (
+                Tag::FeSpecularLighting,
+                vec![("specularConstant", "-1")],
+                "must not be negative",
             ),
             (Tag::FeMorphology, vec![("radius", "1 2 3")], "one or two"),
             (Tag::FeColorMatrix, vec![("values", "1 2")], "20 values"),

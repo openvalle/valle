@@ -366,6 +366,18 @@ fn own(tag: Tag) -> &'static [&'static str] {
         ],
         Tag::FeFlood => &["in", "in2", "result", "x", "y", "width", "height"],
         Tag::FeTile => &["in", "result", "x", "y", "width", "height"],
+        Tag::FeSpecularLighting => &[
+            "in",
+            "result",
+            "x",
+            "y",
+            "width",
+            "height",
+            "surfaceScale",
+            "specularConstant",
+            "specularExponent",
+            "kernelUnitLength",
+        ],
         Tag::FeSpotLight => &[
             "x",
             "y",
@@ -646,13 +658,14 @@ pub fn holds(tag: Tag) -> Holds {
                 Tag::FeDropShadow,
                 Tag::FeComponentTransfer,
                 Tag::FeTile,
+                Tag::FeSpecularLighting,
                 Tag::FeDiffuseLighting,
                 Tag::FeConvolveMatrix,
                 Tag::FeTurbulence,
             ],
             "filter primitives",
         ),
-        Tag::FeDiffuseLighting => Holds::Only(
+        Tag::FeDiffuseLighting | Tag::FeSpecularLighting => Holds::Only(
             &[Tag::FeDistantLight, Tag::FePointLight, Tag::FeSpotLight],
             "a light source",
         ),
@@ -774,6 +787,7 @@ pub fn computed(
         | Tag::FeFuncG
         | Tag::FeFuncB
         | Tag::FeTile
+        | Tag::FeSpecularLighting
         | Tag::FeSpotLight
         | Tag::FePointLight
         | Tag::FeDistantLight

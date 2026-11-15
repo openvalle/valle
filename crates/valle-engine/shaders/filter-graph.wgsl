@@ -239,6 +239,12 @@ fn lighting(v: Out, linear: bool) -> vec4f {
     }
   }
   let color = select(h[3].rgb, decode(h[3].rgb), linear);
+  if (h[3].w > 0.0) {
+    let half_vector = unit_vector(light + vec3f(0.0, 0.0, 1.0));
+    let amount = h[2].w * pow(max(dot(normal, half_vector), 0.0), h[3].w) * intensity;
+    let rgb = clamp(color * amount, vec3f(0.0), vec3f(1.0));
+    return vec4f(rgb, max(rgb.r, max(rgb.g, rgb.b)));
+  }
   let amount = h[2].w * max(dot(normal, light), 0.0) * intensity;
   return vec4f(clamp(color * amount, vec3f(0.0), vec3f(1.0)), 1.0);
 }

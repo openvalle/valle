@@ -264,7 +264,7 @@ impl Plan {
                         c[0] as f32,
                         c[1] as f32,
                         c[2] as f32,
-                        0.,
+                        lighting.specular.unwrap_or(0.) as f32,
                     ];
                     self.graph_pass(
                         [a; 2],
@@ -606,11 +606,26 @@ mod tests {
         // including the Sobel corners and edges. Lighting colors do not contribute alpha.
         let light = crate::svg::filter::lighting::Lighting {
             surface: 2.,
+            specular: None,
             constant: 0.5,
             unit: None,
             light: Some(crate::svg::filter::lighting::Light::Distant([0., 90.])),
             color: [1., 0.5, 0.25, 0.],
         };
+        // The specular map stores max(RGB) as alpha, unlike opaque diffuse lighting.
+        for linear in [false, true] {
+            for (elevation, exponent, alpha) in [(90., 12., 128), (0., 2., 64)] {
+                let mut specular = light.clone();
+                specular.specular = Some(exponent);
+                specular.light = Some(crate::svg::filter::lighting::Light::Distant([
+                    0., elevation,
+                ]));
+                let mut highlight = node(Operation::Lighting(specular), &[0]);
+                highlight.linear = linear;
+                let pixels = draw(&mut renderer, vec![highlight], vec![]);
+                close(&pixels[..4], [255, 128, 64, alpha]);
+            }
+        }
         let mut diffuse = node(Operation::Lighting(light.clone()), &[0]);
         diffuse.linear = false;
         let pixels = draw(&mut renderer, vec![diffuse], vec![]);
@@ -635,6 +650,7 @@ mod tests {
         );
         let light = crate::svg::filter::lighting::Lighting {
             surface: 1.,
+            specular: None,
             constant: 1.,
             unit: None,
             color: [1.; 4],

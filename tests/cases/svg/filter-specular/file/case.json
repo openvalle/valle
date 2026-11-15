@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/filters.html#feSpecularLightingElement",
+  "assertion": "Specular lighting uses the Phong half-vector, configurable exponent, all three light types and max-RGB highlight alpha for compositing.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All three captures agree on the highlight shape. Chrome matches Valle within 1 channel level from F16 intermediate and alpha-compositing rounding. Independent GPU assertions verify the half-vector exponent and max-RGB alpha.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 22000
+    }
+  }
+}
