@@ -8,7 +8,6 @@ use taffy::{
     GridPlacement, Line, Overflow, Position,
 };
 
-use super::color::Rgba;
 use super::computed::{BLENDS, Blend, BorderStyle, Cap, Fit, Join, PAINT_ORDER, Paint, PaintPart};
 use super::font::{
     Collapse, DecorationStyle, Family, Feature, FontStyle, Leading, Orientation, OverflowWrap,
@@ -104,7 +103,7 @@ pub(super) struct Declared {
     pub(super) justify_items: AlignItems,
     pub(super) justify_self: Option<AlignItems>,
     /// `None` is `currentcolor`.
-    pub(super) background: Option<Rgba>,
+    pub(super) background: Option<color::Specified>,
     pub(super) layers: background::Declared,
     /// Horizontal and vertical, from the top left clockwise.
     pub(super) radii: [[Len; 2]; 4],
@@ -112,10 +111,10 @@ pub(super) struct Declared {
     pub(super) border_width: [Len; 4],
     pub(super) border_style: [BorderStyle; 4],
     /// `None` is `currentcolor`.
-    pub(super) border_color: [Option<Rgba>; 4],
+    pub(super) border_color: [Option<color::Specified>; 4],
     pub(super) outline_width: Len,
     pub(super) outline_style: BorderStyle,
-    pub(super) outline_color: Option<Rgba>,
+    pub(super) outline_color: Option<color::Specified>,
     pub(super) outline_offset: Len,
     pub(super) shadows: Vec<Shadowed>,
     pub(super) opacity: f64,
@@ -140,21 +139,21 @@ pub(super) struct Declared {
     pub(super) preserve_3d: bool,
     pub(super) blend: Blend,
     pub(super) isolate: bool,
-    pub(super) filter: Vec<filter::Function<Len, Option<Rgba>>>,
+    pub(super) filter: Vec<filter::Function<Len, Option<color::Specified>>>,
     /// `motionBlur` as the frontend gives it, if declared: the trail in the box's own px, or
     /// `None` for `auto`.
     pub(super) motion_blur: Option<Option<[f64; 2]>>,
-    pub(super) backdrop: Vec<filter::Function<Len, Option<Rgba>>>,
+    pub(super) backdrop: Vec<filter::Function<Len, Option<color::Specified>>>,
     pub(super) clip: Option<shape::Clip<Len>>,
     pub(super) masks: background::Declared,
     /// `text-decoration-*`: its lines (under, over, through), its style, its color (`None` is
     /// `currentcolor`) and its thickness.
     pub(super) emphasis: Option<super::emphasis::Mark>,
-    pub(super) emphasis_color: Option<Option<Rgba>>,
+    pub(super) emphasis_color: Option<Option<color::Specified>>,
     pub(super) emphasis_position: Option<super::emphasis::Position>,
     pub(super) decoration_lines: [bool; 3],
     pub(super) decoration_style: DecorationStyle,
-    pub(super) decoration_color: Option<Rgba>,
+    pub(super) decoration_color: Option<color::Specified>,
     pub(super) decoration_thickness: Len,
     pub(super) ellipsis: bool,
     /// `-webkit-box-orient: vertical` (or `block-axis`), and `-webkit-line-clamp`.
@@ -188,7 +187,7 @@ pub(super) struct Declared {
     /// Each declared or not, `none` or an id.
     pub(super) markers: [Option<Option<Rc<str>>>; 3],
     pub(super) paint_order: Option<[PaintPart; 3]>,
-    pub(super) color: Option<Rgba>,
+    pub(super) color: Option<color::Specified>,
     pub(super) font_size: Option<Len>,
     pub(super) font_weight: Option<Weight>,
     pub(super) stretch: Option<f64>,
@@ -217,9 +216,9 @@ pub(super) struct Declared {
     pub(super) overflow_wrap: Option<OverflowWrap>,
     pub(super) text_transform: Option<TextTransform>,
     /// `Some(None)` is `currentcolor`.
-    pub(super) fill: Option<Option<Rgba>>,
+    pub(super) fill: Option<Option<color::Specified>>,
     pub(super) stroke: Option<Len>,
-    pub(super) stroke_color: Option<Option<Rgba>>,
+    pub(super) stroke_color: Option<Option<color::Specified>>,
     pub(super) text_shadows: Option<Vec<Shadowed>>,
     pub(super) skip_ink: Option<SkipInk>,
     pub(super) underline_offset: Option<Len>,
@@ -259,12 +258,12 @@ impl Default for Declared {
             grid_lines: [AUTO_LINES; 2],
             justify_items: AlignItems::NORMAL,
             justify_self: None,
-            background: Some(color::TRANSPARENT),
+            background: Some(color::TRANSPARENT.into()),
             layers: background::Declared::default(),
             radii: [const { [ZERO; 2] }; 4],
             border_width: [MEDIUM; 4],
             border_style: [BorderStyle::None; 4],
-            border_color: [None; 4],
+            border_color: [const { None }; 4],
             outline_width: MEDIUM,
             outline_style: BorderStyle::None,
             outline_color: None,
@@ -377,7 +376,7 @@ pub(super) struct Shadowed {
     pub(super) offset: [Len; 2],
     pub(super) blur: Len,
     pub(super) spread: Len,
-    pub(super) color: Option<Rgba>,
+    pub(super) color: Option<color::Specified>,
     pub(super) inset: bool,
 }
 
@@ -429,7 +428,10 @@ pub(super) fn paint(v: &V) -> Result<Paint, String> {
     Ok(match s.as_str() {
         "none" => Paint::None,
         "currentcolor" => Paint::CurrentColor,
-        s => Paint::Color(color::parse(s)?),
+        s => match color::parse(s) {
+            Ok(c) => Paint::Color(c),
+            Err(_) => Paint::Mixed(color::Specified::parse(s)?),
+        },
     })
 }
 
@@ -623,7 +625,7 @@ pub(super) fn corner(v: &V) -> Result<[Len; 2], String> {
 pub(super) fn line(
     v: &V,
     styled: fn(&V) -> Result<BorderStyle, String>,
-) -> Result<(Len, BorderStyle, Option<Rgba>), String> {
+) -> Result<(Len, BorderStyle, Option<color::Specified>), String> {
     if let V::Num(_) = v {
         return Ok((border_width(v)?, BorderStyle::None, None));
     }
@@ -752,10 +754,10 @@ pub(super) fn shadow(s: &str, text_shadow: bool) -> Result<Shadowed, String> {
 }
 
 /// A color, or `currentcolor`, which is `None`.
-fn current_color(v: &V) -> Result<Option<Rgba>, String> {
+fn current_color(v: &V) -> Result<Option<color::Specified>, String> {
     match text(v)?.as_str() {
         "currentcolor" => Ok(None),
-        s => color::parse(s).map(Some),
+        s => color::Specified::parse(s).map(Some),
     }
 }
 
@@ -1029,8 +1031,8 @@ pub(super) fn flex(v: &V) -> Result<(f64, f64, Len), String> {
     ))
 }
 
-fn color_of(v: &V) -> Result<Rgba, String> {
-    color::parse(&text(v)?)
+fn color_of(v: &V) -> Result<color::Specified, String> {
+    color::Specified::parse(&text(v)?)
 }
 
 fn is_current_color(v: &V) -> bool {
@@ -1161,7 +1163,7 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
             for &i in named(which) {
                 d.border_width[i] = width.clone();
                 d.border_style[i] = style;
-                d.border_color[i] = color;
+                d.border_color[i] = color.clone();
             }
         }
         F::Border(which, BorderPart::Width) => {
@@ -1335,7 +1337,7 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::StrokeDasharray => d.dashes = Some(dashes(v)?),
         F::StrokeDashoffset => d.dash_offset = Some(svg_length(v, true)?),
         F::StopColor => match paint(v)? {
-            p @ (Paint::Color(_) | Paint::CurrentColor) => d.stop_color = Some(p),
+            p @ (Paint::Color(_) | Paint::CurrentColor | Paint::Mixed(_)) => d.stop_color = Some(p),
             _ => return Err("a stop's color is a color or currentColor".into()),
         },
         F::StopOpacity => d.stop_opacity = Some(alpha(v)?),
@@ -1552,7 +1554,9 @@ const DECORATION_STYLES: [&str; 5] = ["solid", "double", "dotted", "dashed", "wa
 
 /// `text-decoration`: `none`, or lines, a style, a color and a thickness in any order, each at
 /// most once, and the initial ones for those left out.
-pub(super) fn decoration(v: &V) -> Result<([bool; 3], DecorationStyle, Option<Rgba>, Len), String> {
+pub(super) fn decoration(
+    v: &V,
+) -> Result<([bool; 3], DecorationStyle, Option<color::Specified>, Len), String> {
     let s = text(v)?;
     let words = css::words(&s);
     if words.is_empty() {
@@ -1665,7 +1669,7 @@ fn paint_order(v: &V) -> Result<Option<[PaintPart; 3]>, String> {
 
 /// `-webkit-text-stroke`: a width and a color in either order, each at most once, and the
 /// initial ones for those left out.
-pub(super) fn stroke(v: &V) -> Result<(Len, Option<Rgba>), String> {
+pub(super) fn stroke(v: &V) -> Result<(Len, Option<color::Specified>), String> {
     if let V::Num(_) = v {
         return Ok((stroke_width(v)?, None));
     }

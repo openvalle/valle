@@ -2002,7 +2002,10 @@ mod tests {
                 );
                 if cluster == 3 {
                     assert_eq!(s.color, [1.0, 0.0, 0.0, 1.0]);
-                    assert_eq!(s.font.stroke_color, Some([0.0, 1.0, 0.0, 1.0]));
+                    assert_eq!(
+                        crate::style::color::resolve(&s.font.stroke_color, s.color),
+                        [0.0, 1.0, 0.0, 1.0]
+                    );
                 } else {
                     assert_eq!(s.font.shadows[0].offset, [2.0, 3.0]);
                     assert_eq!(s.font.shadows[0].blur, 4.0);

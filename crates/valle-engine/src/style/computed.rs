@@ -21,6 +21,7 @@ use crate::shader::Program;
 pub enum Paint {
     None,
     Color(Rgba),
+    Mixed(color::Specified),
     /// The shape's own `color`, wherever it inherits the paint from.
     CurrentColor,
     /// The first gradient of this id in the frame, as Chrome finds one in its document; none if
@@ -546,7 +547,10 @@ pub(super) fn compute(
             .emphasis
             .clone()
             .unwrap_or_else(|| inherited.emphasis.clone()),
-        emphasis_color: d.emphasis_color.unwrap_or(inherited.emphasis_color),
+        emphasis_color: d
+            .emphasis_color
+            .clone()
+            .unwrap_or_else(|| inherited.emphasis_color.clone()),
         emphasis_position: d.emphasis_position.unwrap_or(inherited.emphasis_position),
         indent: match &d.text_indent {
             None => inherited.indent.clone(),
@@ -571,19 +575,22 @@ pub(super) fn compute(
         }),
         features: (d.features.clone()).unwrap_or_else(|| inherited.features.clone()),
         variations: (d.variations.clone()).unwrap_or_else(|| inherited.variations.clone()),
-        fill: d.fill.unwrap_or(inherited.fill),
+        fill: d.fill.clone().unwrap_or_else(|| inherited.fill.clone()),
         stroke: match &d.stroke {
             None => inherited.stroke,
             Some(l) => l.px(units(size), 0.0),
         },
-        stroke_color: d.stroke_color.unwrap_or(inherited.stroke_color),
+        stroke_color: d
+            .stroke_color
+            .clone()
+            .unwrap_or_else(|| inherited.stroke_color.clone()),
         shadows: match &d.text_shadows {
             None => inherited.shadows.clone(),
             Some(list) => (list.iter())
                 .map(|s| TextShadow {
                     offset: s.offset.each_ref().map(|l| l.px(units(size), 0.0)),
                     blur: s.blur.px(units(size), 0.0),
-                    color: s.color,
+                    color: s.color.clone(),
                 })
                 .collect(),
         },
@@ -629,7 +636,7 @@ pub(super) fn compute(
         }
     };
     let u = units(size);
-    let color = d.color.unwrap_or(inherited_color);
+    let color = color::resolve(&d.color, inherited_color);
     if let Some(p) = &d.svg_stroke {
         stroke.paint = p.clone();
     }
@@ -655,7 +662,10 @@ pub(super) fn compute(
         decorations.push(Decoration {
             lines: d.decoration_lines,
             style: d.decoration_style,
-            color: d.decoration_color.unwrap_or(font.decoration_color(color)),
+            color: d
+                .decoration_color
+                .as_ref()
+                .map_or_else(|| font.decoration_color(color), |c| c.resolve(color)),
             thickness: match &d.decoration_thickness {
                 Len::Auto => None,
                 l => Some(l.calc(u)),
@@ -745,14 +755,14 @@ pub(super) fn compute(
         layout,
         order: d.order,
         z_index: d.z_index,
-        background: d.background.unwrap_or(color),
+        background: color::resolve(&d.background, color),
         layers: (d.layers).computed(u, color, background::Area::PaddingBox, resources)?,
         radii: d.radii.each_ref().map(|r| r.each_ref().map(|l| l.calc(u))),
         border,
-        border_colors: d.border_color.map(|c| c.unwrap_or(color)),
+        border_colors: d.border_color.each_ref().map(|c| color::resolve(c, color)),
         border_styles: d.border_style,
         outline: width(d.outline_style, &d.outline_width),
-        outline_color: d.outline_color.unwrap_or(color),
+        outline_color: color::resolve(&d.outline_color, color),
         outline_style: d.outline_style,
         outline_offset: d.outline_offset.px(u, 0.0).trunc(),
         shadows: (d.shadows.iter())
@@ -760,7 +770,7 @@ pub(super) fn compute(
                 offset: s.offset.each_ref().map(|l| l.px(u, 0.0)),
                 blur: s.blur.px(u, 0.0),
                 spread: s.spread.px(u, 0.0),
-                color: s.color.unwrap_or(color),
+                color: color::resolve(&s.color, color),
                 inset: s.inset,
             })
             .collect(),

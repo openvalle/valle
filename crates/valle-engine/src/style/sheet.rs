@@ -1081,6 +1081,85 @@ mod tests {
     }
 
     #[test]
+    fn currentcolor_mixtures_follow_the_consuming_element_after_inheritance() {
+        let mix = "color-mix(in srgb, currentColor, white)";
+        let s = styles(
+            vec![
+                view(
+                    &[
+                        ("color", text("red")),
+                        ("fill", text(mix)),
+                        ("WebkitTextFillColor", text(mix)),
+                        ("WebkitTextStrokeColor", text(mix)),
+                        ("textEmphasisColor", text(mix)),
+                        (
+                            "textShadow",
+                            text("1px 2px color-mix(in srgb, currentColor, white)"),
+                        ),
+                    ],
+                    &[1],
+                ),
+                view(
+                    &[
+                        ("color", text("blue")),
+                        ("background", text(mix)),
+                        (
+                            "border",
+                            text("2px solid color-mix(in srgb, currentColor, white)"),
+                        ),
+                    ],
+                    &[],
+                ),
+            ],
+            &[],
+        )
+        .unwrap();
+        let child = &s[1];
+        let blue = [0.5, 0.5, 1.0, 1.0];
+        assert_eq!(child.background, blue);
+        assert_eq!(child.border_colors, [blue; 4]);
+        for c in [
+            &child.font.fill,
+            &child.font.stroke_color,
+            &child.font.emphasis_color,
+            &child.font.shadows[0].color,
+        ] {
+            assert_eq!(color::resolve(c, child.color), blue);
+        }
+        let Paint::Mixed(fill) = &child.fill else {
+            panic!("inherited mixture")
+        };
+        assert_eq!(fill.resolve(child.color), blue);
+        assert_eq!(
+            color::resolve(&s[0].font.fill, s[0].color),
+            [1.0, 0.5, 0.5, 1.0]
+        );
+    }
+
+    #[test]
+    fn currentcolor_in_the_color_property_uses_the_inherited_color() {
+        let s = styles(
+            vec![
+                view(&[("color", text("red"))], &[1]),
+                view(
+                    &[
+                        ("color", text("color-mix(in srgb, currentColor, blue)")),
+                        (
+                            "backgroundColor",
+                            text("color-mix(in srgb, currentColor, white)"),
+                        ),
+                    ],
+                    &[],
+                ),
+            ],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(s[1].color, [0.5, 0.0, 0.5, 1.0]);
+        assert_eq!(s[1].background, [0.75, 0.5, 0.75, 1.0]);
+    }
+
+    #[test]
     fn color_currentcolor_inherits() {
         let tree = vec![
             view(&[("color", text("red"))], &[1]),

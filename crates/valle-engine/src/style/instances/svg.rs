@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use super::Formula;
 use crate::style::Paint;
-use crate::style::color::Rgba;
+use crate::style::color::Specified;
 use crate::style::declaration::{Declared, presented, set};
 use crate::style::property::Field;
 use crate::svg::{self, Element, Shape};
@@ -16,7 +16,7 @@ pub struct Row {
     pub fill: Option<Paint>,
     pub fill_opacity: Option<f64>,
     pub even_odd: Option<bool>,
-    pub color: Option<Rgba>,
+    pub color: Option<Specified>,
     pub opacity: f64,
     pub stroke: Option<Paint>,
     pub stroke_opacity: Option<f64>,
@@ -95,7 +95,7 @@ impl Row {
                     "fill" => self.fill.clone_from(&scratch.svg_fill),
                     "fillOpacity" => self.fill_opacity = scratch.fill_opacity,
                     "fillRule" => self.even_odd = scratch.even_odd,
-                    "color" => self.color = scratch.color,
+                    "color" => self.color.clone_from(&scratch.color),
                     "opacity" => self.opacity = scratch.opacity,
                     "stroke" => self.stroke.clone_from(&scratch.svg_stroke),
                     "strokeOpacity" => self.stroke_opacity = scratch.stroke_opacity,

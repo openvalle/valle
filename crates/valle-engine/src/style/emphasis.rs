@@ -2,7 +2,6 @@
 use std::rc::Rc;
 use unicode_segmentation::UnicodeSegmentation;
 
-use super::color::Rgba;
 use super::{color, css};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -112,13 +111,13 @@ pub(super) fn style(s: &str) -> Result<Mark, String> {
     Ok(Mark::Symbol(mark))
 }
 
-pub(super) fn shorthand(s: &str) -> Result<(Mark, Option<Rgba>), String> {
+pub(super) fn shorthand(s: &str) -> Result<(Mark, Option<color::Specified>), String> {
     let (mut words, mut paint) = (Vec::new(), None);
     for word in css::words(s) {
         let color = if word.eq_ignore_ascii_case("currentcolor") {
             Ok(None)
         } else {
-            color::parse(word).map(Some)
+            color::Specified::parse(word).map(Some)
         };
         if let Ok(c) = color {
             if paint.replace(c).is_some() {

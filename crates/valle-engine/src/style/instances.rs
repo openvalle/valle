@@ -52,7 +52,7 @@ struct Fixed {
     inset: [Len; 2],
     size: [Len; 2],
     radii: [[Len; 2]; 4],
-    color: Option<color::Rgba>,
+    color: Option<color::Specified>,
     opacity: f64,
     translate: Option<transform::Function<Len>>,
     rotate: Option<transform::Function<Len>>,
@@ -87,7 +87,7 @@ impl Fixed {
         d.inset[0].clone_from(&self.inset[1]);
         d.size.clone_from(&self.size);
         d.radii.clone_from(&self.radii);
-        d.background = self.color;
+        d.background.clone_from(&self.color);
         d.opacity = self.opacity;
         d.translate.clone_from(&self.translate);
         d.rotate.clone_from(&self.rotate);
@@ -267,7 +267,7 @@ impl Table {
                     height: d.size[1].px(u, 0.0) as f32,
                 },
                 radii: d.radii.each_ref().map(|r| r.each_ref().map(|l| l.calc(u))),
-                color: d.background.unwrap_or(parent.color),
+                color: color::resolve(&d.background, parent.color),
                 opacity: d.opacity,
                 transform: computed_transforms(&d, u),
                 individual: [&d.translate, &d.rotate, &d.scale]

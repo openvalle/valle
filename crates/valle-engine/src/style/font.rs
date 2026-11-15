@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use super::color::Rgba;
+use super::color::{self, Rgba};
 use super::declaration::{Declared, factor, number, shown, text};
 use super::math::Calc;
 use super::units::{Len, PADDING, length_text};
@@ -76,11 +76,11 @@ pub struct Feature {
 
 /// A `text-shadow`: its offset and blur, px, and its color, `None` for `currentcolor`, the color
 /// of each box that inherits it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TextShadow {
     pub offset: [f64; 2],
     pub blur: f64,
-    pub color: Option<Rgba>,
+    pub color: Option<color::Specified>,
 }
 
 /// A text decoration as the box that declares it gives it to the text in it.
@@ -201,7 +201,7 @@ pub struct Font {
     /// The element establishing an inherited upright-combination scope.
     pub combine: Option<usize>,
     pub emphasis: super::emphasis::Mark,
-    pub emphasis_color: Option<Rgba>,
+    pub emphasis_color: Option<color::Specified>,
     pub emphasis_position: super::emphasis::Position,
     /// `text-indent` of the first line, which the text's own box takes, not a Span's; its
     /// percentages are of the width lines break to fit.
@@ -227,11 +227,11 @@ pub struct Font {
     pub variations: Rc<[Variation]>,
     /// `-webkit-text-fill-color`, the color of glyphs; `None` is `currentcolor`, the color of
     /// each box that inherits it.
-    pub fill: Option<Rgba>,
+    pub fill: Option<color::Specified>,
     /// `-webkit-text-stroke-width`, px, and `-webkit-text-stroke-color` (`None` is
     /// `currentcolor`): a line along the edges of glyphs, centered on them, over their fill.
     pub stroke: f64,
-    pub stroke_color: Option<Rgba>,
+    pub stroke_color: Option<color::Specified>,
     /// `text-shadow`, the first on top.
     pub shadows: Rc<[TextShadow]>,
     pub skip_ink: SkipInk,
@@ -245,9 +245,11 @@ impl Font {
     /// `color`: its stroke's color if it has a stroke in another color that shows, or else the
     /// fill color of its glyphs.
     pub fn decoration_color(&self, color: Rgba) -> Rgba {
-        match self.stroke_color {
-            Some(c) if self.stroke > 0.0 && c[3] > 0.0 => c,
-            _ => self.fill.unwrap_or(color),
+        let stroke = color::resolve(&self.stroke_color, color);
+        if self.stroke_color.is_some() && self.stroke > 0.0 && stroke[3] > 0.0 {
+            stroke
+        } else {
+            color::resolve(&self.fill, color)
         }
     }
 
@@ -790,7 +792,6 @@ mod tests {
     use crate::template::{Kind, Node, Prop};
 
     use super::*;
-    use crate::style::*;
     use crate::testing::styles::{error, num, one, styles, text, view};
 
     #[test]
@@ -1080,14 +1081,17 @@ mod tests {
             ("WebkitTextStroke", text("thick rgb(0 0 255)")),
         ]);
         let blue = color::parse("blue").unwrap();
-        assert_eq!((both.stroke, both.stroke_color), (2.5, Some(blue)));
+        assert_eq!(
+            (both.stroke, both.stroke_color.clone()),
+            (2.5, Some(blue.into()))
+        );
         // Left out of the shorthand, the width is 0 and the color currentcolor.
         let reset = font(&[
             ("WebkitTextStrokeWidth", num(2.0)),
             ("WebkitTextStrokeColor", text("red")),
             ("WebkitTextStroke", text("currentcolor")),
         ]);
-        assert_eq!((reset.stroke, reset.stroke_color), (0.0, None));
+        assert_eq!((reset.stroke, reset.stroke_color.clone()), (0.0, None));
         assert_eq!(font(&[("WebkitTextStroke", num(1.5))]).stroke, 1.5);
         // A decoration's currentcolor is the stroke's color where the stroke shows in a color of
         // its own, as in Chrome, and else the fill color.
@@ -1145,7 +1149,7 @@ mod tests {
             TextShadow {
                 offset: [-1.0, 0.0],
                 blur: 3.0,
-                color: Some(blue),
+                color: Some(blue.into()),
             },
         ];
         assert_eq!(&s[0].font.shadows[..], shadows);
@@ -1513,9 +1517,9 @@ mod tests {
                 tag: *b"wdth",
                 value: 80.0,
             }]),
-            fill: Some(color::parse("blue").unwrap()),
+            fill: Some(color::parse("blue").unwrap().into()),
             stroke: 2.0,
-            stroke_color: Some(color::parse("#0f0").unwrap()),
+            stroke_color: Some(color::parse("#0f0").unwrap().into()),
             shadows: Rc::new([]),
             skip_ink: crate::style::SkipInk::Auto,
             underline_offset: None,

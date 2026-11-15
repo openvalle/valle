@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/css-color-5/#color-mix",
+  "assertion": "currentColor mixtures resolve on the consuming element through CSS gradients, shadows, inherited text and SVG paints, including nested mixtures and compact SVG instance rows.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three browser images, native rendering and the difference image. Solid mixed colors, inherited span colors, SVG instance colors and gradient endpoints agree. Remaining pixels are primarily one-channel quantization of gradients and mixed dark fills, plus glyph/curve antialiasing and drop-shadow edges; numerical tests verify nested color-space mixing and late inheritance independently.",
+    "pixels": {
+      "maxPixels": 17700,
+      "maxDifference": 110
+    }
+  }
+}

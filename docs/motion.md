@@ -190,6 +190,20 @@ group. The outer SVG isolates its contents from the page. CSS filter functions u
 SVG user units and follow the element's transform; `filter: "url(#id)"` and SVG
 `<filter>`/`<fe*>` definitions are not implemented.
 
+`color-mix()` can include `currentColor`, including nested mixtures. It works in
+backgrounds, borders, outlines, gradients, shadows, text paints, and SVG fill,
+stroke and gradient stops. For example:
+
+```tsx
+<View style={{ color: "#2563eb", background: "color-mix(in srgb, currentColor 15%, white)" }} />
+```
+
+Inherited mixtures use the consuming element's `color`. When `color` itself
+contains a mixture with `currentColor`, that reference uses the inherited color.
+Mixing supports the same color spaces, hue directions and alpha weighting as
+constant `color-mix()` values; a color has to be resolved before it is passed to
+standalone color-interpolation helpers outside an element.
+
 ### Responsive curve clipping
 
 `clipPath: "shape(…)"` describes curves in CSS lengths, percentages and `calc()`.

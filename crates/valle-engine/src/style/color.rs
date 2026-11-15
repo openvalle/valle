@@ -1,6 +1,8 @@
 //! CSS colors. A color value is sRGB as CSS writes it, encoded, with straight alpha: browsers
 //! composite these values, and so does the working space.
 
+use std::rc::Rc;
+
 use super::css::{self, Num};
 use crate::js;
 
@@ -48,6 +50,85 @@ pub fn parse(s: &str) -> Result<Rgba, String> {
     value(s).map(Color::drawn)
 }
 
+/// A parsed CSS color kept until the consuming element's current color is known.
+/// Constant colors are folded once; mixtures retain wide channels and missing hue.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Specified(Value);
+
+#[derive(Clone, Debug, PartialEq)]
+enum Value {
+    Constant(Color),
+    Current,
+    Mix(Rc<Mixture>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Mixture {
+    colors: [Specified; 2],
+    space: Space,
+    hue: &'static str,
+    fraction: f64,
+    alpha: f64,
+}
+
+impl Specified {
+    pub fn parse(s: &str) -> Result<Self, String> {
+        if s == "currentcolor" {
+            return Ok(Self(Value::Current));
+        }
+        if let Some(("color-mix", args)) = css::function(s) {
+            let m = mixture(args)?;
+            return Ok(if m.colors.iter().any(Self::dependent) {
+                Self(Value::Mix(Rc::new(m)))
+            } else {
+                Self(Value::Constant(m.value(BLACK)))
+            });
+        }
+        value(s).map(|c| Self(Value::Constant(c)))
+    }
+
+    fn dependent(&self) -> bool {
+        !matches!(self.0, Value::Constant(_))
+    }
+
+    fn value(&self, current: Rgba) -> Color {
+        match &self.0 {
+            Value::Constant(c) => *c,
+            Value::Current => Color::new([current[0], current[1], current[2]], current[3]),
+            Value::Mix(m) => m.value(current),
+        }
+    }
+
+    pub fn resolve(&self, current: Rgba) -> Rgba {
+        self.value(current).drawn()
+    }
+
+    pub(super) fn wide(&self, current: Rgba) -> Rgba {
+        let c = self.value(current);
+        [c.rgb[0], c.rgb[1], c.rgb[2], c.alpha]
+    }
+}
+
+impl From<Rgba> for Specified {
+    fn from(c: Rgba) -> Self {
+        Self(Value::Constant(Color::new([c[0], c[1], c[2]], c[3])))
+    }
+}
+
+impl Mixture {
+    fn value(&self, current: Rgba) -> Color {
+        let [a, b] = self.colors.each_ref().map(|c| c.value(current));
+        let mut c = blend(a, b, self.fraction, self.space, self.hue);
+        c.alpha *= self.alpha;
+        c
+    }
+}
+
+/// `None` is the CSS currentcolor default of a color-valued property.
+pub fn resolve(color: &Option<Specified>, current: Rgba) -> Rgba {
+    color.as_ref().map_or(current, |c| c.resolve(current))
+}
+
 /// Whether a color, lowercased, is written as sRGB was before color spaces: a hex color, a named
 /// one, or `rgb()`, `hsl()` or `hwb()`.
 pub fn legacy(s: &str) -> bool {
@@ -67,7 +148,7 @@ pub fn wide(s: &str) -> Result<Rgba, String> {
 /// A color before it is drawn: encoded sRGB, extended past [0, 1] with the curve mirrored below
 /// 0, its alpha, and whether its hue is missing (`none`), which mixing fills from the other
 /// color.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Color {
     rgb: [f64; 3],
     alpha: f64,
@@ -676,6 +757,14 @@ impl Space {
 /// two colors, each with a percentage or not. The percentages scale to add up to 100%, and one
 /// left out is what the other leaves; if they add up to less, the rest is transparent.
 fn mix(args: &str) -> Result<Color, String> {
+    let m = mixture(args)?;
+    if m.colors.iter().any(Specified::dependent) {
+        return Err("currentcolor needs an element color".into());
+    }
+    Ok(m.value(BLACK))
+}
+
+fn mixture(args: &str) -> Result<Mixture, String> {
     let bad = || format!("color-mix({args}) is not two colors mixed in a color space");
     let parts = css::commas(args);
     let (method, colors) = match parts[..] {
@@ -707,12 +796,9 @@ fn mix(args: &str) -> Result<Color, String> {
             [p, c] if percentage(p).is_some() => (c, percentage(p)),
             _ => return Err(bad()),
         };
-        if color == "currentcolor" {
-            return Err("currentcolor in color-mix() is not supported yet: write the color".into());
-        }
-        mixed.push((value(color)?, p));
+        mixed.push((Specified::parse(color)?, p));
     }
-    let [(a, pa), (b, pb)] = [mixed[0], mixed[1]];
+    let [(a, pa), (b, pb)]: [_; 2] = mixed.try_into().unwrap();
     let (pa, pb) = match (pa, pb) {
         (None, None) => (50.0, 50.0),
         (Some(p), None) => (p, 100.0 - p),
@@ -723,9 +809,13 @@ fn mix(args: &str) -> Result<Color, String> {
     if sum == 0.0 {
         return Err(format!("color-mix({args}) mixes 0% of each color"));
     }
-    let mut c = blend(a, b, pb / sum, space, how);
-    c.alpha *= sum.min(100.0) / 100.0;
-    Ok(c)
+    Ok(Mixture {
+        colors: [a, b],
+        space,
+        hue: how,
+        fraction: pb / sum,
+        alpha: sum.min(100.0) / 100.0,
+    })
 }
 
 /// The color `t` of the way from `a` to `b` in `space`, round the hue as `how` says.
@@ -1032,6 +1122,36 @@ mod tests {
     }
 
     #[test]
+    fn currentcolor_mixtures_resolve_late_in_nested_spaces() {
+        for source in [
+            "color-mix(in srgb, currentcolor 25%, white)",
+            "color-mix(in srgb-linear, currentcolor 20%, transparent 20%)",
+            "color-mix(in oklch longer hue, currentcolor, color-mix(in display-p3, color(display-p3 1 0.2 0), white))",
+            "color-mix(in lab, currentcolor, color-mix(in oklab, currentcolor, blue))",
+        ] {
+            let parsed = Specified::parse(source).unwrap();
+            for current in ["red", "#1642ba80", "transparent"] {
+                let expected = parse(&source.replace("currentcolor", current)).unwrap();
+                let actual = parsed.resolve(parse(current).unwrap());
+                assert!(
+                    actual
+                        .into_iter()
+                        .zip(expected)
+                        .all(|(a, b)| (a - b).abs() < 1e-10),
+                    "{source}: {actual:?} != {expected:?}"
+                );
+            }
+        }
+        for source in [
+            "color-mix(in srgb, currentcolor 0%, red 0%)",
+            "color-mix(in bad, currentcolor, red)",
+            "color-mix(in srgb, currentcolor 120%, red)",
+        ] {
+            assert!(Specified::parse(source).is_err());
+        }
+    }
+
+    #[test]
     fn hex_and_names() {
         assert_eq!(bytes("#f80"), [255, 136, 0, 255]);
         assert_eq!(bytes("#f808"), [255, 136, 0, 136]);
@@ -1189,7 +1309,7 @@ mod tests {
         for (bad, message) in [
             (
                 "color-mix(in srgb, currentcolor, blue)",
-                "currentcolor in color-mix() is not supported yet",
+                "currentcolor needs an element color",
             ),
             (
                 "color-mix(in srgb, red 0%, blue 0%)",

@@ -1,7 +1,7 @@
 //! Filters: `filter`, functions applied one after another to all a box paints, as one image:
 //! CSS's, and Valle's for video, whose lengths are px in the box's own px.
 
-use super::color::Rgba;
+use super::color::{self, Rgba};
 use super::css;
 use super::declaration::{Shadowed, shadow};
 use super::math;
@@ -77,7 +77,7 @@ pub enum Function<L = f64, C = Rgba> {
     MotionBlur([f64; 2]),
 }
 
-impl Function<Len, Option<Rgba>> {
+impl Function<Len, Option<color::Specified>> {
     pub(super) fn computed(&self, u: Units, current: Rgba) -> Function {
         match self {
             Function::Blur(l) => Function::Blur(l.px(u, 0.0)),
@@ -96,7 +96,7 @@ impl Function<Len, Option<Rgba>> {
             } => Function::DropShadow {
                 offset: offset.each_ref().map(|l| l.px(u, 0.0)),
                 blur: blur.px(u, 0.0),
-                color: color.unwrap_or(current),
+                color: color::resolve(color, current),
             },
             Function::ChromaticAberration(offset) => Function::ChromaticAberration(*offset),
             Function::LensDistortion(k) => Function::LensDistortion(*k),
@@ -146,7 +146,7 @@ const NAMES: &str = "blur, brightness, contrast, drop-shadow, grayscale, hue-rot
 const SEED: (&str, bool, [f64; 2]) = ("the seed", false, [0.0, u32::MAX as f64]);
 
 /// `filter`: `none`, or functions separated by spaces.
-pub(super) fn filter(s: &str) -> Result<Vec<Function<Len, Option<Rgba>>>, String> {
+pub(super) fn filter(s: &str) -> Result<Vec<Function<Len, Option<color::Specified>>>, String> {
     match s {
         "none" => Ok(Vec::new()),
         "" => Err("\"\" is not a filter; use none".into()),
@@ -154,7 +154,7 @@ pub(super) fn filter(s: &str) -> Result<Vec<Function<Len, Option<Rgba>>>, String
     }
 }
 
-fn function(w: &str) -> Result<Function<Len, Option<Rgba>>, String> {
+fn function(w: &str) -> Result<Function<Len, Option<color::Specified>>, String> {
     let Some((name, inner)) = css::function(w) else {
         return Err(format!("{w} is not a filter function: {NAMES}"));
     };

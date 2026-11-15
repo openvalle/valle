@@ -133,7 +133,8 @@ impl<'a> Drawing<'a> {
                         let mut color = match r.fill.as_ref().unwrap_or(&s.fill) {
                             Paint::None => return None,
                             Paint::Color(c) => *c,
-                            Paint::CurrentColor => r.color.unwrap_or(s.color),
+                            Paint::Mixed(c) => c.resolve(color::resolve(&r.color, s.color)),
+                            Paint::CurrentColor => color::resolve(&r.color, s.color),
                             Paint::Url(_) => unreachable!(),
                         };
                         color[3] *= r.fill_opacity.unwrap_or(s.fill_opacity);
@@ -165,7 +166,7 @@ impl<'a> Drawing<'a> {
                 style.fill.clone_from(row.fill.as_ref().unwrap_or(&s.fill));
                 style.fill_opacity = row.fill_opacity.unwrap_or(s.fill_opacity);
                 style.even_odd = row.even_odd.unwrap_or(s.even_odd);
-                style.color = row.color.unwrap_or(s.color);
+                style.color = color::resolve(&row.color, s.color);
                 style.opacity = row.opacity;
                 style
                     .stroke
@@ -979,6 +980,7 @@ impl<'a> Drawing<'a> {
         let mut color = match paint {
             Paint::None => return None,
             Paint::Color(c) => *c,
+            Paint::Mixed(c) => c.resolve(s.color),
             Paint::CurrentColor => s.color,
             Paint::Url(id) => {
                 if self.ids.get(&**id).is_some_and(|&n| {
@@ -1122,9 +1124,10 @@ impl<'a> Drawing<'a> {
                     let Some(Element::Stop(offset)) = s.svg.as_deref().map(|c| &c.element) else {
                         continue;
                     };
-                    let mut color = match s.stop_color {
+                    let mut color = match &s.stop_color {
                         Paint::CurrentColor => s.color,
-                        Paint::Color(c) => c,
+                        Paint::Color(c) => *c,
+                        Paint::Mixed(c) => c.resolve(s.color),
                         _ => color::BLACK,
                     };
                     color[3] *= s.stop_opacity;

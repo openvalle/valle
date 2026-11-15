@@ -1728,11 +1728,11 @@ impl Painter<'_> {
             let drawn = |stroke: f32, color: [f32; 4], by: [f32; 2]| {
                 faces(glyphs, at, size, color, stroke, offset(by))
             };
-            let fill = work(s.font.fill.unwrap_or(s.color));
+            let fill = work(crate::style::color::resolve(&s.font.fill, s.color));
             let stroke = match s.font.stroke > 0.0 && s.font.size > 0.0 {
                 true => Some((
                     s.font.stroke as f32,
-                    work(s.font.stroke_color.unwrap_or(s.color)),
+                    work(crate::style::color::resolve(&s.font.stroke_color, s.color)),
                 )),
                 false => None,
             };
@@ -1779,7 +1779,10 @@ impl Painter<'_> {
                     .map(|m| Item::Path {
                         path: m.path.moved([at.x + by[0], at.y + by[1]]),
                         even_odd: false,
-                        color: color.unwrap_or(work(s.font.emphasis_color.unwrap_or(s.color))),
+                        color: color.unwrap_or(work(crate::style::color::resolve(
+                            &s.font.emphasis_color,
+                            s.color,
+                        ))),
                     })
                     .collect()
             };
@@ -2022,7 +2025,7 @@ impl Painter<'_> {
             _ => true,
         };
         for shadow in s.font.shadows.iter().rev() {
-            let color = work(shadow.color.unwrap_or(s.color));
+            let color = work(crate::style::color::resolve(&shadow.color, s.color));
             if color[3] <= 0.0 {
                 continue;
             }

@@ -337,7 +337,7 @@ fn repeating(w: &str) -> bool {
 /// `background`: layers separated by commas, each an image, a position with a size after a
 /// slash, a repeat, and a box for its origin and clip or two boxes, the origin's first, in any
 /// order, and the last a color too. What it leaves out is initial.
-pub(super) fn background(s: &str) -> Result<(Declared, Rgba), String> {
+pub(super) fn background(s: &str) -> Result<(Declared, color::Specified), String> {
     let layers = css::commas(s);
     if layers.is_empty() {
         return Err("\"\" is not a background; use none".into());
@@ -405,7 +405,7 @@ pub(super) fn background(s: &str) -> Result<(Declared, Rgba), String> {
                 i += 1;
                 continue;
             }
-            if let Ok(c) = color::parse(w) {
+            if let Ok(c) = color::Specified::parse(w) {
                 if n + 1 < layers.len() || color.is_some() {
                     return Err(not("only the last layer takes a color, and only one"));
                 }
@@ -441,7 +441,7 @@ pub(super) fn background(s: &str) -> Result<(Declared, Rgba), String> {
         d.clips
             .push(boxes.last().copied().unwrap_or(Area::BorderBox));
     }
-    Ok((d, color.unwrap_or(color::TRANSPARENT)))
+    Ok((d, color.unwrap_or_else(|| color::TRANSPARENT.into())))
 }
 
 #[cfg(test)]
@@ -462,7 +462,7 @@ mod tests {
                 &[],
             )
             .unwrap();
-        assert_eq!(color, [1.0; 4]);
+        assert_eq!(color.resolve(super::color::BLACK), [1.0; 4]);
         assert_eq!(layers.len(), 2);
         let ImageSize::Sized([Some(w), Some(h)]) = &layers[0].size else {
             panic!("size")

@@ -100,7 +100,7 @@ pub enum Hue {
 }
 
 /// An image as declared.
-pub(super) type Declared = Image<Len, Option<Rgba>, Rc<str>>;
+pub(super) type Declared = Image<Len, Option<color::Specified>, Rc<str>>;
 
 /// Stop positions and hints: px or percentages of the gradient line, either side of it.
 const POSITION: Accept = Accept {
@@ -169,7 +169,7 @@ fn url(args: &str) -> Result<Rc<str>, String> {
 }
 
 /// A linear gradient's arguments: which way it goes, its color space, and its stops.
-fn linear(args: &str, repeating: bool) -> Result<Gradient<Len, Option<Rgba>>, String> {
+fn linear(args: &str, repeating: bool) -> Result<Gradient<Len, Option<color::Specified>>, String> {
     let parts = css::commas(args);
     let (mut line, mut space) = (None, None);
     let mut stops = &parts[..];
@@ -208,7 +208,7 @@ fn gradient(
     repeating: bool,
     space: Option<Space>,
     (stops, legacy): (Stops, bool),
-) -> Result<Gradient<Len, Option<Rgba>>, String> {
+) -> Result<Gradient<Len, Option<color::Specified>>, String> {
     // Colors all written as sRGB was before color spaces mix in sRGB, as then; others, as CSS
     // Color 4 has it, in Oklab.
     let otherwise = if legacy { Space::Srgb } else { Space::Oklab };
@@ -257,7 +257,7 @@ fn center(words: &[&str], i: usize) -> Result<([Offset<Len>; 2], usize), String>
 
 /// A conic gradient's arguments: a color space, then the angle it starts from and its center,
 /// or the color space last, and its stops.
-fn conic(args: &str, repeating: bool) -> Result<Gradient<Len, Option<Rgba>>, String> {
+fn conic(args: &str, repeating: bool) -> Result<Gradient<Len, Option<color::Specified>>, String> {
     let parts = css::commas(args);
     let mut space = None;
     let (mut from, (mut at, _)) = (0.0, center(&[], 0)?);
@@ -295,7 +295,7 @@ fn conic(args: &str, repeating: bool) -> Result<Gradient<Len, Option<Rgba>>, Str
 
 /// A radial gradient's arguments: a color space, then its shape, its size and `at` its center,
 /// or the color space last, and its stops.
-fn radial(args: &str, repeating: bool) -> Result<Gradient<Len, Option<Rgba>>, String> {
+fn radial(args: &str, repeating: bool) -> Result<Gradient<Len, Option<color::Specified>>, String> {
     let parts = css::commas(args);
     let mut space = None;
     let (mut circle, mut size, mut radii) = (None, None, Vec::new());
@@ -442,7 +442,7 @@ const OTHER_SPACES: &[&str] = &[
 ];
 
 /// A gradient's color stops and hints, as declared; a color `None` is `currentcolor`.
-type Stops = Vec<Stop<Len, Option<Rgba>>>;
+type Stops = Vec<Stop<Len, Option<color::Specified>>>;
 
 /// Color stops, each a color and up to two positions, and hints, each a lone position between
 /// two stops; and whether the colors are all legacy sRGB ones, `currentcolor` too.
@@ -468,14 +468,14 @@ fn color_stops(
                     "currentcolor" => None,
                     c => {
                         legacy &= color::legacy(c);
-                        Some(color::wide(c)?)
+                        Some(color::Specified::parse(c)?)
                     }
                 };
                 if at.is_empty() {
-                    stops.push(Stop::Color(color, None));
+                    stops.push(Stop::Color(color.clone(), None));
                 }
                 for a in at {
-                    stops.push(Stop::Color(color, Some(position(a)?)));
+                    stops.push(Stop::Color(color.clone(), Some(position(a)?)));
                 }
             }
             _ => {
@@ -540,9 +540,10 @@ impl Declared {
                 space: g.space,
                 stops: (g.stops.iter())
                     .map(|s| match s {
-                        Stop::Color(c, at) => {
-                            Stop::Color(c.unwrap_or(current), at.as_ref().map(|l| l.calc(u)))
-                        }
+                        Stop::Color(c, at) => Stop::Color(
+                            c.as_ref().map_or(current, |c| c.wide(current)),
+                            at.as_ref().map(|l| l.calc(u)),
+                        ),
                         Stop::Hint(at) => Stop::Hint(at.calc(u)),
                     })
                     .collect(),
