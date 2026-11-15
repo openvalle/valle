@@ -106,7 +106,7 @@ pub(super) struct Bound {
     pub(super) text: bool,
     pub(super) textual: bool,
     /// Full declaration order only when a Text has flow-relative box properties.
-    logical: Vec<([Field; 2], Prop, Rc<str>, bool)>,
+    logical: Vec<([Field; 6], Prop, Rc<str>, bool)>,
     /// Each with what errors call it, and whether it is a presentation attribute.
     pub(super) rest: Vec<(Field, Prop, Rc<str>, bool)>,
     /// Where errors point.
@@ -413,24 +413,30 @@ impl Sheet {
             .writing
             .or(parent.map(|p| p.font.writing))
             .unwrap_or_default();
-        let declared = if writing != super::WritingMode::Horizontal && !b.logical.is_empty() {
-            let mut d = Declared::default();
-            let axis = usize::from(writing == super::WritingMode::VerticalLr);
-            for (field, prop, what, attribute) in &b.logical {
-                if frame.unsettled(prop) {
-                    continue;
+        let rtl = declared.rtl.or(parent.map(|p| p.font.rtl)).unwrap_or(false);
+        let declared =
+            if (writing != super::WritingMode::Horizontal || rtl) && !b.logical.is_empty() {
+                let mut d = Declared::default();
+                let axis = match writing {
+                    super::WritingMode::Horizontal => 0,
+                    super::WritingMode::VerticalRl => 2,
+                    super::WritingMode::VerticalLr => 4,
+                } + usize::from(rtl);
+                for (field, prop, what, attribute) in &b.logical {
+                    if frame.unsettled(prop) {
+                        continue;
+                    }
+                    let v = match prop {
+                        Prop::Const(v) => v,
+                        Prop::Expr(e) => &frame.values[*e as usize],
+                    };
+                    set(&mut d, field[axis], &presented(v, *attribute))
+                        .map_err(|e| format!("{}: {what}: {e}", b.place))?;
                 }
-                let v = match prop {
-                    Prop::Const(v) => v,
-                    Prop::Expr(e) => &frame.values[*e as usize],
-                };
-                set(&mut d, field[axis], &presented(v, *attribute))
-                    .map_err(|e| format!("{}: {what}: {e}", b.place))?;
-            }
-            Cow::Owned(d)
-        } else {
-            declared
-        };
+                Cow::Owned(d)
+            } else {
+                declared
+            };
         let (canvas, resources) = (frame.canvas, frame.resources);
         let mut base = b.base.borrow_mut();
         let kept = base.as_ref().and_then(|s| {
@@ -779,17 +785,24 @@ fn bind(
         ));
     }
     written.extend(classes.iter().filter(|d| d.important).map(class));
-    let logical = if matches!(node.kind, Kind::Text { .. })
-        && written.iter().any(|(key, ..)| {
-            Field::by_name(key)
-                .is_some_and(|f| f.vertical(key, true) != f || f.vertical(key, false) != f)
-        }) {
+    let modes = [
+        super::WritingMode::Horizontal,
+        super::WritingMode::VerticalRl,
+        super::WritingMode::VerticalLr,
+    ];
+    let logical = if written.iter().any(|(key, ..)| {
+        Field::by_name(key).is_some_and(|f| {
+            modes
+                .iter()
+                .any(|&m| [false, true].iter().any(|&rtl| f.flow(key, m, rtl) != f))
+        })
+    }) {
         written
             .iter()
             .filter_map(|(key, prop, what, attribute)| {
                 Field::by_name(key).map(|f| {
                     (
-                        [f.vertical(key, true), f.vertical(key, false)],
+                        std::array::from_fn(|k| f.flow(key, modes[k / 2], k % 2 == 1)),
                         prop.as_ref().clone(),
                         what.clone(),
                         *attribute,

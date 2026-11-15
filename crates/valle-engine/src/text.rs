@@ -9,6 +9,7 @@
 //! lines again. Its line boxes stack as Chrome stacks them, each from the paragraph's own font
 //! (CSS's strut) and the runs of glyphs on it.
 
+mod bidi;
 pub(crate) mod emphasis;
 mod vertical;
 
@@ -276,10 +277,18 @@ struct Ellipsis {
     advance: f32,
 }
 
+type ParagraphKey = (
+    bool,
+    crate::style::bidi::Bidi,
+    Vec<(Box<str>, Shaping, Rc<[crate::style::bidi::Scope]>)>,
+);
+
 /// A paragraph shaped: its glyph runs' brushes are the pieces they are in.
 struct Paragraph {
     layout: parley::Layout<u32>,
     string: Rc<str>,
+    source: Rc<str>,
+    map: bidi::Map,
     /// Nothing is left once white space collapses: no line boxes, as in CSS (parley still makes
     /// one line).
     empty: bool,
@@ -304,7 +313,7 @@ pub struct Text {
     fonts: FontContext,
     layouts: LayoutContext<u32>,
     /// By each piece's text and shaping.
-    paragraphs: HashMap<Vec<(Box<str>, Shaping)>, Paragraph>,
+    paragraphs: HashMap<ParagraphKey, Paragraph>,
     /// The ascent, descent and line gap of each font's first face, px.
     metrics: HashMap<Shaping, [f32; 3]>,
     ellipses: HashMap<Shaping, Ellipsis>,
@@ -646,7 +655,7 @@ impl Text {
         let marks = emphasis::shapes(self, content)?;
         let strut = self.strut(content.font)?;
         let p = self.paragraph(content, Some(width), false)?;
-        let string = p.string.clone();
+        let string = p.source.clone();
         if p.empty {
             return Ok(Lines {
                 glyphs: Vec::new(),
@@ -667,13 +676,21 @@ impl Text {
             },
         );
         let boxes = stack(&p.layout, content, strut, &marks, &p.string);
-        let text = p.layout.lines().map(|line| line.text_range()).collect();
+        let text = p
+            .layout
+            .lines()
+            .map(|line| {
+                let r = line.text_range();
+                p.map.at(r.start)..p.map.at(r.end)
+            })
+            .collect();
         let mut baselines = Vec::new();
         let mut runs = Vec::new();
         let mut shaped = Vec::new();
         for (i, (line, [top, _])) in p.layout.lines().zip(&boxes).enumerate() {
             let baseline = top + extent(&line, content, strut)[0];
             baselines.push(baseline);
+            let shift = bidi::shift(content.font, &line, &p.string);
             // Where each glyph's characters start: the clusters of a shaping run in visual
             // order, which its glyph runs on the line take one after another.
             let mut starts = Vec::new().into_iter();
@@ -694,26 +711,40 @@ impl Text {
                         .collect::<Vec<_>>()
                         .into_iter();
                 }
-                let mut x = run.offset();
+                let mut x = run.offset() + shift;
                 let mut glyphs = Vec::new();
                 for g in run.glyphs() {
                     let at = starts.next().unwrap_or(run.run().text_range().end as u32);
-                    glyphs.push((g.id, x + g.x, baseline + g.y, at));
+                    if !p.map.inserted(at as usize) {
+                        glyphs.push((g.id, x + g.x, baseline + g.y, p.map.at(at as usize) as u32));
+                    }
                     x += g.advance;
                 }
                 runs.push(Run {
                     node,
                     line: i as u32,
-                    x: [run.offset(), x],
+                    x: [run.offset() + shift, x],
                     glyphs: [0, 0],
                 });
                 shaped.push((face, node, glyphs));
             }
             // White space that hangs past the end of the line is not in its runs' boxes.
             let mut hanging = line.metrics().hanging_advance;
-            for run in runs.iter_mut().rev().take_while(|r| r.line == i as u32) {
+            let rtl = if content.font.bidi == crate::style::bidi::Bidi::Plaintext {
+                bidi::direction(&p.string, line.text_range().start)
+            } else {
+                content.font.rtl
+            };
+            let first = runs.partition_point(|r| r.line < i as u32);
+            for k in 0..runs.len() - first {
+                let index = if rtl { first + k } else { runs.len() - 1 - k };
+                let run = &mut runs[index];
                 let cut = hanging.min(run.x[1] - run.x[0]);
-                run.x[1] -= cut;
+                if rtl {
+                    run.x[0] += cut;
+                } else {
+                    run.x[1] -= cut;
+                }
                 hanging -= cut;
             }
         }
@@ -1002,9 +1033,21 @@ impl Text {
         width: Option<f32>,
         min: bool,
     ) -> Result<&mut Paragraph, Error> {
-        let key: Vec<(Box<str>, Shaping)> = (content.pieces.iter())
-            .map(|p| (p.text.as_ref().into(), Shaping::of(p.font, min)))
-            .collect();
+        let key: ParagraphKey = (
+            content.font.rtl,
+            content.font.bidi,
+            content
+                .pieces
+                .iter()
+                .map(|p| {
+                    (
+                        p.text.as_ref().into(),
+                        Shaping::of(p.font, min),
+                        p.font.bidi_scopes.clone(),
+                    )
+                })
+                .collect(),
+        );
         if !self.paragraphs.contains_key(&key) {
             for piece in &content.pieces {
                 self.give(piece.font)?;
@@ -1012,12 +1055,27 @@ impl Text {
             let pieces = (content.pieces.iter())
                 .map(|p| (p.text.as_ref(), p.font.collapse, p.font.transform));
             let (string, ranges) = prepare(pieces)?;
+            let bidi::Input {
+                source,
+                text: string,
+                ranges,
+                map,
+            } = bidi::Input::new(string, ranges, content);
             self.give_fallbacks(&string)?;
             let families = (content.pieces.iter())
                 .map(|p| families(&p.font.family, &self.named))
                 .collect::<Result<Vec<_>, _>>()?;
             let firsts: Vec<_> = families.iter().map(|f| emoji_first(f)).collect();
             let mut builder = (self.layouts).ranged_builder(&mut self.fonts, &string, 1.0, false);
+            builder.set_base_direction(
+                if content.font.bidi == crate::style::bidi::Bidi::Plaintext {
+                    parley::BaseDirection::Auto
+                } else if content.font.rtl {
+                    parley::BaseDirection::Rtl
+                } else {
+                    parley::BaseDirection::Ltr
+                },
+            );
             for (k, (piece, range)) in content.pieces.iter().zip(ranges).enumerate() {
                 if range.is_empty() {
                     continue;
@@ -1066,7 +1124,7 @@ impl Text {
                         }
                     }
                 }
-                let wrap = match key[k].1.overflow_wrap {
+                let wrap = match key.2[k].1.overflow_wrap {
                     OverflowWrap::Normal => parley::OverflowWrap::Normal,
                     OverflowWrap::Anywhere => parley::OverflowWrap::Anywhere,
                     OverflowWrap::BreakWord => parley::OverflowWrap::BreakWord,
@@ -1097,8 +1155,10 @@ impl Text {
             covered(&layout, &string)?;
             let paragraph = Paragraph {
                 layout,
-                empty: string.is_empty(),
-                string: string.into(),
+                empty: source.is_empty(),
+                source,
+                map,
+                string,
                 broken: None,
                 used: false,
             };
@@ -1612,6 +1672,9 @@ mod tests {
             line_break: parley::LineBreak::Strict,
             writing: WritingMode::Horizontal,
             orientation: crate::style::Orientation::Mixed,
+            rtl: false,
+            bidi: Default::default(),
+            bidi_scopes: Rc::new([]),
             combine: None,
             emphasis: crate::style::emphasis::Mark::None,
             emphasis_color: None,

@@ -1,0 +1,79 @@
+<!doctype html><meta charset="utf-8" /><style>
+  @font-face {
+    font-family: Latin;
+    src: url("/tests/resources/NotoSans.ttf");
+  }
+  @font-face {
+    font-family: Hebrew;
+    src: url("/tests/resources/NotoSansHebrew.ttf");
+  }
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+  }
+  #canvas {
+    position: relative;
+    width: 640px;
+    height: 410px;
+    background: white;
+  }
+</style>
+<div id="canvas">
+  <!-- prettier-ignore -->
+  <div style="position:absolute;left:16px;top:16px;width:350px;font-family:Latin, Hebrew;font-size:24px;line-height:36px;color:#17365d;direction:ltr">ABC אבג 123.</div>
+  <!-- prettier-ignore -->
+  <div style="position:absolute;left:16px;top:64px;width:350px;font-family:Latin, Hebrew;font-size:24px;line-height:36px;color:#17365d;direction:rtl">ABC אבג 123.</div>
+  <!-- prettier-ignore -->
+  <div style="position:absolute;left:16px;top:112px;width:350px;font-family:Latin, Hebrew;font-size:24px;line-height:36px;color:#17365d;direction:rtl;unicode-bidi:bidi-override">ABC 123.</div>
+  <!-- prettier-ignore -->
+  <div style="position:absolute;left:16px;top:160px;width:350px;font-family:Latin, Hebrew;font-size:24px;line-height:36px;color:#17365d">LEFT [<span style="direction:rtl;unicode-bidi:isolate">אבג 123</span>] RIGHT</div>
+  <!-- prettier-ignore -->
+  <div style="position:absolute;left:16px;top:208px;width:350px;font-family:Latin, Hebrew;font-size:24px;line-height:36px;color:#17365d">LEFT [<span style="direction:rtl;unicode-bidi:isolate-override">abc 123</span>] RIGHT</div>
+  <!-- prettier-ignore -->
+  <div style="position:absolute;left:16px;top:256px;width:350px;font-family:Latin, Hebrew;font-size:24px;line-height:36px;color:#17365d">L <span style="direction:rtl;unicode-bidi:embed">אבג (123)</span> R</div>
+  <!-- prettier-ignore -->
+  <div style="position:absolute;left:16px;top:304px;width:350px;font-family:Latin, Hebrew;font-size:24px;line-height:36px;color:#17365d;direction:rtl;unicode-bidi:plaintext;white-space:pre">ABC 123
+אבג 123</div>
+  <div
+    style="
+      position: absolute;
+      left: 400px;
+      top: 20px;
+      width: 210px;
+      height: 70px;
+      direction: rtl;
+      display: flex;
+      gap: 8px;
+      padding-inline: 12px 4px;
+      background: #f1f5f9;
+      border-inline-start: 4px solid crimson;
+      border-start-start-radius: 16px;
+    "
+  >
+    <div style="width: 30px; height: 30px; background: #2563eb"></div>
+    <div style="width: 40px; height: 30px; background: #eab308"></div>
+  </div>
+  <div
+    style="
+      position: absolute;
+      left: 420px;
+      top: 130px;
+      width: 160px;
+      height: 40px;
+      font-family: Latin;
+      font-size: 24px;
+      direction: rtl;
+      padding-inline-start: 12px;
+      border-inline-start: 3px solid crimson;
+      background: #f1f5f9;
+    "
+  >
+    Start 123
+  </div>
+  <!-- prettier-ignore -->
+  <div style="position:absolute;left:420px;top:210px;width:60px;height:160px;font-family:Latin;font-size:24px;line-height:40px;direction:rtl;writing-mode:vertical-rl;padding-inline:8px 12px;border-inline-start:2px solid crimson;background:#f1f5f9">ABC 12</div>
+  <!-- prettier-ignore -->
+  <div style="position:absolute;left:520px;top:210px;width:60px;height:160px;font-family:Latin;font-size:24px;line-height:40px;direction:ltr;writing-mode:vertical-rl;padding-inline:8px 12px;border-inline-start:2px solid crimson;background:#f1f5f9">ABC 12</div>
+</div>

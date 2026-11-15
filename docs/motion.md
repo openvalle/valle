@@ -277,6 +277,31 @@ and text clips. Adjacent lines gain space when necessary; marks on the first and
 last lines can extend outside the text box. Use explicit roomy `lineHeight` when
 matching layouts across browsers, whose annotation spacing and mark fonts differ.
 
+### Text direction
+
+`direction: "ltr" | "rtl"` inherits through boxes and text. It sets the inline
+start/end sides, flex/grid order, logical padding/margin/inset/border properties
+and `textAlign: "start" | "end"`. Physical `left`/`right` properties keep their
+meaning; normal declaration order decides conflicts with logical properties.
+
+`Text`/`Span` also accept `unicodeBidi`: `normal`, `embed`, `bidi-override`,
+`isolate`, `isolate-override` and `plaintext`. Unlike direction, this property
+does not inherit. An enclosing inline scope still applies inside its spans.
+Use isolation for a name or number whose direction should not affect surrounding
+punctuation; use `plaintext` to infer the direction of each preserved paragraph.
+New `Text` blocks establish separate paragraphs.
+
+```tsx
+<Text style={{ fontFamily: "Hebrew, sans-serif", direction: "rtl", textAlign: "start" }}>
+  פרק <Span style={{ direction: "ltr", unicodeBidi: "isolate" }}>Valle 2026</Span>
+</Text>
+```
+
+Declare a font resource containing the needed script; bidi layout does not add
+new built-in fallback fonts. Source character offsets remain unchanged by the
+internal bidi controls. SVG `direction`/`unicodeBidi` attributes are not included
+in this Text/Span implementation.
+
 ### Paragraph alignment and wrapping
 
 `textAlignLast` sets alignment on the last line of each paragraph, including a line

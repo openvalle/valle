@@ -8,6 +8,7 @@
 //! why and what to write instead.
 
 pub mod background;
+pub(crate) mod bidi;
 mod cache;
 pub mod color;
 mod computed;

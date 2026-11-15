@@ -5,6 +5,9 @@ the Rust text renderer and the browser's `@font-face`. Their URLs and SHA-256
 hashes come directly from `BUILT_IN` in
 [`text.rs`](../../crates/valle-engine/src/text.rs). The SIL Open Font License 1.1
 is retained in `OFL.txt`.
+`NotoSansHebrew.ttf` is also generated and ignored: its pinned Google Fonts URL
+and SHA-256 live in `crates/valle-engine/tests/cases/fonts.rs`. It is a declared
+resource for bidi tests, not an additional built-in production fallback.
 
 Scene tests and `bun tests/tools/browser.ts` prepare these files automatically.
 To prepare them alone, run `cargo xtask fonts` from the repository root.

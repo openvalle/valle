@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/css-writing-modes-3/#text-direction",
+  "assertion": "Direction sets paragraph alignment, mixed-script ordering, flex order and logical box sides. CSS embedding, overrides, isolates and plaintext preserve source indices and scope boundaries.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All three browsers agree on text ordering, per-paragraph plaintext alignment and RTL box geometry. Reviewed native and difference images: those semantics match; 7883 changed pixels (maximum 177) are glyph contours/subpixel rasterization and the rounded border edge. Numerical tests separately cover bidi clusters, original UTF-8 offsets, newlines, logical-side cascade, flex order, vertical alignment and backward seeks.",
+    "pixels": {
+      "maxDifference": 180,
+      "maxPixels": 8000
+    }
+  }
+}

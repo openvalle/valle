@@ -203,6 +203,8 @@ pub(super) struct Declared {
     pub(super) line_break: Option<parley::LineBreak>,
     pub(super) writing: Option<WritingMode>,
     pub(super) orientation: Option<Orientation>,
+    pub(super) rtl: Option<bool>,
+    pub(super) bidi: Option<super::bidi::Bidi>,
     pub(super) combine: Option<bool>,
     /// `normal` is `Auto`, 0.
     pub(super) text_indent: Option<Len>,
@@ -345,6 +347,8 @@ impl Default for Declared {
             line_break: None,
             writing: None,
             orientation: None,
+            rtl: None,
+            bidi: None,
             combine: None,
             text_indent: None,
             letter_spacing: None,
@@ -554,6 +558,7 @@ pub(super) fn named(which: Sides) -> &'static [usize] {
         S::Inline => &[3, 1],
         S::Block => &[0, 2],
         S::RightLeft => &[1, 3],
+        S::BottomTop => &[2, 0],
     }
 }
 
@@ -1385,6 +1390,21 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
             )?)
         }
         F::TextCombineUpright => d.combine = Some(keyword(v, &[("none", false), ("all", true)])?),
+        F::Direction => d.rtl = Some(keyword(v, &[("ltr", false), ("rtl", true)])?),
+        F::UnicodeBidi => {
+            use super::bidi::Bidi;
+            d.bidi = Some(keyword(
+                v,
+                &[
+                    ("normal", Bidi::Normal),
+                    ("embed", Bidi::Embed),
+                    ("bidi-override", Bidi::Override),
+                    ("isolate", Bidi::Isolate),
+                    ("isolate-override", Bidi::IsolateOverride),
+                    ("plaintext", Bidi::Plaintext),
+                ],
+            )?);
+        }
         F::TextOrientation => {
             d.orientation = Some(keyword(
                 v,

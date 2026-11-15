@@ -492,6 +492,24 @@ pub(super) fn compute(
         None => inherited.size,
         Some(l) => l.px(units(inherited.size), inherited.size),
     };
+    let rtl = d.rtl.unwrap_or(inherited.rtl);
+    let bidi = d.bidi.unwrap_or_default();
+    // A Text establishes a new bidi paragraph; ancestor block scopes do not cross
+    // that boundary. Spans retain the active inline scopes of their paragraph.
+    let scopes = if text {
+        Rc::new([])
+    } else {
+        inherited.bidi_scopes.clone()
+    };
+    let bidi_scopes = if bidi == super::bidi::Bidi::Normal {
+        scopes
+    } else {
+        scopes
+            .iter()
+            .copied()
+            .chain([super::bidi::Scope { node, bidi, rtl }])
+            .collect()
+    };
     let font = Font {
         size,
         weight: match d.font_weight {
@@ -517,6 +535,9 @@ pub(super) fn compute(
         line_break: d.line_break.unwrap_or(inherited.line_break),
         writing: d.writing.unwrap_or(inherited.writing),
         orientation: d.orientation.unwrap_or(inherited.orientation),
+        rtl,
+        bidi,
+        bidi_scopes,
         combine: d
             .combine
             .map(|v| v.then_some(node))
@@ -664,6 +685,11 @@ pub(super) fn compute(
     };
     let layout: taffy::Style = taffy::Style {
         display,
+        direction: if rtl {
+            taffy::Direction::Rtl
+        } else {
+            taffy::Direction::Ltr
+        },
         position: d.position,
         overflow: taffy::Point { x, y },
         inset: l.rect(&d.inset, Lengths::lpa),

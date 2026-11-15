@@ -21,6 +21,10 @@ pub fn prepare() -> Result<(), String> {
                     .ok_or_else(|| format!("test font {file} is not a built-in font"))?;
                 materialize(font, &cache, &dir)?;
             }
+            materialize(&BuiltIn {
+                name: "Noto Sans Hebrew", file: "NotoSansHebrew.ttf",
+                url: "https://fonts.gstatic.com/s/notosanshebrew/v50/or3HQ7v33eiDljA1IufXTtVf7V6RvEEdhQlk0LlGxCyaeNKYZC0sqk3xXGiXd4qtog.ttf", sha256: "a5cc5ce90ed4f6393992728fcc63657c4dd83aed119acbd5f4ed223e40c71129", size: 46496,
+            }, &cache, &dir)?;
             Ok(())
         })
         .clone()

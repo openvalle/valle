@@ -262,6 +262,8 @@ pub(super) enum Field {
     LineBreak,
     WritingMode,
     TextOrientation,
+    Direction,
+    UnicodeBidi,
     TextCombineUpright,
     TextIndent,
     LetterSpacing,
@@ -322,12 +324,13 @@ pub(super) enum Sides {
     BlockStart,
     BlockEnd,
     RightLeft,
+    BottomTop,
 }
 
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 273] = [
+const FIELDS: [(&str, Field); 275] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -692,6 +695,8 @@ const FIELDS: [(&str, Field); 273] = [
     ("lineBreak", Field::LineBreak),
     ("writingMode", Field::WritingMode),
     ("textOrientation", Field::TextOrientation),
+    ("direction", Field::Direction),
+    ("unicodeBidi", Field::UnicodeBidi),
     ("textCombineUpright", Field::TextCombineUpright),
     ("textIndent", Field::TextIndent),
     ("letterSpacing", Field::LetterSpacing),
@@ -917,6 +922,52 @@ impl Field {
         }
     }
 
+    /// Resolve logical properties in writing-mode/direction while leaving physical
+    /// declarations alone; replaying written order preserves the cascade.
+    pub(super) fn flow(self, key: &str, mode: super::WritingMode, rtl: bool) -> Self {
+        use Sides as S;
+        let vertical = mode != super::WritingMode::Horizontal;
+        let mapped = if vertical {
+            self.vertical(key, mode == super::WritingMode::VerticalRl)
+        } else {
+            self
+        };
+        if !rtl {
+            return mapped;
+        }
+        let side = |s| match s {
+            S::Inline => Some(if vertical { S::BottomTop } else { S::RightLeft }),
+            S::InlineStart => Some(if vertical { S::Bottom } else { S::Right }),
+            S::InlineEnd => Some(if vertical { S::Top } else { S::Left }),
+            _ => None,
+        };
+        match self {
+            Self::Inset(s) if side(s).is_some() => Self::Inset(side(s).unwrap()),
+            Self::Margin(s) if side(s).is_some() => Self::Margin(side(s).unwrap()),
+            Self::Padding(s) if side(s).is_some() => Self::Padding(side(s).unwrap()),
+            Self::Border(s, p) if side(s).is_some() => Self::Border(side(s).unwrap(), p),
+            Self::CornerRadius(_)
+                if matches!(
+                    key,
+                    "borderStartStartRadius"
+                        | "borderStartEndRadius"
+                        | "borderEndStartRadius"
+                        | "borderEndEndRadius"
+                ) =>
+            {
+                let Self::CornerRadius(k) = mapped else {
+                    unreachable!()
+                };
+                Self::CornerRadius(if vertical {
+                    [3, 2, 1, 0][k]
+                } else {
+                    [1, 0, 3, 2][k]
+                })
+            }
+            _ => mapped,
+        }
+    }
+
     /// Whether it styles text, as a Span takes it.
     pub(super) fn textual(self) -> bool {
         matches!(
@@ -937,6 +988,8 @@ impl Field {
                 | Field::LineBreak
                 | Field::WritingMode
                 | Field::TextOrientation
+                | Field::Direction
+                | Field::UnicodeBidi
                 | Field::TextCombineUpright
                 | Field::TextIndent
                 | Field::LetterSpacing

@@ -124,7 +124,8 @@ fn layout(
     let mut font = content.font.clone();
     font.emphasis = crate::style::emphasis::Mark::None;
     font.writing = WritingMode::Horizontal;
-    font.align = TextAlign::Start;
+    font.align = TextAlign::Left;
+    font.align_last = None;
     font.indent = None;
     let horizontal = Content {
         font: &font,
@@ -140,11 +141,11 @@ fn layout(
             .collect(),
         clamp: None,
     };
-    let breaks: HashSet<_> = text
-        .paragraph(&horizontal, Some(0.0), true)?
+    let paragraph = text.paragraph(&horizontal, Some(0.0), true)?;
+    let breaks: HashSet<_> = paragraph
         .layout
         .lines()
-        .map(|line| line.text_range().end)
+        .map(|line| paragraph.map.at(line.text_range().end))
         .collect();
     let base = text.lines(&horizontal, f32::MAX)?;
     let mut out = Lines {
@@ -440,7 +441,9 @@ fn layout(
                 content.font.align
             };
             let alignment = match align {
-                TextAlign::End | TextAlign::Right => extra,
+                TextAlign::Start if content.font.rtl => extra,
+                TextAlign::End if !content.font.rtl => extra,
+                TextAlign::Right => extra,
                 TextAlign::Center => extra * 0.5,
                 _ => 0.0,
             };
