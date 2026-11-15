@@ -86,11 +86,13 @@ pub fn definition(attributes: &[(&str, &V)]) -> Result<Definition, String> {
         )),
     };
     let mut region = [Length {
+        em: 0.0,
         units: 0.0,
         percent: -10.0,
     }; 4];
     for (i, name) in ["x", "y", "width", "height"].into_iter().enumerate() {
         region[i] = a.length(name)?.unwrap_or(Length {
+            em: 0.0,
             units: 0.0,
             percent: if i < 2 { -10.0 } else { 120.0 },
         });

@@ -511,6 +511,11 @@ impl Sheet {
                 style.non_scaling_stroke = parent.is_some_and(|p| p.non_scaling_stroke);
             }
             let mut svg = g.computed(frame).map_err(|e| format!("{}: {e}", b.place))?;
+            if svg.font_relative {
+                let c = Rc::make_mut(&mut svg);
+                c.element.resolve_font(style.font.size);
+                c.font_relative = false;
+            }
             if declared.transform_set && svg.transform.is_some() {
                 Rc::make_mut(&mut svg).transform = None;
             }

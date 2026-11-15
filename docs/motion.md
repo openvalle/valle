@@ -381,6 +381,9 @@ content by default; `style={{ overflow: "visible" }}` shows it outside the viewp
 Nested SVG accepts transforms and can contain further nested viewports. The same
 rules apply when loading an SVG file.
 
+SVG geometry lengths accept `em`, resolved against the element's computed font size.
+Inherited fonts, `use` instances and nested viewports keep the same rule.
+
 SVG image resources also work in `backgroundImage: "url(resource://icon)"`.
 `backgroundSize`, positioning, repeat, origin, clip, rounded corners and blending
 follow the same rules as raster backgrounds. A viewBox-only SVG supplies an
@@ -433,7 +436,7 @@ declaration overrides the attribute.
 
 `<text>` sets a baseline position with `x` and `y`; `<tspan>` changes its font or
 paint and continues at the current text position. `x`, `y`, `dx`, `dy` and `rotate`
-accept SVG number lists (lengths can also use px or percentages). A final `rotate`
+accept SVG number lists (lengths can also use px, em or percentages). A final `rotate`
 value continues for the remaining characters. Fonts are the same bundled or
 resource fonts used by `<Text>`, including weight, style, OpenType features and
 letter spacing. SVG text paints with `fill` and `stroke`, not CSS `color`.

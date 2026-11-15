@@ -179,6 +179,7 @@ impl<'a> Drawing<'a> {
                     .clone_from(row.stroke.as_ref().unwrap_or(&s.stroke.paint));
                 style.stroke.opacity = row.stroke_opacity.unwrap_or(s.stroke.opacity);
                 let shape = svg::Computed {
+                    font_relative: false,
                     element: Element::Shape(row.shape.clone()),
                     transform: c.transform,
                     path_length: c.path_length,

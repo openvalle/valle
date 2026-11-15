@@ -90,21 +90,34 @@ impl Document {
         let Out {
             nodes, embedded, ..
         } = out;
-        let natural = natural(sides(&xml, root)?, root.attribute("viewBox"));
+        let mut natural_size = natural(sides(&xml, root, 16.0)?, root.attribute("viewBox"));
         let template = Template {
             nodes,
             roots: vec![0],
             ..Template::default()
         };
-        let viewport = match natural {
+        let viewport = match natural_size {
             Natural::Size(size) => size,
             Natural::Ratio(_) => [300.0, 150.0],
         };
-        let styles = Sheet::new(&template)?.compute(&[], true, viewport, &[])?;
+        let sheet = Sheet::new(&template)?;
+        let mut styles = sheet.compute(&[], true, viewport, &[])?;
+        let resolved = natural(
+            sides(&xml, root, styles[0].font.size)?,
+            root.attribute("viewBox"),
+        );
+        if resolved != natural_size {
+            natural_size = resolved;
+            let viewport = match natural_size {
+                Natural::Size(size) => size,
+                Natural::Ratio(_) => [300.0, 150.0],
+            };
+            styles = sheet.compute(&[], true, viewport, &[])?;
+        }
         Ok(Document {
             template,
             styles,
-            natural,
+            natural: natural_size,
             embedded,
         })
     }
@@ -358,9 +371,16 @@ fn camel(name: &str) -> String {
 }
 
 /// The width and height of an SVG file with root `x` in px, those in absolute units.
-fn sides(xml: &roxmltree::Document, x: Xml) -> Result<[Option<f32>; 2], String> {
+fn sides(xml: &roxmltree::Document, x: Xml, font: f64) -> Result<[Option<f32>; 2], String> {
     let side = |name: &str| match x.attribute(name) {
-        Some(v) => absolute(v).map_err(|e| format!("{}: <svg> {name}: {e}", place(xml, x))),
+        Some(v) => (match v.trim().strip_suffix("em") {
+            Some(n) => match n.parse::<f64>() {
+                Ok(n) if n.is_finite() && n >= 0.0 => Ok(Some((n * font) as f32)),
+                _ => Err(format!("{v} is not a nonnegative em length")),
+            },
+            None => absolute(v),
+        })
+        .map_err(|e| format!("{}: <svg> {name}: {e}", place(xml, x))),
         None => Ok(None),
     };
     Ok([side("width")?, side("height")?])
@@ -567,10 +587,13 @@ mod tests {
         assert_eq!(ratio, Natural::Ratio(Some(4.0)));
         assert_eq!(natural(""), Natural::Ratio(None));
         assert_eq!(natural(r#"viewBox="0 0 0 10""#), Natural::Ratio(None));
-        let e = error(r#"<svg xmlns="http://www.w3.org/2000/svg" width="2em"/>"#);
-        assert!(
-            e.starts_with("1:1: <svg> width: 2em is not a length"),
-            "{e}"
+        assert_eq!(
+            natural(r#"width="2em" font-size="24""#),
+            Natural::Size([48.0, 150.0])
+        );
+        assert_eq!(
+            natural(r#"width="2em" style="font-size:32px""#),
+            Natural::Size([64.0, 150.0])
         );
     }
 

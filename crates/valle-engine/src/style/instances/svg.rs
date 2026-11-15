@@ -203,6 +203,9 @@ impl Table {
             if computed.inherit_opacity {
                 computed.opacity = parent.map_or(1.0, |p| p.opacity);
             }
+            computed
+                .shape
+                .resolve_font(parent.map_or(16.0, |p| p.font.size));
             rows.push(computed);
         }
         Ok(Rc::new(rows))
@@ -239,6 +242,30 @@ mod tests {
             crate::testing::fonts(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn em_geometry_tracks_inherited_font_size_in_tables_and_ordinary_nodes() {
+        run(|| {
+            let source = r#"
+                export default function Scene() {
+                    const {seconds:t} = useCurrentTime();
+                    return <svg width={320} height={180}>
+                        <g fontSize={20 + t * 10}>
+                            {[0,1,2].map(i=><rect x={`${i * 3}em`} y="1em" width="2em" height="1em"/>)}
+                        </g>
+                    </svg>;
+                }
+            "#;
+            let mut table = load(source, false);
+            let mut ordinary = load(source, true);
+            for second in [0, 1, 2, 0] {
+                let t = Tick::parse_seconds(&second.to_string()).unwrap();
+                let a = table.frame(t).unwrap();
+                let b = ordinary.frame(t).unwrap();
+                assert_eq!(a.items, b.items);
+            }
+        });
     }
 
     fn dots(attributes: &str, parent: &str, wrapper: &str) -> String {

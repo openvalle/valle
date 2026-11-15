@@ -3,6 +3,7 @@
 
 pub mod file;
 pub mod filter;
+mod length;
 mod template;
 pub(crate) mod text;
 
@@ -19,27 +20,7 @@ use crate::style::gradient::Space;
 use crate::style::{Cap, Join};
 use crate::template::{Tag, V};
 
-/// An SVG length: user units, and a percentage of the viewport's width, height or normalized
-/// diagonal, as the attribute measures.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Length {
-    pub units: f64,
-    pub percent: f64,
-}
-
-impl Length {
-    pub fn resolve(self, basis: f64) -> f64 {
-        self.units + self.percent / 100.0 * basis
-    }
-
-    pub(crate) fn nonnegative(self, name: &str) -> Result<Self, String> {
-        if self.units < 0.0 || self.percent < 0.0 {
-            Err(format!("{name} is negative"))
-        } else {
-            Ok(self)
-        }
-    }
-}
+pub use length::Length;
 
 /// How a viewBox fits its viewport (`preserveAspectRatio`): stretched to it (`align` `None`), or
 /// scaled evenly to fit in it or, with `slice`, to cover it, aligned on each axis at 0 (min), 0.5
@@ -236,6 +217,7 @@ pub struct Pattern {
 /// An element as its attributes have it at a frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Computed {
+    pub(crate) font_relative: bool,
     pub element: Element,
     /// Its `transform` attribute: from its user units to its parent's.
     pub transform: Option<Matrix>,
@@ -780,7 +762,7 @@ pub fn computed(
     };
     let transform =
         (text("transform").map(|t| transform(&t).map_err(at("transform")))).transpose()?;
-    let element = match tag {
+    let mut element = match tag {
         Tag::Filter => Element::Filter(filter::definition(attributes)?),
         Tag::FeGaussianBlur
         | Tag::FeOffset
@@ -926,6 +908,7 @@ pub fn computed(
         },
         Tag::Mask => {
             let percent = |percent| Length {
+                em: 0.0,
                 units: 0.0,
                 percent,
             };
@@ -962,6 +945,7 @@ pub fn computed(
         Tag::Marker => {
             let (view_box, fit) = fitting()?;
             let three = Length {
+                em: 0.0,
                 units: 3.0,
                 percent: 0.0,
             };
@@ -1060,7 +1044,10 @@ pub fn computed(
             _ => return Err(format!("pathLength {} is not a number above 0", v.text())),
         },
     };
+    let mut font_relative = false;
+    element.lengths(&mut |l| font_relative |= l.em != 0.0);
     Ok(Computed {
+        font_relative,
         element,
         transform,
         path_length,
@@ -1129,6 +1116,7 @@ pub(crate) fn length(v: &V) -> Result<Length, String> {
     let s = match v {
         V::Num(x) if x.is_finite() => {
             return Ok(Length {
+                em: 0.0,
                 units: *x,
                 percent: 0.0,
             });
@@ -1136,6 +1124,14 @@ pub(crate) fn length(v: &V) -> Result<Length, String> {
         V::Str(s) => s.trim(),
         _ => "",
     };
+    if let Some(number) = s.strip_suffix("em")
+        && let Some(&[n]) = path::numbers(number).as_deref()
+    {
+        return Ok(Length {
+            em: f64::from(n),
+            ..Length::default()
+        });
+    }
     let (number, percent) = match (s.strip_suffix('%'), s.strip_suffix("px")) {
         (Some(n), _) => (n, true),
         (None, Some(n)) => (n, false),
@@ -1143,15 +1139,17 @@ pub(crate) fn length(v: &V) -> Result<Length, String> {
     };
     match path::numbers(number).as_deref() {
         Some(&[n]) if percent => Ok(Length {
+            em: 0.0,
             units: 0.0,
             percent: f64::from(n),
         }),
         Some(&[n]) => Ok(Length {
+            em: 0.0,
             units: f64::from(n),
             percent: 0.0,
         }),
         _ => Err(format!(
-            "{} is not a length: a number, px or a percentage",
+            "{} is not a length: a number, px, em or a percentage",
             v.text()
         )),
     }
@@ -1637,6 +1635,7 @@ pub fn gradient(
     let (first, last) = (stops.first()?, stops.last()?);
     let color = |c: Rgba| c.map(|v| v as f32);
     let percent = |p| Length {
+        em: 0.0,
         units: 0.0,
         percent: p,
     };
@@ -1857,7 +1856,7 @@ mod tests {
         );
         for (tag, name, value, e) in [
             (Tag::Circle, "r", V::Num(-1.0), "r is negative"),
-            (Tag::Rect, "x", text("1em"), "x: 1em is not a length"),
+            (Tag::Rect, "x", text("1rem"), "x: 1rem is not a length"),
             (
                 Tag::Polyline,
                 "points",
@@ -2033,6 +2032,7 @@ mod tests {
         let clip = attributes(Tag::ClipPath, &[("transform", text("scale(2)"))]).unwrap();
         assert!(clip.transform.is_some());
         let percent = |percent| Length {
+            em: 0.0,
             units: 0.0,
             percent,
         };
@@ -2062,6 +2062,7 @@ mod tests {
         assert_eq!(
             m.region[0],
             Length {
+                em: 0.0,
                 units: 5.0,
                 percent: 0.0
             }

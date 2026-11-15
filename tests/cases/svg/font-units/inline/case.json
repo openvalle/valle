@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/coords.html#Units",
+  "assertion": "SVG em lengths use the computed font size, including use instance inheritance and nested viewBox scaling. Rectangles have widths 60,60,60,40,48,60 pixels.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three captures: inherited em sizes, use instance fonts and nested viewport scaling match the specified rectangle dimensions exactly. All browser pixels agree."
+  }
+}

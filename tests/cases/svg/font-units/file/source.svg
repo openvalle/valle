@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160" font-size="20">
+<defs><rect id="tile" width="2em" height="1em"/></defs>
+<g font-size="10"><rect x="1em" y="1em" width="6em" height="2em" fill="#2878b8"/></g>
+<g font-size="20"><rect x="5em" y="1em" width="3em" height="2em" fill="#d06030"/></g>
+<use href="#tile" x="20" y="90" font-size="30" fill="#2878b8"/>
+<use href="#tile" x="110" y="90" font-size="20" fill="#d06030"/>
+<rect x="200" y="90" width="1.5em" height="1em" font-size="32" fill="#309060"/>
+<svg x="200" y="10" width="100" height="60" viewBox="0 0 50 30" font-size="10"><rect width="3em" height="2em" fill="#309060"/></svg>
+</svg>

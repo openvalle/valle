@@ -1,0 +1,10 @@
+{
+  "size": [320, 160],
+  "sources": {
+    "tests/baselines/browser/svg/font-units/inline/scene.html": "1b2d1385e1d05fa0a239d8b3b54d7a8feea7d0cc02c8510eb3139cba8414f25b"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

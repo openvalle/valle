@@ -555,7 +555,11 @@ mod tests {
                 definition: Definition {
                     user_space: true,
                     primitive_user_space: true,
-                    region: [0., 0., 16., 16.].map(|units| Length { units, percent: 0. }),
+                    region: [0., 0., 16., 16.].map(|units| Length {
+                        units,
+                        percent: 0.,
+                        em: 0.,
+                    }),
                 },
                 nodes,
             }),
@@ -749,18 +753,22 @@ mod tests {
         close(&pixels[0..4], [255, 255, 255, 64]);
         red.region = [
             Some(Length {
+                em: 0.0,
                 units: 4.,
                 percent: 0.,
             }),
             Some(Length {
+                em: 0.0,
                 units: 4.,
                 percent: 0.,
             }),
             Some(Length {
+                em: 0.0,
                 units: 4.,
                 percent: 0.,
             }),
             Some(Length {
+                em: 0.0,
                 units: 4.,
                 percent: 0.,
             }),
@@ -783,7 +791,13 @@ mod tests {
             preserve_alpha: false,
         };
         let mut convolve = node(Operation::Convolve(kernel), &[2]);
-        convolve.region = [0., 0., 16., 16.].map(|units| Some(Length { units, percent: 0. }));
+        convolve.region = [0., 0., 16., 16.].map(|units| {
+            Some(Length {
+                units,
+                percent: 0.,
+                em: 0.,
+            })
+        });
         let pixels = draw(&mut renderer, vec![red.clone(), convolve], vec![]);
         close(
             &pixels[(4 * 16 + 2) * 4..(4 * 16 + 3) * 4],
