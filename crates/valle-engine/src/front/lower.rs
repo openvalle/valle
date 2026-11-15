@@ -782,13 +782,35 @@ pub fn variant(
                 }
             }
             "svg" => {
+                let at = || n.site.map_or("<feImage>".into(), |s| place(&At::Site(s)));
                 let tag = n.tag.as_deref().ok_or("an svg node without a tag")?;
+                let tag = Tag::by_name(tag).ok_or_else(|| format!("svg tag {tag}"))?;
+                let resource = if tag == Tag::FeImage {
+                    n.src
+                        .as_deref()
+                        .map(|name| image(name, &format!("{}: <feImage> href", at())))
+                        .transpose()?
+                } else {
+                    None
+                };
+                let mut attributes = n
+                    .attributes
+                    .ok_or("an svg node without attributes")?
+                    .into_iter()
+                    .filter(|(k, _)| {
+                        resource.is_none() || !matches!(k.as_str(), "href" | "xlinkHref")
+                    })
+                    .map(|(k, v)| Ok((Rc::from(k), prop(v)?)))
+                    .collect::<Result<Vec<_>, Error>>()?;
+                if let Some(resource) = resource {
+                    attributes.push((
+                        Rc::from("href"),
+                        Prop::Const(V::Str(format!("resource://{resource}").into())),
+                    ));
+                }
                 Kind::Svg {
-                    tag: Tag::by_name(tag).ok_or_else(|| format!("svg tag {tag}"))?,
-                    attributes: (n.attributes.ok_or("an svg node without attributes")?)
-                        .into_iter()
-                        .map(|(k, v)| Ok((Rc::from(k), prop(v)?)))
-                        .collect::<Result<_, Error>>()?,
+                    tag,
+                    attributes,
                     geometry: n
                         .geometry
                         .map(|v| {

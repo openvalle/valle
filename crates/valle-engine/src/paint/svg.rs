@@ -49,6 +49,7 @@ pub fn document(document: &Document, first: Rect, cache: &Cache) -> Option<Item>
         &document.template,
         &document.styles,
         &document.embedded,
+        &[],
         cache,
     );
     drawing.element(0, units, matrix, &mut items, None);
@@ -66,8 +67,9 @@ pub struct Drawing<'a> {
     styles: &'a [Style],
     /// Its elements by id: as Chrome finds them in its document, the first of each.
     ids: HashMap<&'a str, usize>,
-    /// The images a file's `<image>`s show.
+    /// External images loaded by an SVG file's image elements and filter primitives.
     embedded: &'a [Embedded],
+    pictures: &'a [Picture],
     /// The masks and markers what is drawing is in, innermost last.
     resources: RefCell<Vec<usize>>,
 }
@@ -77,6 +79,7 @@ impl<'a> Drawing<'a> {
         template: &'a Template,
         styles: &'a [Style],
         embedded: &'a [Embedded],
+        pictures: &'a [Picture],
         cache: &'a Cache,
     ) -> Drawing<'a> {
         let mut ids = HashMap::new();
@@ -91,6 +94,7 @@ impl<'a> Drawing<'a> {
             styles,
             ids,
             embedded,
+            pictures,
             resources: RefCell::new(Vec::new()),
         }
     }
@@ -426,9 +430,12 @@ impl<'a> Drawing<'a> {
             else {
                 return;
             };
+            let bbox = self.bbox(i, size, copy).unwrap_or([0.; 4]);
+            let images = self.filter_images(&graph, bbox, size, matrix);
             items = vec![Item::FilterGraph {
                 graph,
-                bbox: self.bbox(i, size, copy).unwrap_or([0.0; 4]),
+                images,
+                bbox,
                 viewport: size,
                 items,
             }];
@@ -677,6 +684,120 @@ impl<'a> Drawing<'a> {
             }
             _ => None,
         }
+    }
+
+    /// Paint only image primitives which contribute to the graph, in its user coordinates.
+    fn filter_images(
+        &self,
+        graph: &svg::filter::Graph,
+        bbox: [f64; 4],
+        size: [f64; 2],
+        matrix: Matrix,
+    ) -> Vec<(usize, Vec<Item>)> {
+        let regions = graph.regions(bbox, size);
+        let needed = graph.needed();
+        let mut images = Vec::new();
+        for (index, node) in graph.nodes.iter().enumerate() {
+            let svg::filter::Operation::Image(image) = &node.op else {
+                continue;
+            };
+            if !needed[index + 2] {
+                continue;
+            }
+            let region = regions[index + 2];
+            let mut items = Vec::new();
+            if region[2] <= 0. || region[3] <= 0. {
+                images.push((index, items));
+                continue;
+            }
+            if let Some(id) = image.href.strip_prefix('#') {
+                let Some(&source) = self.ids.get(id) else {
+                    continue;
+                };
+                if self.resources.borrow().contains(&source) {
+                    continue;
+                }
+                self.resources.borrow_mut().push(source);
+                let units = if graph.definition.primitive_user_space {
+                    [1.; 2]
+                } else {
+                    [bbox[2], bbox[3]]
+                };
+                let placement = Matrix::affine([units[0], 0., 0., units[1], region[0], region[1]]);
+                let viewport = [region[2] / units[0], region[3] / units[1]];
+                let mut drawn = Vec::new();
+                if let Some(Element::Symbol { view_box, fit }) =
+                    self.styles[source].svg.as_deref().map(|s| &s.element)
+                {
+                    let view =
+                        view_box.map_or(Matrix::IDENTITY, |b| svg::viewport(b, *fit, viewport));
+                    let space = view_box.map_or(viewport, |b| [b[2], b[3]]);
+                    for &child in &self.template.nodes[source].children {
+                        self.element(
+                            child as usize,
+                            space,
+                            matrix.times(placement).times(view),
+                            &mut drawn,
+                            None,
+                        );
+                    }
+                    drawn = vec![Item::Transform {
+                        matrix: view,
+                        items: drawn,
+                    }];
+                } else {
+                    self.element(source, viewport, matrix.times(placement), &mut drawn, None);
+                }
+                self.resources.borrow_mut().pop();
+                items.push(Item::Transform {
+                    matrix: placement,
+                    items: drawn,
+                });
+            } else {
+                let picture = match image
+                    .href
+                    .strip_prefix("resource://")
+                    .and_then(|s| s.parse::<usize>().ok())
+                {
+                    Some(resource) => self.pictures.get(resource),
+                    None => self
+                        .embedded
+                        .iter()
+                        .find(|e| e.node as usize == image.node)
+                        .map(|e| &e.picture),
+                };
+                if let Some(picture) = picture {
+                    let [nw, nh] = match picture.natural() {
+                        Natural::Size(s) => s.map(f64::from),
+                        Natural::Ratio(r) => [150. * f64::from(r.unwrap_or(2.)), 150.],
+                    };
+                    if nw > 0. && nh > 0. {
+                        let placed = Matrix::translate(region[0], region[1]).times(svg::viewport(
+                            [0., 0., nw, nh],
+                            image.fit,
+                            [region[2], region[3]],
+                        ));
+                        let first = rect(mapped(placed, [0., 0., nw, nh]));
+                        match picture {
+                            Picture::Image { image: texture, .. } => items.push(Item::Image {
+                                rect: rect(region),
+                                radii: SQUARE,
+                                tiles: Tiles {
+                                    first,
+                                    step: [None; 2],
+                                },
+                                image: *texture,
+                                pixelated: self.styles[image.node].pixelated,
+                            }),
+                            Picture::Svg(doc) => items.extend(document(doc, first, self.cache)),
+                            Picture::None => {}
+                        }
+                    }
+                }
+            }
+            images.push((index, items));
+        }
+        images
     }
 
     /// If `i` is an `<image>` of a file, in a viewport `size` user units big: the viewport it
@@ -1326,7 +1447,7 @@ mod tests {
         "##};
         let d = Document::parse(source, &mut vec![]).unwrap();
         let cache = Cache::default();
-        let drawing = Drawing::new(&d.template, &d.styles, &d.embedded, &cache);
+        let drawing = Drawing::new(&d.template, &d.styles, &d.embedded, &[], &cache);
         let target = drawing.ids["target"];
         assert!(drawing.clip("a", target, [100.0; 2], None).is_none());
         assert!(drawing.resources.borrow().is_empty());
@@ -1349,7 +1470,7 @@ mod tests {
         </svg>"#};
         let doc = Document::parse(xml, &mut Vec::new()).unwrap();
         let cache = Cache::default();
-        let drawing = Drawing::new(&doc.template, &doc.styles, &[], &cache);
+        let drawing = Drawing::new(&doc.template, &doc.styles, &[], &[], &cache);
         let i = drawing.ids["inner"];
         let view = doc.styles[i]
             .svg
@@ -1544,7 +1665,7 @@ mod tests {
         </svg>"##};
         let doc = Document::parse(xml, &mut Vec::new()).unwrap();
         let cache = Cache::default();
-        let drawing = Drawing::new(&doc.template, &doc.styles, &[], &cache);
+        let drawing = Drawing::new(&doc.template, &doc.styles, &[], &[], &cache);
         let instance = doc.styles[drawing.ids["copy"]].instance.as_ref().unwrap();
         assert_eq!(
             instance.styles[1].fill,
@@ -1598,7 +1719,7 @@ mod tests {
         )
         .unwrap();
         let cache = Cache::default();
-        let drawing = Drawing::new(&doc.template, &doc.styles, &[], &cache);
+        let drawing = Drawing::new(&doc.template, &doc.styles, &[], &[], &cache);
         assert!(!doc.styles[drawing.ids["normal"]].non_scaling_stroke);
         assert!(doc.styles[drawing.ids["fixed"]].non_scaling_stroke);
         let path = crate::path::parse("M0 0H10").unwrap();
@@ -1637,7 +1758,7 @@ mod tests {
         </svg>"#};
         let doc = Document::parse(xml, &mut Vec::new()).unwrap();
         let cache = Cache::default();
-        let drawing = Drawing::new(&doc.template, &doc.styles, &[], &cache);
+        let drawing = Drawing::new(&doc.template, &doc.styles, &[], &[], &cache);
         let mut items = Vec::new();
         drawing.element(
             drawing.ids["effect"],
@@ -1720,7 +1841,7 @@ mod tests {
             .replace(" transform=\"\"", "");
             let doc = Document::parse(&xml, &mut Vec::new()).unwrap();
             let cache = Cache::default();
-            let drawing = Drawing::new(&doc.template, &doc.styles, &[], &cache);
+            let drawing = Drawing::new(&doc.template, &doc.styles, &[], &[], &cache);
             let i = drawing.ids["r"];
             let s = &doc.styles[i];
             let m = drawing

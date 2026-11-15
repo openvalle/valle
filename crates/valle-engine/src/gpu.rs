@@ -1651,6 +1651,7 @@ impl<'a> Renderer<'a> {
                 }
                 Item::FilterGraph {
                     graph,
+                    images,
                     bbox,
                     viewport,
                     items,
@@ -1680,8 +1681,27 @@ impl<'a> Renderer<'a> {
                             runs: Vec::new(),
                         });
                     }
+                    let mut image_layers = Vec::with_capacity(images.len());
+                    for (index, items) in images {
+                        let input = plan.layer();
+                        plan.seen.here = Under {
+                            root: input,
+                            open: Vec::new(),
+                        };
+                        plan.reach = Reach::default();
+                        self.plan(items, input, at, faces, plan, atlas)?;
+                        plan.bounds[input] = plan.reach;
+                        if plan.reach.0.is_none() {
+                            plan.steps.push(Step::Draw {
+                                target: input,
+                                runs: Vec::new(),
+                            });
+                        }
+                        image_layers.push((*index, input));
+                    }
                     plan.seen = around;
-                    let (layer, reach) = plan.svg_filter(layer, graph, *bbox, *viewport, matrix);
+                    let (layer, reach) =
+                        plan.svg_filter(layer, graph, &image_layers, *bbox, *viewport, matrix);
                     plan.reach = outer.union(reach);
                     plan.composite(target, layer);
                 }

@@ -151,6 +151,7 @@ pub enum Item {
     /// A named SVG filter DAG; intermediate images stay on the GPU.
     FilterGraph {
         graph: Rc<crate::svg::filter::Graph>,
+        images: Vec<(usize, Vec<Item>)>,
         bbox: [f64; 4],
         viewport: [f64; 2],
         items: Vec<Item>,
@@ -739,7 +740,7 @@ impl<'a> Painter<'a> {
             spaces: spaces(template, styles, layout, 0..template.nodes.len()),
             parents,
             clips: Vec::with_capacity(n),
-            drawing: Drawing::new(template, styles, &[], cache),
+            drawing: Drawing::new(template, styles, &[], pictures, cache),
             drawn,
         };
         // In preorder, so the box whose clips a box takes has its own.

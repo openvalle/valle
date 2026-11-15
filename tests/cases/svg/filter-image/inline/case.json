@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/filters.html#feImageElement",
+  "assertion": "Image inputs load raster and vector resources, reference local graphics, fit and clip their primitive region, and combine with SourceGraphic without contaminating it.",
+  "at": [0],
+  "browser": {
+    "selected": "webkit",
+    "reason": "WebKit matches local graphics, image fitting, pixelated raster scaling and SourceGraphic composition within 1 channel level. Chrome ignores pixelated on feImage; Firefox omits the local fragment image and differs at vector edges. Both are retained as audit captures.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 7200
+    }
+  }
+}

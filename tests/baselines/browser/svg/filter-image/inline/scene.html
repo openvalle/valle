@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8" /><style>
+  body {
+    margin: 0;
+  }
+  #canvas {
+    width: 520px;
+    height: 140px;
+    background: white;
+  }
+  svg,
+  img {
+    display: block;
+  }
+</style>
+<div id="canvas">
+  <!-- prettier-ignore -->
+  <svg xmlns="http://www.w3.org/2000/svg" width="520" height="140" viewBox="0 0 520 140"><defs>
+<g id="stamp"><rect x="3" y="5" width="32" height="20" fill="#2563eb"/><rect x="10" y="10" width="15" height="25" fill="#f97316"/></g>
+<filter id="local" filterUnits="userSpaceOnUse" x="0" y="0" width="120" height="120"><feImage href="#stamp" x="15" y="18" width="90" height="84"/></filter>
+<filter id="vector" filterUnits="userSpaceOnUse" x="0" y="0" width="120" height="120"><feImage href="/tests/cases/svg/filter-image/inline/tile.svg" x="10" y="5" width="80" height="90"/></filter>
+<filter id="raster" filterUnits="userSpaceOnUse" x="0" y="0" width="120" height="120"><feImage href="/tests/cases/svg/filter-image/inline/tile.png" x="10" y="5" width="80" height="90" preserveAspectRatio="none" image-rendering="pixelated"/></filter>
+<filter id="masked" filterUnits="userSpaceOnUse" x="0" y="0" width="120" height="120"><feImage href="/tests/cases/svg/filter-image/inline/tile.svg" x="10" y="5" width="80" height="90" preserveAspectRatio="xMaxYMin slice" result="image"/><feComposite in="SourceGraphic" in2="image" operator="in"/></filter>
+</defs><g transform="translate(5 10)"><rect width="120" height="120" fill="#db2777" filter="url(#local)"/></g><g transform="translate(135 10)"><rect width="120" height="120" fill="#db2777" filter="url(#vector)"/></g><g transform="translate(265 10)"><rect width="120" height="120" fill="#db2777" filter="url(#raster)"/></g><g transform="translate(395 10)"><rect width="120" height="120" fill="#db2777" filter="url(#masked)"/></g></svg>
+</div>

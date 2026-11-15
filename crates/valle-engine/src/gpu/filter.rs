@@ -94,6 +94,7 @@ impl Plan {
         &mut self,
         source: usize,
         graph: &Graph,
+        images: &[(usize, usize)],
         bbox: [f64; 4],
         viewport: [f64; 2],
         matrix: Matrix,
@@ -119,16 +120,7 @@ impl Plan {
             &[],
         );
         // Only ancestors of the final result participate, even if other result names exist.
-        let mut needed = vec![false; layers.len()];
-        let mut pending = vec![layers.len() - 1];
-        while let Some(i) = pending.pop() {
-            if std::mem::replace(&mut needed[i], true) {
-                continue;
-            }
-            if i >= 2 {
-                pending.extend(graph.nodes[i - 2].inputs.iter().copied());
-            }
-        }
+        let needed = graph.needed();
         if needed[1] {
             layers[1] = self.graph_pass(
                 [layers[0]; 2],
@@ -276,6 +268,23 @@ impl Plan {
                         },
                         &params,
                         &data,
+                    )
+                }
+                Operation::Image(_) => {
+                    let source = images
+                        .iter()
+                        .find(|(index, _)| *index == i)
+                        .map_or(blank, |(_, layer)| *layer);
+                    self.graph_pass(
+                        [source; 2],
+                        0,
+                        Pass {
+                            linear: false,
+                            region,
+                            matrix,
+                        },
+                        &[],
+                        &[],
                     )
                 }
                 Operation::Tile => self.graph_pass(
@@ -550,6 +559,7 @@ mod tests {
                 },
                 nodes,
             }),
+            images: Vec::new(),
             bbox: [0., 0., 16., 16.],
             viewport: [16., 16.],
             items,

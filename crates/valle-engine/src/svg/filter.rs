@@ -1,6 +1,7 @@
 //! SVG filter primitives retain their named inputs until the complete definition is known.
 //! The resolved graph is a DAG: inputs can only name a standard source or an earlier result.
 pub mod convolve;
+pub mod image;
 pub mod lighting;
 pub mod turbulence;
 
@@ -32,6 +33,7 @@ pub enum Operation {
     Offset([f64; 2]),
     Flood,
     Tile,
+    Image(image::Image),
     Lighting(lighting::Lighting),
     Light(lighting::Light),
     Convolve(convolve::Kernel),
@@ -117,6 +119,7 @@ pub fn primitive(tag: Tag, attributes: &[(&str, &V)]) -> Result<Primitive, Strin
         Tag::FeOffset => Operation::Offset([a.number("dx", 0.0)?, a.number("dy", 0.0)?]),
         Tag::FeFlood => Operation::Flood,
         Tag::FeTile => Operation::Tile,
+        Tag::FeImage => Operation::Image(image::Image::parse(&a)?),
         Tag::FeDiffuseLighting | Tag::FeSpecularLighting => {
             Operation::Lighting(lighting::Lighting::parse(tag, &a)?)
         }
@@ -354,6 +357,7 @@ fn matrix(a: &Attributes) -> Result<[f64; 20], String> {
 /// Build every definition once per computed style tree. Forward/missing named results are
 /// errors with the authored name, instead of silently sampling an unrelated intermediate.
 pub(crate) fn prepare(styles: &mut [Style], parents: &[Option<u32>]) -> Result<(), String> {
+    let mut local_images = false;
     for i in 0..styles.len() {
         let Some(Element::Filter(definition)) = styles[i].svg.as_deref().map(|c| &c.element) else {
             continue;
@@ -386,7 +390,7 @@ pub(crate) fn prepare(styles: &mut [Style], parents: &[Option<u32>]) -> Result<(
                 }
             };
             let mut inputs = match p.op {
-                Operation::Flood | Operation::Turbulence(_) => Vec::new(),
+                Operation::Flood | Operation::Turbulence(_) | Operation::Image(_) => Vec::new(),
                 Operation::Merge => Vec::new(),
                 Operation::Blend(_)
                 | Operation::Composite { .. }
@@ -397,6 +401,10 @@ pub(crate) fn prepare(styles: &mut [Style], parents: &[Option<u32>]) -> Result<(
                 _ => vec![input(p.inputs[0].as_deref())?],
             };
             let mut op = p.op.clone();
+            if let Operation::Image(image) = &mut op {
+                image.node = k;
+                local_images |= image.href.starts_with('#');
+            }
             let mut transfer = std::array::from_fn(|_| Transfer::Identity);
             for child in k + 1..styles.len() {
                 if parents[child] != Some(k as u32) {
@@ -445,10 +453,28 @@ pub(crate) fn prepare(styles: &mut [Style], parents: &[Option<u32>]) -> Result<(
         }
         styles[i].filter_graph = Some(Rc::new(Graph { definition, nodes }));
     }
+    if local_images {
+        image::validate(styles, parents)?;
+    }
     Ok(())
 }
 
 impl Graph {
+    /// Standard sources and earlier results which contribute to the final primitive.
+    pub fn needed(&self) -> Vec<bool> {
+        let mut needed = vec![false; self.nodes.len() + 2];
+        let mut pending = vec![needed.len() - 1];
+        while let Some(i) = pending.pop() {
+            if std::mem::replace(&mut needed[i], true) {
+                continue;
+            }
+            if i >= 2 {
+                pending.extend(self.nodes[i - 2].inputs.iter().copied());
+            }
+        }
+        needed
+    }
+
     pub fn region(&self, bbox: [f64; 4], viewport: [f64; 2]) -> [f64; 4] {
         std::array::from_fn(|i| {
             coordinate(

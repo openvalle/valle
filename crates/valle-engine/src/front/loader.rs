@@ -191,7 +191,7 @@ mod tests {
         let read = |path: &str| {
             Some(match path {
             "a/scene.motion.tsx" => "export const composition = {width:100,height:100,fps:1,duration:1}; export const controls = {resources:{icon:resource({kind:'image',default:'./root.svg'})}}; export default function Scene(){return <View/>;}",
-            "a/root.svg" => "<svg xmlns='http://www.w3.org/2000/svg'><image href='nested/leaf.svg'/><image href='tile.png'/></svg>",
+            "a/root.svg" => "<svg xmlns='http://www.w3.org/2000/svg'><filter><feImage href='nested/leaf.svg'/><feImage href='#local'/></filter><image href='tile.png'/></svg>",
             "a/nested/leaf.svg" => "<svg xmlns='http://www.w3.org/2000/svg'><image href='../tile.png'/><image href='../root.svg'/></svg>",
             _ => return None,
         }.to_string())

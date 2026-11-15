@@ -2052,6 +2052,17 @@
       children: [],
       site: at,
     };
+    if (type === "feImage") {
+      const href = props.href ?? props.xlinkHref;
+      if (href instanceof T || typeof href !== "string")
+        fail(at, "<feImage> href is a literal image resource or #element reference");
+      if (!href.startsWith("#")) {
+        const source = pictureOf(href);
+        if (source === null)
+          fail(at, "<feImage> href is #element, resource://name or input://name");
+        node.src = source;
+      }
+    }
     if (key !== null) G.keys.push(key);
     G.svg++;
     const previousText = G.svgText;

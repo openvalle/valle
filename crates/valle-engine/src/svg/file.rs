@@ -1,7 +1,7 @@
 //! SVG files, as an Image shows them: parsed into the elements inline SVG has, checked by the same
 //! tables, and styled once as a document of their own, which inherits nothing and whose ids are
 //! its own, as Chrome draws an SVG image. Elements of other namespaces, as editors add, draw
-//! nothing, and so do attributes of other namespaces but `xlink:href`. An `<image>` shows a PNG,
+//! nothing, and so do attributes of other namespaces but `xlink:href`. An `<image>` or `<feImage>` shows a PNG,
 //! JPEG, WebP or SVG image from a data URI or a file resolved by the host.
 
 use std::rc::Rc;
@@ -29,11 +29,11 @@ pub struct Document {
     pub styles: Vec<Style>,
     /// Its natural size, or ratio, from its root's width, height and viewBox.
     pub natural: Natural,
-    /// Its `<image>`s, in order.
+    /// Its external image elements and filter image inputs, in order.
     pub embedded: Vec<Embedded>,
 }
 
-/// An `<image>` and its decoded raster or vector content.
+/// An image element or filter primitive and its decoded raster or vector content.
 #[derive(Debug)]
 pub struct Embedded {
     pub node: u32,
@@ -198,15 +198,17 @@ fn element(
         attributes.push((Rc::from(key), Prop::Const(V::Str(a.value().into()))));
     }
     let index = out.nodes.len();
-    if tag == Tag::Image {
+    if matches!(tag, Tag::Image | Tag::FeImage) {
         let href = (x.attribute("href")).or_else(|| x.attribute((XLINK, "href")));
-        let href = href.ok_or_else(|| format!("{}: <image> needs an href", place(xml, x)))?;
-        let picture = (out.load)(href.trim(), out.images)
-            .map_err(|e| format!("{}: <image> {e}", place(xml, x)))?;
-        out.embedded.push(Embedded {
-            node: index as u32,
-            picture,
-        });
+        let href = href.ok_or_else(|| format!("{}: <{name}> needs an href", place(xml, x)))?;
+        if tag != Tag::FeImage || !href.trim().starts_with('#') {
+            let picture = (out.load)(href.trim(), out.images)
+                .map_err(|e| format!("{}: <{name}> {e}", place(xml, x)))?;
+            out.embedded.push(Embedded {
+                node: index as u32,
+                picture,
+            });
+        }
     }
     out.nodes.push(Node {
         kind: Kind::Svg {
@@ -300,10 +302,10 @@ pub(crate) fn dependencies(origin: &str, text: &str) -> Result<Vec<String>, Stri
         .filter(|n| {
             n.is_element()
                 && n.tag_name().namespace() == Some(SVG)
-                && n.tag_name().name() == "image"
+                && matches!(n.tag_name().name(), "image" | "feImage")
         })
         .filter_map(|n| n.attribute("href").or_else(|| n.attribute((XLINK, "href"))))
-        .filter(|href| !href.starts_with("data:"))
+        .filter(|href| !href.starts_with("data:") && !href.starts_with('#'))
         .map(|href| resolve(origin, href))
         .collect()
 }

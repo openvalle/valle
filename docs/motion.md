@@ -517,10 +517,11 @@ shape or group. Both inline SVG and SVG files support these primitives:
 | `feDisplacementMap` | `in`, `in2`, `scale`, `xChannelSelector`, `yChannelSelector` (`R`, `G`, `B`, `A`) |
 | `feComponentTransfer` | `<feFuncR/G/B/A>` children: `identity`, `table`, `discrete`, `linear`, `gamma` |
 | `feDropShadow` | `dx`, `dy`, `stdDeviation`, `floodColor`, `floodOpacity` |
-| `feTurbulence` | `baseFrequency` (one or two nonnegative numbers), `numOctaves` (nonnegative integer, default 1), `seed` (default 0), `type="turbulence|fractalNoise"`, `stitchTiles="noStitch|stitch"` |
-| `feConvolveMatrix` | `order` (positive integer pair, default 3), `kernelMatrix` (orderX × orderY numbers), `divisor` (nonzero; default sum or 1), `bias` (default 0), `targetX/Y` (default center), `edgeMode="duplicate|wrap|none"`, `kernelUnitLength` (positive pair), `preserveAlpha="false|true"` |
+| `feTurbulence` | `baseFrequency` (one or two nonnegative numbers), `numOctaves` (nonnegative integer, default 1), `seed` (default 0), `type`: `turbulence` or `fractalNoise`; `stitchTiles`: `noStitch` or `stitch` |
+| `feConvolveMatrix` | `order` (positive integer pair, default 3), `kernelMatrix` (orderX × orderY numbers), `divisor` (nonzero; default sum or 1), `bias` (default 0), `targetX/Y` (default center), `edgeMode`: `duplicate`, `wrap` or `none`, `kernelUnitLength` (positive pair), `preserveAlpha`: `false` or `true` |
 | `feDiffuseLighting` | `surfaceScale` (default 1), `diffuseConstant` (nonnegative, default 1), `kernelUnitLength` (positive pair), `lightingColor` (default white); exactly one light child |
 | `feSpecularLighting` | `surfaceScale` (default 1), `specularConstant` (nonnegative, default 1), `specularExponent` (1–128, default 1), `kernelUnitLength`, `lightingColor`; exactly one light child |
+| `feImage` | `href` / `xlinkHref` (a local `#element` or an image), `preserveAspectRatio` (default `xMidYMid meet`); no input dependency |
 | `feTile` | `in`; repeats its input primitive's subregion to fill the output subregion |
 
 Transfer functions use `tableValues` for table/discrete, `slope` and `intercept`
@@ -568,6 +569,14 @@ CSS filter functions, which continue to operate in sRGB. Offset/flood do not
 transform colors; displacement converts only its map input. Intermediate results
 stay on the GPU, with textures released after their last reader.
 
+`feImage` introduces another image into the graph. In Motion, its literal `href`
+is a local `#element`, `resource://name` for an image declared in `controls.resources`,
+or a Timeline `input://name`. SVG files also load relative image files and base64
+data URIs. Raster and vector inputs use the existing image loader and support
+`preserveAspectRatio` and `imageRendering`. Missing references and drawing cycles
+are errors. Local graphics retain their SVG coordinates, offset by the primitive's
+`x/y`; external images fit its subregion. Both paths remain GPU inputs.
+
 Lighting uses input alpha as surface height. A light child is `feDistantLight`
 (`azimuth`, `elevation` in degrees), `fePointLight` (`x`, `y`, `z`), or
 `feSpotLight` (`x/y/z`, `pointsAtX/Y/Z`, `specularExponent` default 1, optional
@@ -580,7 +589,7 @@ convolution kernels and noise octaves small unless the effect needs more detail.
 
 Not supported: external filter references, filter URLs on CSS boxes/the outer SVG,
 URL/function lists, `BackgroundImage`/`BackgroundAlpha`/`FillPaint`/`StrokePaint`,
-`feImage`, and blur
+blur
 edge modes other than `none`. These produce errors rather than a partial effect.
 
 ## Valle filters

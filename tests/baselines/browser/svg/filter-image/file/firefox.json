@@ -1,0 +1,11 @@
+{
+  "size": [520, 140],
+  "sources": {
+    "tests/baselines/browser/svg/filter-image/file/scene.html": "1aa4d22ed278fb3c2e51b52c1bc4ba287448497cb98ce46cbbbbc2836d4e30dd",
+    "tests/cases/svg/filter-image/file/source.svg": "f6d85ce6dca501aaac0d26434044670303bcdd9aa8f24c40584269eead145c6b"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}
