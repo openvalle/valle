@@ -1,6 +1,7 @@
 //! SVG character positioning after shaping with the scene's fonts. The result is ordinary
 //! vector geometry, so text shares SVG paint servers, strokes, masks and transforms.
 mod decoration;
+mod stretch;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -84,6 +85,7 @@ pub struct Position {
     pub offset: Length,
     pub length: Option<Length>,
     pub scale: bool,
+    pub stretch: bool,
 }
 
 impl Position {
@@ -137,12 +139,13 @@ impl Position {
                     .ok_or("textPath needs href=\"#id\" naming a path in this SVG")?
                     .into(),
             );
+            p.stretch = word("method").as_deref() == Some("stretch");
             p.offset = get("startOffset")
                 .map(length)
                 .transpose()?
                 .unwrap_or_default();
             for (key, accepted) in [
-                ("method", &["align"][..]),
+                ("method", &["align", "stretch"][..]),
                 ("spacing", &["auto", "exact"][..]),
                 ("side", &["left"][..]),
             ] {
@@ -183,6 +186,7 @@ struct Track {
     segments: Vec<(PathSeg, f64)>,
     length: f64,
     unit_scale: f64,
+    stretch: bool,
 }
 
 impl Track {
@@ -197,6 +201,7 @@ impl Track {
             segments,
             length,
             unit_scale,
+            stretch: false,
         }
     }
 
@@ -492,10 +497,13 @@ fn subtree(
             // A missing reference draws no text, as it draws no referenced shape.
             tracks.insert(
                 n,
-                Track::new(
-                    &path.unwrap_or_default(),
-                    target.and_then(|c| c.path_length),
-                ),
+                Track {
+                    stretch: p.stretch,
+                    ..Track::new(
+                        &path.unwrap_or_default(),
+                        target.and_then(|c| c.path_length),
+                    )
+                },
             );
         }
     }
@@ -815,11 +823,26 @@ fn subtree(
             b.width.into(),
             b.height.into(),
         ]);
-        paths
-            .get_mut(&g.node)
-            .unwrap()
-            .0
-            .extend(g.path.mapped(|p| matrix.apply(p)).0);
+        let path = if let Some(n) = g.track.filter(|n| tracks[n].stretch) {
+            let local = Matrix::translate(g.at[0], g.at[1])
+                .times(Matrix::rotate(g.angle))
+                .times(Matrix::affine([g.scale, 0.0, 0.0, 1.0, 0.0, 0.0]));
+            let cell = super::rect(
+                [
+                    0.0,
+                    -g.cell[0] as f32,
+                    (g.advance / g.scale.max(1e-12)) as f32,
+                    (g.cell[0] + g.cell[1]) as f32,
+                ],
+                [0.0; 2],
+            );
+            *cells.get_mut(&g.node).unwrap().last_mut().unwrap() =
+                super::bounds(&tracks[&n].warp(&cell.mapped(|p| local.apply(p))));
+            tracks[&n].warp(&g.path.mapped(|p| local.apply(p)))
+        } else {
+            g.path.mapped(|p| matrix.apply(p))
+        };
+        paths.get_mut(&g.node).unwrap().0.extend(path.0);
     }
     for (node, path) in paths {
         let c = Rc::make_mut(styles[node].svg.as_mut().unwrap());
@@ -885,6 +908,51 @@ mod tests {
     use crate::front::Inputs;
     use crate::scene::Scene;
     use crate::time::Tick;
+
+    #[test]
+    fn stretch_text_paths_keep_straight_output_and_seek_consistency() {
+        let source = |method: &str, path: &str| {
+            format!(
+                "export const composition = {{width:320,height:200,fps:4,duration:2}}; export default function Scene() {{const {{seconds}}=useCurrentTime();return <svg width=\"320\" height=\"200\" fontSize=\"30\"><defs><path id=\"p\" d=\"{path}\"/></defs><text><textPath href=\"#p\" method=\"{method}\" startOffset={{20+seconds*10}}>WAVES</textPath></text></svg>;}}"
+            )
+        };
+        let load = |source: &str| {
+            Scene::load(
+                "stretch.motion.tsx",
+                &|_| Some(source.as_bytes().to_vec()),
+                &Inputs::default(),
+                crate::testing::fonts(),
+            )
+            .unwrap()
+        };
+        let shape = |frame: &crate::scene::Frame| {
+            frame
+                .styles
+                .iter()
+                .filter_map(|s| match &s.svg.as_deref()?.element {
+                    Element::Shape(Shape::Text { path, .. }) => {
+                        Some(path.mapped(|p| p.map(|v| (v * 1000.).round() / 1000.)))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let straight = "M10 100L300 100";
+        let a = load(&source("align", straight)).frame(Tick::ZERO).unwrap();
+        let b = load(&source("stretch", straight))
+            .frame(Tick::ZERO)
+            .unwrap();
+        assert_eq!(shape(&a), shape(&b));
+        let curved = source("stretch", "M10 100Q150 -40 300 100");
+        let mut scene = load(&curved);
+        for seconds in [1., 0.25, 1.75, 0.] {
+            let at = Tick::from_seconds(seconds).unwrap();
+            assert_eq!(
+                scene.frame(at).unwrap().items,
+                load(&curved).frame(at).unwrap().items
+            );
+        }
+    }
 
     #[test]
     fn vertical_svg_positions_cells_and_preserves_seek_results() {

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="320" font-family="Latin" font-size="44" fill="#17365d">
+<defs><path id="arc" d="M20 150 Q210 -20 400 150"/><path id="lower" d="M20 280 Q210 110 400 280"/></defs>
+<use href="#arc" fill="none" stroke="#ddd"/><use href="#lower" fill="none" stroke="#ddd"/>
+<text text-anchor="middle"><textPath href="#arc" startOffset="50%" method="align">WAVES</textPath></text>
+<text text-anchor="middle"><textPath href="#lower" startOffset="50%" method="stretch">WAVES</textPath></text>
+</svg>

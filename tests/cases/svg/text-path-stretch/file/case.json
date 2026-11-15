@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/text.html#TextPathElementMethodAttribute",
+  "assertion": "textPath method stretch maps each glyph outline along the baseline rather than rotating a rigid glyph; align remains unchanged.",
+  "at": [0],
+  "valle": {
+    "reason": "Reviewed curved glyph outlines against SVG stretch geometry and independent straight-line and normal-distance assertions. All three browser probes rendered method=stretch as rigid align, so none is a correctness baseline for this capability.",
+    "maxDifference": 1
+  }
+}
