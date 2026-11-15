@@ -2965,6 +2965,10 @@ mod tests {
         assert_eq!(shape("circle(10px)"), (true, false));
         assert_eq!(shape("ellipse(1px 2px at center)"), (true, true));
         assert_eq!(shape("inset(1px round 2px)"), (true, true));
+        assert_eq!(
+            shape("shape(from 0 0, curve to 100% 0 with 50% 100%)"),
+            (true, true)
+        );
         assert_eq!(shape("content-box"), (false, true));
         let m = motion(&[("offsetPath", text("content-box polygon(0 0, 1px 0)"))]);
         assert_eq!(m.map(|m| m.area), Some(Area::ContentBox));
@@ -2985,6 +2989,7 @@ mod tests {
             ("offsetPath", "path('M0 0') content-box", "takes no box"),
             ("offsetPath", "url(#a)", "url() is not an offset path"),
             ("offsetPath", "circle() ray(0deg)", "takes one path"),
+            ("offsetPath", "shape(from 0 0, line to)", "shape()"),
             ("offsetRotate", "auto reverse", "is not an offset rotate"),
             ("offsetAnchor", "normal", "is not an offset anchor"),
             (

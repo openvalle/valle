@@ -436,3 +436,63 @@ fn rounded(r: Rect, radii: Radii) -> Contours {
         .flat_map(|(a, b, corner, c)| [Piece::Line([a, b]), Piece::Conic([b, corner, c], QUARTER)]);
     vec![(sides[0].0, pieces.collect(), true)]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::paint::SQUARE;
+    use crate::testing::styles::{one, text};
+
+    fn path(value: &str, r: Rect) -> Contours {
+        let style = one(&[("offsetPath", text(value))]);
+        let Route::Shape { shape, .. } = style.motion.unwrap().path else {
+            panic!("expected a responsive shape");
+        };
+        outline(shape.as_ref(), r, SQUARE, None)
+    }
+
+    #[test]
+    fn responsive_paths_resolve_the_containing_box_and_keep_open_ends() {
+        let r = Rect {
+            x: 20.0,
+            y: 30.0,
+            width: 200.0,
+            height: 100.0,
+        };
+        let p = path("shape(from 10% 20%, line to 90% 80%)", r);
+        assert_eq!(along(&p, &Calc::Sum([0.0, -0.5])).0, [40.0, 50.0]);
+        assert_eq!(along(&p, &Calc::Sum([0.0, 0.5])).0, [120.0, 80.0]);
+        assert_eq!(along(&p, &Calc::Sum([0.0, 1.5])).0, [200.0, 110.0]);
+        let resized = path(
+            "shape(from 10% 20%, line to 90% 80%)",
+            Rect { width: 400.0, ..r },
+        );
+        assert_eq!(along(&resized, &Calc::Sum([0.0, 0.5])).0, [220.0, 80.0]);
+    }
+
+    #[test]
+    fn closed_shapes_wrap_and_curves_share_svg_path_measurement() {
+        let r = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let p = path(
+            "shape(from 0 0, line to 100% 0, line to 100% 100%, close)",
+            r,
+        );
+        let (a, turn) = along(&p, &Calc::Sum([0.0, 0.25]));
+        let (b, wrapped_turn) = along(&p, &Calc::Sum([0.0, 1.25]));
+        assert!(far(a, b) < 0.0001);
+        assert_eq!(turn, wrapped_turn);
+        let p = path("shape(from 0 0, curve to 100% 0 with 50% 100%)", r);
+        let svg = contours(&crate::path::parse("M0 0 Q50 100 100 0").unwrap());
+        for distance in [0.0, 0.2, 0.5, 0.8, 1.0] {
+            assert_eq!(
+                along(&p, &Calc::Sum([0.0, distance])),
+                along(&svg, &Calc::Sum([0.0, distance]))
+            );
+        }
+    }
+}

@@ -141,9 +141,7 @@ pub(super) fn clip(s: &str) -> Result<Option<Clip<Len>>, String> {
             "circle" => round(&lower, false),
             "ellipse" => round(&lower, true),
             "polygon" => polygon(&lower),
-            "shape" => {
-                commands::parse(&lower).map(|(even_odd, path)| Shape::Commands { even_odd, path })
-            }
+            "shape" => commands_of(&lower),
             "path" => path_of(args).map(|(even_odd, path)| Shape::Path { even_odd, path }),
             _ => return Err(format!("{name}() is not a basic shape: {SHAPES}")),
         };
@@ -158,6 +156,11 @@ pub(super) fn clip(s: &str) -> Result<Option<Clip<Len>>, String> {
         shape,
         area: boxed.unwrap_or(Area::BorderBox),
     }))
+}
+
+/// The shared shape() grammar for clipping and motion paths.
+pub(super) fn commands_of(s: &str) -> Result<Shape<Len>, String> {
+    commands::parse(s).map(|(even_odd, path)| Shape::Commands { even_odd, path })
 }
 
 /// `inset()`: one to four lengths for the sides as `margin` takes them, then `round` and radii as

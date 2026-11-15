@@ -22,6 +22,7 @@ const CASES: {
   nativeResources?: Record<string, string>;
   pixels?: { maxDifference: number; maxPixels: number };
 }[] = [
+  { entry: "tests/cases/css/transforms/shape-path/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/non-scaling-stroke/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/non-scaling-stroke/file/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/text/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },

@@ -1,0 +1,57 @@
+{
+  "spec": "https://drafts.csswg.org/motion-1/#offset-path-property",
+  "assertion": "Responsive shape motion paths use the containing reference box, follow curve tangents and clamp open ends.",
+  "at": [0],
+  "browser": {
+    "selected": "webkit",
+    "reason": "Reviewed all three captures. WebKit preserves the endpoint of the open shape at 100%; Chrome and Firefox return that sample to the start. Motion Path section 3 defines shape() as its authored path and section 2.2.1 clamps open intervals. Numeric tests independently assert endpoint clamping, closed wrapping, resizing and curve tangents. Valle and WebKit differ only at 511 antialiased edge pixels (maximum channel difference 19); container measurements agree.",
+    "pixels": {
+      "maxDifference": 20,
+      "maxPixels": 530
+    }
+  },
+  "layout": [
+    {
+      "key": "track-0",
+      "border": {
+        "x": 20,
+        "y": 20,
+        "width": 400,
+        "height": 100
+      },
+      "padding": {
+        "x": 24,
+        "y": 24,
+        "width": 392,
+        "height": 92
+      },
+      "content": {
+        "x": 34,
+        "y": 34,
+        "width": 372,
+        "height": 72
+      }
+    },
+    {
+      "key": "track-1",
+      "border": {
+        "x": 20,
+        "y": 140,
+        "width": 300,
+        "height": 100
+      },
+      "padding": {
+        "x": 24,
+        "y": 144,
+        "width": 292,
+        "height": 92
+      },
+      "content": {
+        "x": 34,
+        "y": 154,
+        "width": 272,
+        "height": 72
+      }
+    }
+  ]
+}

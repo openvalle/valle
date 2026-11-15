@@ -214,6 +214,12 @@ two use its width and height. Prefix `evenodd` before `from` for holes. Append
 `border-box`. Animate the string's numeric values or the element's dimensions with
 the usual time expressions. This implements clipping, not `shape-outside` text flow.
 
+The same `shape(…)` syntax works in `offsetPath`. Its percentages use the containing
+block's reference box, optionally `border-box`, `padding-box` or `content-box`.
+Animate `offsetDistance` to move along it; `offsetRotate: "auto"` follows the tangent
+and `offsetAnchor` chooses the point on the moving element. Unlike clipping, an
+open path stays open: distances clamp at its ends; a closed path wraps.
+
 ### Vertical text
 
 On `Text`, set `writingMode: "vertical-rl"` (columns run right to left) or

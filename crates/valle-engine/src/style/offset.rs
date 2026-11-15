@@ -105,7 +105,7 @@ const DISTANCE: Accept = Accept {
     sizing: &[],
 };
 
-const ROUTES: &str = "path(), ray(), inset(), circle(), ellipse() or polygon()";
+const ROUTES: &str = "path(), ray(), inset(), circle(), ellipse(), polygon() or shape()";
 
 /// `offset-path`: `none`; `path()`; or `ray()`, a basic shape, a box (`border-box`,
 /// `padding-box` or `content-box`) or a ray or shape and a box in either order. Path data is
@@ -146,6 +146,10 @@ pub(super) fn path(s: &str) -> Result<Option<(Route<Len>, Area)>, String> {
                 at: css::words(&lower).contains(&"at"),
             }),
             "polygon" => shape::polygon(&lower).map(|s| Route::Shape {
+                shape: Some(s),
+                at: true,
+            }),
+            "shape" => shape::commands_of(&lower).map(|s| Route::Shape {
                 shape: Some(s),
                 at: true,
             }),
