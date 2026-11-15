@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+  <meta charset="utf-8" /><style>
+    body {
+      margin: 0;
+    }
+    #canvas {
+      width: 300px;
+      height: 100px;
+    }
+  </style>
+  <div id="canvas">
+    <svg width="300" height="100" viewBox="0 0 300 100">
+      <rect width="300" height="100" fill="white" />
+      <image
+        x="10"
+        y="10"
+        width="80"
+        height="80"
+        href="/tests/cases/svg/external-images/file/tile.png"
+        image-rendering="pixelated"
+        preserveAspectRatio="none"
+      />
+      <image
+        x="110"
+        y="10"
+        width="80"
+        height="80"
+        href="/tests/cases/svg/external-images/file/nested/vector.svg"
+      />
+      <svg x="210" y="10" width="80" height="80" viewBox="0 0 80 80">
+        <image
+          width="80"
+          height="80"
+          href="/tests/cases/svg/external-images/file/tile.png"
+          image-rendering="pixelated"
+          preserveAspectRatio="none"
+        />
+      </svg>
+    </svg>
+  </div>
+</html>

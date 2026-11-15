@@ -48,6 +48,65 @@ impl Picture {
         })
     }
 
+    /// Loads referenced SVG images through the same host reader as scene resources.
+    pub(crate) fn read(
+        bytes: &[u8],
+        path: &str,
+        read: &dyn Fn(&str) -> Option<Vec<u8>>,
+        images: &mut Vec<Image>,
+    ) -> Result<Self, String> {
+        Self::read_inner(bytes, path, read, images, &mut Vec::new())
+    }
+
+    fn read_inner(
+        bytes: &[u8],
+        path: &str,
+        read: &dyn Fn(&str) -> Option<Vec<u8>>,
+        images: &mut Vec<Image>,
+        visiting: &mut Vec<String>,
+    ) -> Result<Self, String> {
+        if !file::looks(bytes) {
+            return Self::load(bytes, images);
+        }
+        let text = std::str::from_utf8(bytes).map_err(|_| "an SVG file is UTF-8 text")?;
+        visiting.push(path.into());
+        let result = Document::parse_with(
+            text.trim_start_matches('\u{feff}'),
+            images,
+            &mut |href, images| {
+                if href.starts_with("data:") {
+                    return Self::read_inner(&file::data(href)?, path, read, images, visiting);
+                }
+                let target = file::resolve(path, href)?;
+                if visiting.contains(&target) {
+                    return Err(format!(
+                        "SVG image cycle: {} → {target}",
+                        visiting.join(" → ")
+                    ));
+                }
+                let bytes = read(&target).ok_or_else(|| format!("{target}: not found"))?;
+                Self::read_inner(&bytes, &target, read, images, visiting)
+                    .map_err(|e| format!("{target}: {e}"))
+            },
+        );
+        visiting.pop();
+        result.map(|d| Self::Svg(Box::new(d)))
+    }
+
+    pub(crate) fn shape_text(&mut self, text: &mut crate::text::Text) -> Result<(), String> {
+        if let Self::Svg(doc) = self {
+            let canvas = match doc.natural {
+                Natural::Size(s) => s.map(f64::from),
+                _ => [300.0, 150.0],
+            };
+            crate::svg::text::shape(&doc.template, &mut doc.styles, text, |_| canvas)?;
+            for image in &mut doc.embedded {
+                image.picture.shape_text(text)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn natural(&self) -> Natural {
         match self {
             Picture::Image { size, .. } => Natural::Size(size.map(|v| v as f32)),
@@ -313,6 +372,41 @@ fn times(c: u8, a: u8) -> u8 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn svg_images_resolve_relative_files_and_reject_cycles() {
+        let svg = |href: &str| {
+            format!("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 20'><image href='{href}' width='40' height='20'/></svg>").into_bytes()
+        };
+        let root = svg("nested/child.svg");
+        let leaf = svg("../tile.png");
+        let pixel = include_bytes!("../../../tests/resources/svg/pixels.png");
+        let read = |path: &str| match path {
+            "art/nested/child.svg" => Some(leaf.clone()),
+            "art/tile.png" => Some(pixel.to_vec()),
+            _ => None,
+        };
+        let mut images = Vec::new();
+        let Picture::Svg(doc) = Picture::read(&root, "art/root.svg", &read, &mut images).unwrap()
+        else {
+            panic!()
+        };
+        assert!(matches!(doc.embedded[0].picture, Picture::Svg(_)));
+        assert_eq!(images.len(), 1);
+        let error = Picture::read(
+            &root,
+            "art/root.svg",
+            &|_| Some(svg("../root.svg")),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("SVG image cycle: art/root.svg → art/nested/child.svg → art/root.svg"),
+            "{error}"
+        );
+        let error = Picture::read(&root, "art/root.svg", &|_| None, &mut Vec::new()).unwrap_err();
+        assert!(error.contains("art/nested/child.svg: not found"), "{error}");
+    }
     use super::*;
     use png::{BitDepth, ColorType};
 

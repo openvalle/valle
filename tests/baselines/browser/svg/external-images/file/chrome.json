@@ -1,0 +1,12 @@
+{
+  "size": [300, 100],
+  "sources": {
+    "tests/baselines/browser/svg/external-images/file/scene.html": "0b7a25e17715fc0352dff2e301c70578c32fe45ca654f5345af61040cc3eb25a",
+    "tests/cases/svg/external-images/file/tile.png": "d8f66d52df52b8a99d21ba37b5f535585d6a2889925ee919edf84aa36bc4516d",
+    "tests/cases/svg/external-images/file/nested/vector.svg": "0d3b36b78f715ed32d689579904dea940befe14a596a29d215559cf43e23dc60"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

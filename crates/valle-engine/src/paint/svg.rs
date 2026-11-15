@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use taffy::Display;
 
 use super::{Blend, Cache, Filter, Item, Matrix, Ramp, SQUARE, Tiles, work};
+use crate::image::Picture;
 use crate::layout::{Natural, Rect};
 use crate::path::Path;
 use crate::style::color;
@@ -377,16 +378,28 @@ impl<'a> Drawing<'a> {
                 let Some((viewport, first, image)) = self.image(i, size, copy) else {
                     return;
                 };
-                items.push(Item::Image {
-                    rect: rect(viewport),
-                    radii: SQUARE,
-                    tiles: Tiles {
-                        first: rect(first),
-                        step: [None; 2],
-                    },
-                    image,
-                    pixelated: s.pixelated,
-                });
+                match image {
+                    Picture::Image { image, .. } => items.push(Item::Image {
+                        rect: rect(viewport),
+                        radii: SQUARE,
+                        tiles: Tiles {
+                            first: rect(first),
+                            step: [None; 2],
+                        },
+                        image: *image,
+                        pixelated: s.pixelated,
+                    }),
+                    Picture::Svg(doc) => {
+                        if let Some(item) = document(doc, rect(first), self.cache) {
+                            items.push(Item::Clip {
+                                rect: rect(viewport),
+                                radii: SQUARE,
+                                items: vec![item],
+                            });
+                        }
+                    }
+                    Picture::None => {}
+                }
             }
             Element::TextRun(_)
             | Element::Shape(_)
@@ -674,7 +687,7 @@ impl<'a> Drawing<'a> {
         i: usize,
         size: [f64; 2],
         copy: Option<&Instance>,
-    ) -> Option<([f64; 4], [f64; 4], u32)> {
+    ) -> Option<([f64; 4], [f64; 4], &Picture)> {
         let s = self.style(i, copy);
         let Element::Image {
             at,
@@ -685,7 +698,10 @@ impl<'a> Drawing<'a> {
             return None;
         };
         let embedded = self.embedded.iter().find(|e| e.node as usize == i)?;
-        let [nw, nh] = embedded.size.map(f64::from);
+        let [nw, nh] = match embedded.picture.natural() {
+            Natural::Size(size) => size.map(f64::from),
+            Natural::Ratio(ratio) => [150.0 * f64::from(ratio.unwrap_or(2.0)), 150.0],
+        };
         let given = [0, 1].map(|k| given[k].map(|l| l.resolve(size[k])));
         let [w, h] = match given {
             [Some(w), Some(h)] => [w, h],
@@ -701,7 +717,7 @@ impl<'a> Drawing<'a> {
         Some((
             [x, y, w, h],
             mapped(placed, [0.0, 0.0, nw, nh]),
-            embedded.image,
+            &embedded.picture,
         ))
     }
 

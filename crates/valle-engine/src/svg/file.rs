@@ -2,17 +2,19 @@
 //! tables, and styled once as a document of their own, which inherits nothing and whose ids are
 //! its own, as Chrome draws an SVG image. Elements of other namespaces, as editors add, draw
 //! nothing, and so do attributes of other namespaces but `xlink:href`. An `<image>` shows a PNG,
-//! JPEG or WebP image the file embeds as a data URI; it reads no other files.
+//! JPEG, WebP or SVG image from a data URI or a file resolved by the host.
 
 use std::rc::Rc;
 
 use roxmltree::{Node as Xml, ParsingOptions};
 
 use super::{Holds, INERT, NEVER, SILENT};
-use crate::image::Image;
+use crate::image::{Image, Picture};
 use crate::layout::Natural;
 use crate::style::{Sheet, Style};
 use crate::template::{Kind, Node, Prop, Tag, Template, V};
+
+type Load<'a> = dyn FnMut(&str, &mut Vec<Image>) -> Result<Picture, String> + 'a;
 
 const SVG: &str = "http://www.w3.org/2000/svg";
 const XLINK: &str = "http://www.w3.org/1999/xlink";
@@ -29,12 +31,11 @@ pub struct Document {
     pub embedded: Vec<Embedded>,
 }
 
-/// An `<image>` of an SVG file: its node, and the scene's image it shows, `size` px big.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// An `<image>` and its decoded raster or vector content.
+#[derive(Debug)]
 pub struct Embedded {
     pub node: u32,
-    pub image: u32,
-    pub size: [u32; 2],
+    pub picture: Picture,
 }
 
 /// Whether `bytes` may be an SVG file: text that starts with markup.
@@ -48,6 +49,17 @@ impl Document {
     /// or 300 × 150 px without one; the images it embeds go onto `images`. Errors point at
     /// `line:column`.
     pub fn parse(text: &str, images: &mut Vec<Image>) -> Result<Document, String> {
+        Self::parse_with(text, images, &mut |href, images| {
+            let bytes = data(href)?;
+            Picture::load(&bytes, images)
+        })
+    }
+
+    pub(crate) fn parse_with(
+        text: &str,
+        images: &mut Vec<Image>,
+        load: &mut Load<'_>,
+    ) -> Result<Document, String> {
         let options = ParsingOptions {
             allow_dtd: true,
             ..ParsingOptions::default()
@@ -68,6 +80,7 @@ impl Document {
             nodes: Vec::new(),
             embedded: Vec::new(),
             images,
+            load,
         };
         element(&xml, root, None, &mut out)?;
         let Out {
@@ -99,6 +112,7 @@ struct Out<'a> {
     nodes: Vec<Node>,
     embedded: Vec<Embedded>,
     images: &'a mut Vec<Image>,
+    load: &'a mut Load<'a>,
 }
 
 /// Element `x` of `xml`, in `parent`, and those in it, onto `out`: its node's index, or `None`
@@ -179,13 +193,13 @@ fn element(
     let index = out.nodes.len();
     if tag == Tag::Image {
         let href = (x.attribute("href")).or_else(|| x.attribute((XLINK, "href")));
-        let image = embedded(href).map_err(|e| format!("{}: <image> {e}", place(xml, x)))?;
+        let href = href.ok_or_else(|| format!("{}: <image> needs an href", place(xml, x)))?;
+        let picture = (out.load)(href.trim(), out.images)
+            .map_err(|e| format!("{}: <image> {e}", place(xml, x)))?;
         out.embedded.push(Embedded {
             node: index as u32,
-            image: out.images.len() as u32,
-            size: image.size,
+            picture,
         });
-        out.images.push(image);
     }
     out.nodes.push(Node {
         kind: Kind::Svg {
@@ -226,24 +240,65 @@ fn element(
     Ok(Some(index as u32))
 }
 
-/// The image an `<image>`'s href holds: a PNG, JPEG or WebP file as a base64 data URI.
-fn embedded(href: Option<&str>) -> Result<Image, String> {
-    let href = href
-        .ok_or("needs an href: a PNG, JPEG or WebP image as a data URI")?
-        .trim();
-    let Some(data) = href.strip_prefix("data:") else {
-        return Err(format!(
-            "href: an SVG file reads no other files: embed {href} as a data URI"
-        ));
-    };
-    let (_, data) = (data.split_once(','))
+/// Decodes the existing base64 image data-URI form without choosing a raster format.
+pub(crate) fn data(href: &str) -> Result<Vec<u8>, String> {
+    let data = href
+        .strip_prefix("data:")
+        .ok_or_else(|| format!("href: {href}: no file reader was supplied"))?;
+    let (_, data) = data
+        .split_once(',')
         .filter(|(kind, _)| kind.ends_with(";base64"))
         .ok_or("href: an image's data URI is base64: data:image/png;base64,…")?;
-    let bytes = base64(data).ok_or("href: its data is not base64")?;
-    if looks(&bytes) {
-        return Err("href: an SVG file in an SVG file is not supported yet".into());
+    base64(data).ok_or_else(|| "href: its data is not base64".into())
+}
+
+/// Resolves an image against its containing SVG, preserving a web origin if there is one.
+pub(crate) fn resolve(origin: &str, href: &str) -> Result<String, String> {
+    use crate::front::{join, web};
+    if href.is_empty() || href.contains('#') {
+        return Err(format!(
+            "href: {href:?}: name an image file without a fragment"
+        ));
     }
-    Image::decode(&bytes).map_err(|e| format!("href: {e}"))
+    if web(href) {
+        return Ok(href.into());
+    }
+    if href.contains(":") {
+        return Err(format!("href: unsupported address {href:?}"));
+    }
+    if let Some((scheme, rest)) = origin.split_once("://") {
+        let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+        let folder = path
+            .rsplit_once('/')
+            .map_or("/".into(), |(p, _)| format!("/{p}"));
+        let path = if href.starts_with('/') {
+            join("/", href)
+        } else {
+            join(&folder, href)
+        };
+        return Ok(format!("{scheme}://{host}{path}"));
+    }
+    let folder = if href.starts_with('/') {
+        "/"
+    } else {
+        origin.rsplit_once('/').map_or("", |(p, _)| p)
+    };
+    Ok(join(folder, href))
+}
+
+/// Image dependencies for packaging; callers deduplicate and walk these transitively.
+pub(crate) fn dependencies(origin: &str, text: &str) -> Result<Vec<String>, String> {
+    let xml = roxmltree::Document::parse(text).map_err(|e| format!("{origin}: {e}"))?;
+    xml.descendants()
+        .filter(|n| {
+            n.is_element()
+                && n.tag_name().namespace() == Some(SVG)
+                && n.tag_name().name() == "image"
+        })
+        .filter_map(|n| n.attribute("href").or_else(|| n.attribute((XLINK, "href"))))
+        .filter(|href| !href.starts_with("data:"))
+        .map(|href| resolve(origin, href))
+        .collect()
 }
 
 /// The bytes base64 `text` holds, white space left out; `None` if it is not base64.
@@ -559,12 +614,15 @@ mod tests {
         let d = Document::parse(&text, &mut images).unwrap();
         assert_eq!(tags(&d), ["svg", "rect", "image", "g", "image"]);
         // After the images the scene has.
-        let embedded = |node, image| Embedded {
-            node,
-            image,
-            size: [8, 6],
-        };
-        assert_eq!(d.embedded, [embedded(2, 1), embedded(4, 2)]);
+        let embedded: Vec<_> = d
+            .embedded
+            .iter()
+            .map(|e| match e.picture {
+                Picture::Image { image, size } => (e.node, image, size),
+                _ => panic!("expected raster image"),
+            })
+            .collect();
+        assert_eq!(embedded, [(2, 1, [8, 6]), (4, 2, [8, 6])]);
         assert_eq!(images.len(), 3);
         assert_eq!(images[1].size, [8, 6]);
         // The data stays out of the attributes.
@@ -582,7 +640,7 @@ mod tests {
         let e = image(r#"href="logo.png""#);
         assert_eq!(
             e,
-            "2:3: <image> href: an SVG file reads no other files: embed logo.png as a data URI"
+            "2:3: <image> href: logo.png: no file reader was supplied"
         );
         let e = image("");
         assert!(e.starts_with("2:3: <image> needs an href"), "{e}");
@@ -594,10 +652,7 @@ mod tests {
         let e = image(r#"href="data:image/png;base64,ab*c""#);
         assert_eq!(e, "2:3: <image> href: its data is not base64");
         let e = image(r#"href="data:image/svg+xml;base64,PHN2Zy8+""#);
-        assert!(
-            e.ends_with("an SVG file in an SVG file is not supported yet"),
-            "{e}"
-        );
+        assert!(e.contains("needs xmlns="), "{e}");
         let e = image(r#"href="data:image/gif;base64,R0lGODlh""#);
         assert!(e.ends_with("not a PNG, JPEG, WebP or SVG image"), "{e}");
     }

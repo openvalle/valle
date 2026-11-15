@@ -358,6 +358,13 @@ intrinsic aspect ratio; `auto` fits that ratio inside the positioning area.
 SVG content stays vector until rendering at the output resolution. SVG files as
 `maskImage` are not supported.
 
+Inside an SVG file, `<image href="./picture.png">` (or `xlink:href`) loads PNG,
+JPEG, WebP or another SVG through the host resource reader. Paths are relative to
+the containing SVG, including nested files. Base64 data URIs also work. Project
+file discovery includes referenced images; missing files and circular SVG image
+references report their paths. Referenced SVGs keep vector shapes and their own
+styles. External document fragments (`other.svg#id`) are not supported.
+
 ### SVG patterns
 
 Use `<pattern id="dots" width={20} height={20} patternUnits="userSpaceOnUse">`

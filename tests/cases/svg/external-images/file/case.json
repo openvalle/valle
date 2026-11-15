@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/struct.html#ImageElement",
+  "assertion": "SVG image href and xlink:href load raster images and nested SVG files, with paths relative to each containing SVG and preserved aspect ratios.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "The browser reference embeds the equivalent SVG tree because browsers disable external subresources inside SVG images. File resolution and cycle detection are asserted separately in Rust. All three reviewed browser images and the Metal result agree pixel for pixel."
+  }
+}

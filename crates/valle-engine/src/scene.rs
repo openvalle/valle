@@ -136,7 +136,7 @@ impl Scene {
             for path in files {
                 let bytes = read(path).ok_or_else(|| fail(format!("{path}: not found")))?;
                 picture = match slot.kind {
-                    Holds::Image => Picture::load(&bytes, &mut images),
+                    Holds::Image => Picture::read(&bytes, path, read, &mut images),
                     Holds::Font => {
                         let blob = Blob::from(bytes);
                         (measuring.add_font(&slot.name, path, blob.clone()))
@@ -155,13 +155,7 @@ impl Scene {
         }
         // Shape embedded SVG text after all font resources have been registered.
         for picture in &mut pictures {
-            if let Picture::Svg(doc) = picture {
-                let canvas = match doc.natural {
-                    Natural::Size(s) => s.map(f64::from),
-                    _ => [300.0, 150.0],
-                };
-                crate::svg::text::shape(&doc.template, &mut doc.styles, &mut text, |_| canvas)?;
-            }
+            picture.shape_text(&mut text)?;
         }
         // The pictures its role reads, after its resources: files bound to them, or placeholders
         // of the composition's size.

@@ -72,6 +72,17 @@ pub fn files(entry: &str, read: &dyn Fn(&str) -> Option<String>) -> Result<Vec<S
             });
         }
     }
+    let mut at = 0;
+    while at < files.len() {
+        if let Some(text) = read(&files[at]).filter(|s| crate::svg::file::looks(s.as_bytes())) {
+            for file in crate::svg::file::dependencies(&files[at], &text)? {
+                if !rewrite::web(&file) && !files.contains(&file) {
+                    files.push(file);
+                }
+            }
+        }
+        at += 1;
+    }
     Ok(files)
 }
 
@@ -174,6 +185,27 @@ impl Loader<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn files_include_transitive_svg_images_once() {
+        let read = |path: &str| {
+            Some(match path {
+            "a/scene.motion.tsx" => "export const composition = {width:100,height:100,fps:1,duration:1}; export const controls = {resources:{icon:resource({kind:'image',default:'./root.svg'})}}; export default function Scene(){return <View/>;}",
+            "a/root.svg" => "<svg xmlns='http://www.w3.org/2000/svg'><image href='nested/leaf.svg'/><image href='tile.png'/></svg>",
+            "a/nested/leaf.svg" => "<svg xmlns='http://www.w3.org/2000/svg'><image href='../tile.png'/><image href='../root.svg'/></svg>",
+            _ => return None,
+        }.to_string())
+        };
+        assert_eq!(
+            files("a/scene.motion.tsx", &read).unwrap(),
+            [
+                "a/scene.motion.tsx",
+                "a/root.svg",
+                "a/nested/leaf.svg",
+                "a/tile.png"
+            ]
+        );
+    }
 
     #[test]
     fn only_scene_entries_require_the_motion_suffix() {
