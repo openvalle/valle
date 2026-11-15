@@ -402,7 +402,13 @@ for following siblings. Both attributes can be animated.
 
 `textDecoration` supports underline, overline and line-through, with solid, double,
 dotted, dashed and wavy lines. `textDecorationLine`, `textDecorationStyle`,
-`textDecorationThickness` and `textUnderlineOffset` also work. The decoration uses
+`textDecorationThickness` and `textUnderlineOffset` also work.
+`textUnderlinePosition` accepts `auto`, `under`, `left`, `right`, `under left`
+or `under right`. It inherits, and the decoration shorthand does not reset it.
+`under` clears the font descenders; `left`/`right` select the physical side in
+vertical text (and have no effect horizontally). The position belongs to the
+box declaring the decoration; an inherited underline does not move when a child
+changes this property. `textUnderlineOffset` adds distance away from that edge. The decoration uses
 the **fill, stroke and paint order of its declaring SVG text element**, including
 across differently colored tspans. Lines follow character positioning and textPath;
 underlines/overlines paint below glyphs and line-through paints above. A clipPath

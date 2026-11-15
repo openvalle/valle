@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/css-text-decor-3/#text-underline-position-property",
+  "assertion": "Underline position places horizontal lines below descenders and vertical lines on the chosen physical side, with inherited values, mixed sizes and explicit offsets.",
+  "at": [0],
+  "browser": {
+    "selected": "firefox",
+    "reason": "Reviewed Chrome, Firefox, WebKit, native and difference images. Vertical physical edges agree across browsers. Firefox places under below the font descent, while Chrome places it nearer the ink. The specification permits UA-defined distances. Remaining 7435 pixels (maximum 255) include glyph rasterization and these 1\u20134 px horizontal line-position differences, not a claim of pixel equivalence. Unit tests independently assert below-descender placement, physical sides, offset behavior and a level line across mixed sizes.",
+    "pixels": {
+      "maxDifference": 255,
+      "maxPixels": 7500
+    }
+  }
+}

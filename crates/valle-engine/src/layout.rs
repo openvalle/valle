@@ -448,8 +448,21 @@ fn decorations(
     // A shaping/font boundary does not restart a decorating box's dots, dashes or waves.
     // Collect its full interval on each line once; glyph runs still clip their own pieces.
     let mut spans = HashMap::new();
+    let mut extents = HashMap::new();
+    let mut ems = HashMap::new();
     for run in &lines.runs {
         for d in &styles[run.node as usize].decorations {
+            let [ascent, descent, _] = text.metrics(&styles[run.node as usize].font)?;
+            ems.entry((run.line, d.by))
+                .and_modify(|v: &mut f32| *v = v.max(styles[run.node as usize].font.size as f32))
+                .or_insert(styles[run.node as usize].font.size as f32);
+            extents
+                .entry((run.line, d.by))
+                .and_modify(|v: &mut [f32; 2]| {
+                    v[0] = v[0].max(ascent);
+                    v[1] = v[1].max(descent);
+                })
+                .or_insert([ascent, descent]);
             spans
                 .entry((run.line, d.by))
                 .and_modify(|x: &mut [f32; 2]| {
@@ -493,10 +506,34 @@ fn decorations(
                     None => (thickness / 2.0).ceil().max(1.0),
                     Some(o) => o.resolve(size),
                 };
-                tops.push((baseline + offset, 1.0));
+                let vertical = font.writing != crate::style::WritingMode::Horizontal;
+                let [_, below] = extents[&(run.line, d.by)];
+                let (top, way) = if vertical && (d.position.right.is_some() || d.position.under) {
+                    let [a, descent, _] = text.metrics(&styles[i].font)?;
+                    let center = baseline - (a.round() - descent.round()) / 2.0;
+                    let half = ems[&(run.line, d.by)] / 2.0;
+                    if d.position.right == Some(true) {
+                        (center - half - offset - height, -1.0)
+                    } else {
+                        (center + half + offset, 1.0)
+                    }
+                } else if d.position.under {
+                    (baseline + below + offset, 1.0)
+                } else {
+                    (baseline + offset, 1.0)
+                };
+                tops.push((top, way));
             }
             if d.lines[1] {
-                tops.push((baseline - ascent - height, -1.0));
+                if font.writing != crate::style::WritingMode::Horizontal
+                    && d.position.right == Some(true)
+                {
+                    let [a, descent, _] = text.metrics(&styles[i].font)?;
+                    let center = baseline - (a.round() - descent.round()) / 2.0;
+                    tops.push((center + ems[&(run.line, d.by)] / 2.0, 1.0));
+                } else {
+                    tops.push((baseline - extents[&(run.line, d.by)][0] - height, -1.0));
+                }
             }
             if d.lines[2] {
                 let decorating = text.metrics(font)?[0].round();
@@ -1620,6 +1657,76 @@ mod tests {
             (d.style, d.along),
             (DecorationStyle::Dotted, dotted.runs[0].x)
         );
+    }
+
+    #[test]
+    fn underline_position_uses_descent_and_physical_vertical_sides() {
+        let lines = |position: &str, writing: &str| {
+            let l = lay(
+                vec![text_node(
+                    "gyp",
+                    &[
+                        ("fontSize", "24px"),
+                        ("width", "120px"),
+                        ("height", "120px"),
+                        ("writingMode", writing),
+                        ("textDecoration", "underline 2px"),
+                        ("textDecorationSkipInk", "none"),
+                        ("textUnderlinePosition", position),
+                    ],
+                )],
+                &[0],
+            )
+            .unwrap();
+            l.lines[0].clone().unwrap()
+        };
+        let auto = lines("auto", "horizontal-tb");
+        let under = lines("under", "horizontal-tb");
+        assert!(under.decorations[0].rect[1] > auto.decorations[0].rect[1] + 4.0);
+        assert_eq!(
+            auto.decorations,
+            lines("right", "horizontal-tb").decorations
+        );
+        for writing in ["vertical-rl", "vertical-lr"] {
+            let left = lines("left", writing);
+            let right = lines("right", writing);
+            // Logical block coordinates rotate clockwise: greater y is physical left.
+            assert!(left.decorations[0].rect[1] > left.baselines[0]);
+            assert!(right.decorations[0].rect[3] < right.baselines[0]);
+        }
+    }
+
+    #[test]
+    fn underlines_stay_level_across_descendants_of_different_sizes() {
+        let mut root = text_node(
+            "",
+            &[
+                ("textDecoration", "underline 2px"),
+                ("textUnderlinePosition", "under"),
+                ("textDecorationSkipInk", "none"),
+            ],
+        );
+        root.kind = Kind::Text {
+            content: vec![
+                template::Piece::Text(Prop::Const(V::Str("small ".into()))),
+                template::Piece::Span(1),
+            ],
+        };
+        root.children = vec![1];
+        let mut span = view(
+            &[("fontSize", "36px"), ("textUnderlinePosition", "auto")],
+            &[],
+        );
+        span.kind = Kind::Span {
+            content: vec![template::Piece::Text(Prop::Const(V::Str("gyp".into())))],
+            unit: false,
+        };
+        let layout = lay(vec![root, span], &[0]).unwrap();
+        let lines = layout.lines[0].as_ref().unwrap();
+        assert!(lines.decorations.len() >= 2);
+        let y = lines.decorations[0].rect[1];
+        assert!(lines.decorations.iter().all(|d| d.rect[1] == y));
+        assert!(y > lines.baselines[0] + 6.0);
     }
 
     #[test]

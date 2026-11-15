@@ -23,6 +23,11 @@ const CASES: {
   pixels?: { maxDifference: number; maxPixels: number };
 }[] = [
   {
+    entry: "tests/cases/css/text/underline-position/scene.motion.tsx",
+    frames: [0, 5, 2, 7, 0],
+    nativeResources: { CJK: "tests/resources/NotoSansSC.ttf" },
+  },
+  {
     entry: "tests/cases/css/text/bidi/scene.motion.tsx",
     frames: [0, 5, 2, 7, 0],
     nativeResources: {

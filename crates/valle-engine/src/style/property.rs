@@ -287,6 +287,7 @@ pub(super) enum Field {
     TextDecorationThickness,
     TextDecorationSkipInk,
     TextUnderlineOffset,
+    TextUnderlinePosition,
     TextOverflow,
     WebkitBoxOrient,
     WebkitLineClamp,
@@ -330,7 +331,7 @@ pub(super) enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 275] = [
+const FIELDS: [(&str, Field); 276] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -721,6 +722,7 @@ const FIELDS: [(&str, Field); 275] = [
     ("textDecorationThickness", Field::TextDecorationThickness),
     ("textDecorationSkipInk", Field::TextDecorationSkipInk),
     ("textUnderlineOffset", Field::TextUnderlineOffset),
+    ("textUnderlinePosition", Field::TextUnderlinePosition),
     ("textOverflow", Field::TextOverflow),
     ("WebkitBoxOrient", Field::WebkitBoxOrient),
     ("WebkitLineClamp", Field::WebkitLineClamp),
@@ -752,6 +754,7 @@ impl Field {
                 | Field::TextDecorationStyle
                 | Field::TextDecorationThickness
                 | Field::TextUnderlineOffset
+                | Field::TextUnderlinePosition
                 | Field::FontSize
                 | Field::FontWeight
                 | Field::FontStretch
@@ -1013,6 +1016,7 @@ impl Field {
                 | Field::TextDecorationThickness
                 | Field::TextDecorationSkipInk
                 | Field::TextUnderlineOffset
+                | Field::TextUnderlinePosition
                 | Field::WebkitTextFillColor
                 | Field::WebkitTextStroke
                 | Field::WebkitTextStrokeWidth

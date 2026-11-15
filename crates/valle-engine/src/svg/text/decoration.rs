@@ -41,7 +41,7 @@ pub(super) fn outlines(
             if thickness == 0.0 {
                 continue;
             }
-            let [ascent, _, _] = text.metrics(font)?;
+            let [ascent, descent, _] = text.metrics(font)?;
             let offset = d
                 .offset
                 .as_ref()
@@ -53,7 +53,7 @@ pub(super) fn outlines(
                     continue;
                 }
                 let y = match line {
-                    0 => offset + thickness / 2.0,
+                    0 => offset + thickness / 2.0 + if d.position.under { descent } else { 0.0 },
                     1 => -ascent - thickness / 2.0,
                     _ => -ascent / 3.0,
                 };

@@ -1,0 +1,11 @@
+{
+  "size": [500, 240],
+  "sources": {
+    "tests/baselines/browser/css/text/underline-position/scene.html": "f985e113c7aac0d5f7028c3236e97274b7ac9d125acfd408a1f52b35084a0644",
+    "tests/resources/NotoSansSC.ttf": "6cbd3ac22ef454e4e9bcfb67369ea94297002a218e9abebc90852534afee096a"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

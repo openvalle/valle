@@ -94,6 +94,7 @@ pub struct Decoration {
     /// size of the decorating box, which percentages are of; `None` is `auto`.
     pub thickness: Option<Calc>,
     pub offset: Option<Calc>,
+    pub position: UnderlinePosition,
     /// The node that declares it.
     pub by: usize,
 }
@@ -107,6 +108,38 @@ pub enum DecorationStyle {
     Dotted,
     Dashed,
     Wavy,
+}
+
+/// Inherited underline placement. A side is physical in vertical text and ignored horizontally.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnderlinePosition {
+    pub under: bool,
+    pub right: Option<bool>,
+}
+
+impl UnderlinePosition {
+    pub(super) fn parse(value: &str) -> Result<Self, String> {
+        if value.eq_ignore_ascii_case("auto") {
+            return Ok(Self::default());
+        }
+        let mut result = Self::default();
+        for word in value.split_ascii_whitespace() {
+            match word.to_ascii_lowercase().as_str() {
+                "under" if !result.under => result.under = true,
+                "left" if result.right.is_none() => result.right = Some(false),
+                "right" if result.right.is_none() => result.right = Some(true),
+                _ => {
+                    return Err(format!(
+                        "{value:?} is not a text-underline-position: auto, under, left, right, under left or under right"
+                    ));
+                }
+            }
+        }
+        if result == Self::default() {
+            return Err("text-underline-position needs a value".into());
+        }
+        Ok(result)
+    }
 }
 
 /// Whether underlines and overlines leave gaps where glyphs cross them.
@@ -204,6 +237,7 @@ pub struct Font {
     pub skip_ink: SkipInk,
     /// `text-underline-offset`, which a decoration takes from the box that declares it.
     pub underline_offset: Option<Calc>,
+    pub underline_position: UnderlinePosition,
 }
 
 impl Font {
@@ -256,6 +290,7 @@ impl Font {
             shadows: Rc::new([]),
             skip_ink: SkipInk::Auto,
             underline_offset: None,
+            underline_position: Default::default(),
         }
     }
 }
@@ -757,6 +792,29 @@ mod tests {
     use super::*;
     use crate::style::*;
     use crate::testing::styles::{error, num, one, styles, text, view};
+
+    #[test]
+    fn underline_position_parses_and_is_not_reset_by_decoration() {
+        for value in [
+            "auto",
+            "under",
+            "left",
+            "right",
+            "under left",
+            "right under",
+        ] {
+            assert!(UnderlinePosition::parse(value).is_ok(), "{value}");
+        }
+        for value in ["", "auto under", "left right", "under under", "below"] {
+            assert!(UnderlinePosition::parse(value).is_err(), "{value}");
+        }
+        let style = one(&[
+            ("textUnderlinePosition", text("under right")),
+            ("textDecoration", text("underline")),
+        ]);
+        assert!(style.font.underline_position.under);
+        assert_eq!(style.decorations[0].position.right, Some(true));
+    }
 
     #[test]
     fn white_space_sets_its_collapsing_and_wrapping() {
@@ -1394,6 +1452,7 @@ mod tests {
             shadows: Rc::new([]),
             skip_ink: crate::style::SkipInk::Auto,
             underline_offset: None,
+            underline_position: Default::default(),
         };
         assert_eq!(*s[0].font, initial);
         assert_eq!(s[0].color, color::BLACK);
@@ -1460,6 +1519,7 @@ mod tests {
             shadows: Rc::new([]),
             skip_ink: crate::style::SkipInk::Auto,
             underline_offset: None,
+            underline_position: Default::default(),
         };
         assert_eq!(*s[1].font, brand);
         assert_eq!(s[1].color, [1.0, 0.0, 0.0, 1.0]);

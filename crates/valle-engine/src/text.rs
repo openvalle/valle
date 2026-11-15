@@ -1697,6 +1697,7 @@ mod tests {
             shadows: Rc::new([]),
             skip_ink: crate::style::SkipInk::Auto,
             underline_offset: None,
+            underline_position: Default::default(),
         }
     }
 

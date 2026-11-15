@@ -223,6 +223,7 @@ pub(super) struct Declared {
     pub(super) text_shadows: Option<Vec<Shadowed>>,
     pub(super) skip_ink: Option<SkipInk>,
     pub(super) underline_offset: Option<Len>,
+    pub(super) underline_position: Option<super::font::UnderlinePosition>,
 }
 
 impl Default for Declared {
@@ -365,6 +366,7 @@ impl Default for Declared {
             text_shadows: None,
             skip_ink: None,
             underline_offset: None,
+            underline_position: None,
         }
     }
 }
@@ -1508,6 +1510,9 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
                 ("none", SkipInk::None),
             ];
             d.skip_ink = Some(keyword(v, &skips)?);
+        }
+        F::TextUnderlinePosition => {
+            d.underline_position = Some(super::font::UnderlinePosition::parse(&text(v)?)?)
         }
         F::TextUnderlineOffset => d.underline_offset = Some(length(v, UNDERLINE_OFFSET)?),
         F::WebkitTextFillColor => d.fill = Some(current_color(v)?),

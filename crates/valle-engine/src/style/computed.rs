@@ -588,6 +588,7 @@ pub(super) fn compute(
                 .collect(),
         },
         skip_ink: d.skip_ink.unwrap_or(inherited.skip_ink),
+        underline_position: d.underline_position.unwrap_or(inherited.underline_position),
         underline_offset: match &d.underline_offset {
             None => inherited.underline_offset.clone(),
             Some(Len::Auto) => None,
@@ -660,6 +661,7 @@ pub(super) fn compute(
                 l => Some(l.calc(u)),
             },
             offset: font.underline_offset.clone(),
+            position: font.underline_position,
             by: node,
         });
     }
