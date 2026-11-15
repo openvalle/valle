@@ -129,6 +129,62 @@ fn turbulence(index: u32, at: vec2f) -> vec4f {
   return vec4f(value.rgb * value.a, value.a);
 }
 
+fn wrapped_pixel(t: u32, p: vec2i, r: vec4f) -> vec4f {
+  let q = local(vec2f(p) + 0.5, t);
+  let wrapped = r.xy + fract((q - r.xy) / r.zw) * r.zw;
+  let at = transforms[t].forward * vec3f(wrapped, 1.0);
+  return sample_at(first, at.xy / at.z);
+}
+// Convolution edges are relative to the input primitive, not the full render target.
+fn kernel_sample(index: u32, at: vec2f, linear: bool) -> vec4f {
+  let h = graph[index].m;
+  let r = vec4f(data(index, 0u), data(index, 1u), data(index, 2u), data(index, 3u));
+  if (any(r.zw <= vec2f(0.0))) { return vec4f(0.0); }
+  var p = at;
+  let edge = u32(h[4].z);
+  if (edge == 0u) {
+    let half_pixel = vec2f(data(index, 4u), data(index, 5u)) * 0.5;
+    p = clamp(p, r.xy + min(half_pixel, r.zw * 0.5), r.xy + r.zw - min(half_pixel, r.zw * 0.5));
+  } else if (edge == 1u) {
+    p = r.xy + fract((p - r.xy) / r.zw) * r.zw;
+  } else if (any(p < r.xy) || any(p >= r.xy + r.zw)) { return vec4f(0.0); }
+  let point = transforms[u32(h[0].z)].forward * vec3f(p, 1.0);
+  if (edge == 1u) {
+    // Wrap each bilinear tap as well, so a fractional offset cannot sample
+    // transparent pixels just outside the input instead of its opposite edge.
+    let q = point.xy / point.z - 0.5;
+    let f = floor(q);
+    let p0 = vec2i(f);
+    let t = u32(h[0].z);
+    let value = mix(mix(wrapped_pixel(t, p0, r), wrapped_pixel(t, p0 + vec2i(1, 0), r), q.x - f.x),
+      mix(wrapped_pixel(t, p0 + vec2i(0, 1), r), wrapped_pixel(t, p0 + vec2i(1, 1), r), q.x - f.x), q.y - f.y);
+    return working(value, linear);
+  }
+  return working(sample_at(first, point.xy / point.z), linear);
+}
+fn convolve(v: Out, linear: bool) -> vec4f {
+  let h = graph[v.index].m;
+  let order = vec2u(h[2].xy);
+  let anchor = h[2].zw;
+  let unit = h[3].xy;
+  let preserve = h[4].w != 0.0;
+  let at = local(v.pos.xy, u32(h[0].z));
+  var sum = vec4f(0.0);
+  for (var row = 0u; row < order.y; row++) {
+    for (var col = 0u; col < order.x; col++) {
+      let weight = data(v.index, 6u + (order.y - row - 1u) * order.x + order.x - col - 1u);
+      if (weight != 0.0) {
+        let sample = kernel_sample(v.index, at + (vec2f(f32(col), f32(row)) - anchor) * unit, linear);
+        sum += select(sample, straight(sample), preserve) * weight;
+      }
+    }
+  }
+  sum /= h[3].z;
+  let alpha = select(clamp(sum.a + h[3].w, 0.0, 1.0), pixel(first, vec2i(v.pos.xy)).a, preserve);
+  if (preserve) { return vec4f(clamp(sum.rgb + h[3].w, vec3f(0.0), vec3f(1.0)) * alpha, alpha); }
+  return vec4f(clamp(sum.rgb + h[3].w * alpha, vec3f(0.0), vec3f(alpha)), alpha);
+}
+
 fn filtered(v: Out) -> vec4f {
   let h = graph[v.index].m;
   let op = u32(h[0].x);
@@ -217,6 +273,7 @@ fn filtered(v: Out) -> vec4f {
     }
     // Match the noise raster sampling phase used by Chrome and WebKit.
     case 13u: { result = turbulence(v.index, local(v.pos.xy + 0.5, t)); }
+    case 14u: { result = convolve(v, linear); }
     case 12u: {
       let tile = h[2];
       if (any(tile.zw <= vec2f(0.0))) { return vec4f(0.0); }

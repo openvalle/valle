@@ -518,6 +518,7 @@ shape or group. Both inline SVG and SVG files support these primitives:
 | `feComponentTransfer` | `<feFuncR/G/B/A>` children: `identity`, `table`, `discrete`, `linear`, `gamma` |
 | `feDropShadow` | `dx`, `dy`, `stdDeviation`, `floodColor`, `floodOpacity` |
 | `feTurbulence` | `baseFrequency` (one or two nonnegative numbers), `numOctaves` (nonnegative integer, default 1), `seed` (default 0), `type="turbulence|fractalNoise"`, `stitchTiles="noStitch|stitch"` |
+| `feConvolveMatrix` | `order` (positive integer pair, default 3), `kernelMatrix` (orderX × orderY numbers), `divisor` (nonzero; default sum or 1), `bias` (default 0), `targetX/Y` (default center), `edgeMode="duplicate|wrap|none"`, `kernelUnitLength` (positive pair), `preserveAlpha="false|true"` |
 | `feTile` | `in`; repeats its input primitive's subregion to fill the output subregion |
 
 Transfer functions use `tableValues` for table/discrete, `slope` and `intercept`
@@ -567,7 +568,7 @@ stay on the GPU, with textures released after their last reader.
 
 Not supported: external filter references, filter URLs on CSS boxes/the outer SVG,
 URL/function lists, `BackgroundImage`/`BackgroundAlpha`/`FillPaint`/`StrokePaint`,
-`feImage`, convolution or lighting primitives, and blur
+`feImage`, lighting primitives, and blur
 edge modes other than `none`. These produce errors rather than a partial effect.
 
 ## Valle filters

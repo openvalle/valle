@@ -1,5 +1,6 @@
 //! SVG filter primitives retain their named inputs until the complete definition is known.
 //! The resolved graph is a DAG: inputs can only name a standard source or an earlier result.
+pub mod convolve;
 pub mod turbulence;
 
 use std::collections::HashMap;
@@ -30,6 +31,7 @@ pub enum Operation {
     Offset([f64; 2]),
     Flood,
     Tile,
+    Convolve(convolve::Kernel),
     Turbulence(turbulence::Noise),
     Matrix([f64; 20]),
     Blend(u32),
@@ -112,6 +114,7 @@ pub fn primitive(tag: Tag, attributes: &[(&str, &V)]) -> Result<Primitive, Strin
         Tag::FeOffset => Operation::Offset([a.number("dx", 0.0)?, a.number("dy", 0.0)?]),
         Tag::FeFlood => Operation::Flood,
         Tag::FeTile => Operation::Tile,
+        Tag::FeConvolveMatrix => Operation::Convolve(convolve::Kernel::parse(&a)?),
         Tag::FeTurbulence => {
             let octaves = a.number("numOctaves", 1.)?;
             if octaves.fract() != 0. || !(0. ..=f64::from(u32::MAX)).contains(&octaves) {

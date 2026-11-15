@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/filters.html#feConvolveMatrixElement",
+  "assertion": "Convolution reverses asymmetric kernels, honors target, edge modes, explicit sample distance, divisor and bias, and preserves input alpha when requested.",
+  "at": [0],
+  "browser": {
+    "selected": "firefox",
+    "reason": "Firefox implements SVG 1.1 kernelUnitLength; Chrome/WebKit ignore the explicit 2-unit spacing in panel 3. Native output matches Firefox within 1 channel level from premultiplication and intermediate precision. Panel 2 also verifies reversed kernel orientation and wrap.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 9000
+    }
+  }
+}

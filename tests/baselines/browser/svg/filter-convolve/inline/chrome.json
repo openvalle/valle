@@ -1,0 +1,10 @@
+{
+  "size": [450, 130],
+  "sources": {
+    "tests/baselines/browser/svg/filter-convolve/inline/scene.html": "c69d49cb9b4246f2e75cd17f0c51ce68ebec3ac3f4b84c360103f55c2d5c5439"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

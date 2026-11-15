@@ -1,0 +1,11 @@
+{
+  "size": [450, 130],
+  "sources": {
+    "tests/baselines/browser/svg/filter-convolve/file/scene.html": "35aa461d7091130358423a2bf6dfc95852c6400a434add20cc267d0a40f61736",
+    "tests/cases/svg/filter-convolve/file/source.svg": "e9988a814a49ef616be4a3899917c1060421ddf69ca16b1bde603e62bb00a4a3"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

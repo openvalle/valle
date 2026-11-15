@@ -202,6 +202,40 @@ impl Plan {
                         &noise.table,
                     )
                 }
+                Operation::Convolve(kernel) => {
+                    let pixel = [0, 1].map(|axis| 1. / matrix.0[axis][0].hypot(matrix.0[axis][1]));
+                    let unit = kernel
+                        .unit
+                        .map_or(pixel, |u| [u[0] * units[0], u[1] * units[1]]);
+                    let mut data = regions[n.inputs[0]].map(|v| v as f32).to_vec();
+                    data.extend([pixel[0] as f32, pixel[1] as f32]);
+                    data.extend(kernel.values.iter().map(|v| *v as f32));
+                    let params = [
+                        kernel.order[0] as f32,
+                        kernel.order[1] as f32,
+                        kernel.target[0] as f32,
+                        kernel.target[1] as f32,
+                        unit[0] as f32,
+                        unit[1] as f32,
+                        kernel.divisor as f32,
+                        kernel.bias as f32,
+                        0.,
+                        0.,
+                        kernel.edge as f32,
+                        u8::from(kernel.preserve_alpha) as f32,
+                    ];
+                    self.graph_pass(
+                        [a; 2],
+                        14,
+                        Pass {
+                            linear,
+                            region,
+                            matrix,
+                        },
+                        &params,
+                        &data,
+                    )
+                }
                 Operation::Tile => self.graph_pass(
                     [a; 2],
                     12,
@@ -562,6 +596,21 @@ mod tests {
             let pixels = draw(&mut renderer, vec![red.clone(), alias.clone()], vec![]);
             close(&pixels[0..4], [255, 0, 0, 191]);
         }
+        // Preserve-alpha convolves straight RGB and applies bias before repremultiplication.
+        let kernel = crate::svg::filter::convolve::Kernel {
+            order: [1, 1],
+            values: vec![1.],
+            divisor: 1.,
+            bias: 0.25,
+            target: [0, 0],
+            edge: 0,
+            unit: None,
+            preserve_alpha: true,
+        };
+        let mut convolve = node(Operation::Convolve(kernel), &[2]);
+        convolve.linear = false;
+        let pixels = draw(&mut renderer, vec![red.clone(), convolve], vec![]);
+        close(&pixels[..4], [255, 64, 64, 128]);
         // Arithmetic's constant term can create visible pixels from a transparent source.
         let constant = node(
             Operation::Composite {
@@ -597,6 +646,45 @@ mod tests {
             [255, 0, 0, 128],
         );
         // Tile defaults to the whole filter, not its smaller input subregion.
+        // A reversed asymmetric kernel moves the 4..8 input two pixels left.
+        let kernel = crate::svg::filter::convolve::Kernel {
+            order: [3, 1],
+            values: vec![1., 0., 0.],
+            divisor: 1.,
+            bias: 0.,
+            target: [0, 0],
+            edge: 2,
+            unit: None,
+            preserve_alpha: false,
+        };
+        let mut convolve = node(Operation::Convolve(kernel), &[2]);
+        convolve.region = [0., 0., 16., 16.].map(|units| Some(Length { units, percent: 0. }));
+        let pixels = draw(&mut renderer, vec![red.clone(), convolve], vec![]);
+        close(
+            &pixels[(4 * 16 + 2) * 4..(4 * 16 + 3) * 4],
+            [255, 0, 0, 128],
+        );
+        close(&pixels[(4 * 16 + 6) * 4..(4 * 16 + 7) * 4], [0; 4]);
+        // Fractional taps wrap at the input subregion, including both sides of a bilinear sample.
+        let kernel = crate::svg::filter::convolve::Kernel {
+            order: [2, 1],
+            values: vec![1., 0.],
+            divisor: 1.,
+            bias: 0.,
+            target: [0, 0],
+            edge: 1,
+            unit: Some([0.5, 1.]),
+            preserve_alpha: false,
+        };
+        let pixels = draw(
+            &mut renderer,
+            vec![red.clone(), node(Operation::Convolve(kernel), &[2])],
+            vec![],
+        );
+        close(
+            &pixels[(4 * 16 + 7) * 4..(4 * 16 + 8) * 4],
+            [255, 0, 0, 128],
+        );
         let tile = node(Operation::Tile, &[2]);
         let pixels = draw(&mut renderer, vec![red.clone(), tile.clone()], vec![]);
         for pixel in pixels.as_chunks::<4>().0 {
