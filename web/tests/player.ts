@@ -24,6 +24,11 @@ const CASES: {
 }[] = [
   { entry: "tests/cases/css/values/absolute-units/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/values/font-ex/scene.motion.tsx", frames: [0] },
+  {
+    entry: "tests/cases/css/text/font-synthesis/scene.motion.tsx",
+    frames: [0],
+    nativeResources: { Hebrew: "tests/resources/NotoSansHebrew.ttf" },
+  },
   { entry: "tests/cases/svg/font-units/inline/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/font-units/file/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/absolute-units/inline/scene.motion.tsx", frames: [0] },

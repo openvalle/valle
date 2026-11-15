@@ -154,6 +154,10 @@ Output resolution scales the result; these units do not read screen DPI.
 spacing. In `fontSize` it uses the parent font; other lengths use the element’s
 font. Explicitly inherited lengths keep their resolved size.
 
+`fontSynthesis` accepts `none`, `weight`, `style` or `weight style` (the default).
+It inherits. `none` disables simulated bold and italic when the selected family
+lacks those faces; it does not disable real bold, italic or variable-font axes.
+
 Supported, among others:
 
 - Layout: `display` `flex`, `grid`, `block`, `none`; flexbox and grid properties, `gap`,

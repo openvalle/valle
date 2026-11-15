@@ -594,6 +594,7 @@ pub(super) fn compute(
         weight: selected.weight,
         stretch: d.stretch.unwrap_or(inherited.stretch),
         style: d.font_style.unwrap_or(inherited.style),
+        synthesis: d.synthesis.unwrap_or(inherited.synthesis),
         family: selected.family,
         line_height: match &d.line_height {
             None => inherited.line_height,

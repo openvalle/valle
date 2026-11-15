@@ -188,6 +188,8 @@ pub struct Font {
     /// `font-stretch`, % of the normal width.
     pub stretch: f64,
     pub style: FontStyle,
+    /// Whether a missing weight or style may be synthesized. Real faces are always selected.
+    pub synthesis: [bool; 2],
     pub family: Rc<[Family]>,
     pub line_height: LineHeight,
     pub align: TextAlign,
@@ -260,6 +262,7 @@ impl Font {
             weight: 400.0,
             stretch: 100.0,
             style: FontStyle::Normal,
+            synthesis: [true; 2],
             family: Rc::new([Family::SansSerif]),
             line_height: LineHeight::Normal,
             align: TextAlign::Start,
@@ -485,6 +488,34 @@ pub(super) fn shorthand(v: &V, d: &mut Declared) -> Result<(), String> {
     d.features = Some(Rc::new([]));
     d.variations = Some(Rc::new([]));
     Ok(())
+}
+
+/// CSS Fonts 3: `none | [ weight || style ]`.
+pub(super) fn synthesis(v: &V) -> Result<[bool; 2], String> {
+    let s = text(v)?;
+    if s == "none" {
+        return Ok([false; 2]);
+    }
+    let mut allowed = [false; 2];
+    for word in css::words(&s) {
+        let i = match word {
+            "weight" => 0,
+            "style" => 1,
+            _ => {
+                return Err(format!(
+                    "font-synthesis takes none, weight, style or weight style, not {s}"
+                ));
+            }
+        };
+        if allowed[i] {
+            return Err(format!("font-synthesis repeats {word}"));
+        }
+        allowed[i] = true;
+    }
+    if !allowed.iter().any(|v| *v) {
+        return Err("font-synthesis needs a value".into());
+    }
+    Ok(allowed)
 }
 
 /// `font-stretch`: a keyword, or a percentage of the normal width, 0% or more.
@@ -888,6 +919,32 @@ mod tests {
 
     use super::*;
     use crate::testing::styles::{error, num, one, styles, text, view};
+
+    #[test]
+    fn synthesis_accepts_only_css_fonts_three_permissions() {
+        for (value, expected) in [
+            ("none", [false, false]),
+            ("weight", [true, false]),
+            ("style", [false, true]),
+            ("style weight", [true, true]),
+        ] {
+            assert_eq!(
+                one(&[("fontSynthesis", text(value))]).font.synthesis,
+                expected
+            );
+        }
+        for value in ["", "auto", "none style", "weight weight", "small-caps"] {
+            assert!(synthesis(&V::Str(value.into())).is_err());
+        }
+        let tree = vec![
+            view(&[("fontSynthesis", text("none"))], &[1, 2]),
+            view(&[("font", text("italic 20px sans-serif"))], &[]),
+            view(&[("fontSynthesis", text("initial"))], &[]),
+        ];
+        let s = styles(tree, &[]).unwrap();
+        assert_eq!(s[1].font.synthesis, [false; 2]);
+        assert_eq!(s[2].font.synthesis, [true; 2]);
+    }
 
     #[test]
     fn font_shorthand_sets_and_resets_its_longhands() {
@@ -1574,6 +1631,7 @@ mod tests {
             weight: 400.0,
             stretch: 100.0,
             style: FontStyle::Normal,
+            synthesis: [true; 2],
             family: Rc::new([Family::SansSerif]),
             line_height: LineHeight::Normal,
             align: TextAlign::Start,
@@ -1617,6 +1675,7 @@ mod tests {
             weight: 700.0,
             stretch: 75.0,
             style: FontStyle::Oblique(20.0),
+            synthesis: [true; 2],
             family: Rc::new([
                 Family::Named("Brand Sans".into()),
                 Family::Named("Noto Serif".into()),

@@ -1,0 +1,11 @@
+{
+  "size": [300, 340],
+  "sources": {
+    "tests/baselines/browser/css/text/font-synthesis/scene.html": "3c1e026161b34b4d3f0ac87f3baf7601108d22ae78b8fb494bb4937115d5f1b0",
+    "tests/resources/NotoSansHebrew.ttf": "a5cc5ce90ed4f6393992728fcc63657c4dd83aed119acbd5f4ed223e40c71129"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

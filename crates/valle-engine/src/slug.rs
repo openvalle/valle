@@ -107,6 +107,9 @@ pub fn contours(face: &Face, glyph: u32) -> Result<(f32, Vec<Vec<Curve>>), Error
         )
         .map_err(|e| format!("glyph {glyph}: {e}"))?;
     pen.end();
+    if face.emboldened {
+        pen.contours = path::embolden(&pen.contours, em / 96.0, em / 4096.0);
+    }
     // Slanted as Skia slants a face for an italic it does not have, by a quarter of the height.
     if face.slanted {
         for p in pen.contours.iter_mut().flatten().flatten() {
@@ -485,6 +488,7 @@ mod tests {
             index: 0,
             coords,
             slanted: false,
+            emboldened: false,
         }
     }
 
@@ -598,6 +602,25 @@ mod tests {
             sum += (at(0.0) + 4.0 * at(0.5) + at(1.0)) / 6.0;
         }
         sum.abs()
+    }
+
+    #[test]
+    fn synthetic_weight_expands_stems_without_filling_counters() {
+        let normal = face(Vec::new());
+        let font = FontRef::from_index(normal.data.data(), 0).unwrap();
+        let id = font.charmap().map('O').unwrap().to_u32();
+        let bold = Face {
+            emboldened: true,
+            ..normal.clone()
+        };
+        let a = outline(&normal, id, 0.0).unwrap();
+        let b = outline(&bold, id, 0.0).unwrap();
+        assert!(b.bounds[0] < a.bounds[0] && b.bounds[2] > a.bounds[2]);
+        assert!(b.bounds[1] < a.bounds[1] && b.bounds[3] > a.bounds[3]);
+        let (_, plain) = contours(&normal, id).unwrap();
+        let (_, thick) = contours(&bold, id).unwrap();
+        assert_eq!(plain.len(), thick.len());
+        assert!(thick.len() > 1, "the O counter remains a separate contour");
     }
 
     #[test]

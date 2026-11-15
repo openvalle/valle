@@ -94,6 +94,7 @@ fn inherited(field: Field) -> bool {
             | FontWeight
             | FontStretch
             | FontStyle
+            | FontSynthesis
             | FontFamily
             | FontFeatureSettings
             | FontVariant(_)
@@ -260,6 +261,7 @@ fn copy(d: &mut Declared, s: &Declared, field: Field) {
         F::FontWeight => fields!(font_weight),
         F::FontStretch => fields!(stretch),
         F::FontStyle => fields!(font_style),
+        F::FontSynthesis => fields!(synthesis),
         F::FontFamily => fields!(font_family),
         F::FontFeatureSettings => fields!(features),
         F::FontVariationSettings => fields!(variations),
@@ -412,6 +414,7 @@ pub(super) fn resolved(d: &Declared, s: &Style, canvas: [f64; 2]) -> Declared {
         font_weight = Weight::Absolute(f.weight),
         stretch = f.stretch,
         font_style = f.style,
+        synthesis = f.synthesis,
         font_family = f.family.clone(),
         features = f.features.clone(),
         variations = f.variations.clone(),

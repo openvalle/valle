@@ -222,6 +222,36 @@ pub fn stroke(contours: &[Vec<Curve>], width: f32, tolerance: f32) -> Vec<Vec<Cu
     out
 }
 
+/// Expand the filled side of a font's consistently wound contours. Outer contours grow and
+/// counters shrink by the same distance; their winding is retained for nonzero filling.
+pub(crate) fn embolden(contours: &[Vec<Curve>], distance: f32, tolerance: f32) -> Vec<Vec<Curve>> {
+    let winding = contours
+        .iter()
+        .map(|contour| {
+            contour
+                .iter()
+                .map(|&[a, b, c]| 2.0 * cross(a, b) + 2.0 * cross(b, c) + cross(a, c))
+                .sum::<f32>()
+        })
+        .max_by(|a, b| a.abs().total_cmp(&b.abs()))
+        .unwrap_or(0.0)
+        .signum();
+    let d = -winding * distance;
+    contours
+        .iter()
+        .map(|contour| {
+            let curves: Vec<_> = contour.iter().flat_map(|&c| unfolded(c)).collect();
+            let mut side = Vec::new();
+            for (i, &c) in curves.iter().enumerate() {
+                offset(c, d, tolerance, 0, &mut side);
+                let next = curves[(i + 1) % curves.len()];
+                join(c[2], tangents(c)[1], tangents(next)[0], d, &mut side);
+            }
+            side
+        })
+        .collect()
+}
+
 fn sub(a: Point, b: Point) -> Point {
     [a[0] - b[0], a[1] - b[1]]
 }

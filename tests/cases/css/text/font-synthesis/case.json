@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/css-fonts-3/#propdef-font-synthesis",
+  "assertion": "A regular-only font demonstrates weight/style permissions independently. none disables synthesis, and weight does not allow a synthetic italic.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed Chromium, Firefox, WebKit, native output and enlarged differences. Permission behavior agrees: none stays upright and regular, weight-only stays upright, style-only slants. Browsers use different synthetic emboldening strengths (WebKit visibly heavier). Allow font-edge rasterization and UA-defined synthetic weight differences; unit tests separately assert permissions, real-face selection and expanded contours with counters.",
+    "pixels": {
+      "maxDifference": 200,
+      "maxPixels": 4500
+    }
+  }
+}

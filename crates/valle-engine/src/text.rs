@@ -51,11 +51,12 @@ pub struct Face {
     pub index: u32,
     pub coords: Vec<i16>,
     pub slanted: bool,
+    pub emboldened: bool,
 }
 
 impl Face {
     /// The face a run of glyphs in `style` is shaped in.
-    fn of(run: &parley::Run<'_, u32>, style: FontStyle) -> Face {
+    fn of(run: &parley::Run<'_, u32>, style: &Font) -> Face {
         let font = run.font();
         Face {
             data: font.data.clone(),
@@ -63,7 +64,8 @@ impl Face {
             coords: (run.normalized_coords().iter())
                 .map(|c| c.to_bits())
                 .collect(),
-            slanted: run.synthesis().skew().is_some() && style.slants(),
+            slanted: run.synthesis().skew().is_some() && style.style.slants() && style.synthesis[1],
+            emboldened: run.synthesis().embolden() && style.synthesis[0],
         }
     }
 }
@@ -267,6 +269,7 @@ struct Shaping {
     stretch: u32,
     /// Normal, italic or oblique, and the angle's f32 bits.
     style: [u32; 2],
+    synthesis: [bool; 2],
     spacing: u32,
     word_spacing: u32,
     collapse: Collapse,
@@ -295,6 +298,7 @@ impl Shaping {
                 FontStyle::Italic => [1, 0],
                 FontStyle::Oblique(angle) => [2, (angle as f32).to_bits()],
             },
+            synthesis: font.synthesis,
             spacing: (font.spacing as f32).to_bits(),
             word_spacing: (font.word_spacing as f32).to_bits(),
             collapse: font.collapse,
@@ -757,7 +761,7 @@ impl Text {
                     continue;
                 };
                 let piece = &content.pieces[run.style().brush as usize];
-                let (node, face) = (piece.node, Face::of(run.run(), piece.font.style));
+                let (node, face) = (piece.node, Face::of(run.run(), piece.font));
                 if from != Some(run.run().index()) {
                     from = Some(run.run().index());
                     starts = (run.run().visual_clusters())
@@ -1031,7 +1035,7 @@ impl Text {
                 let PositionedLayoutItem::GlyphRun(run) = item else {
                     continue;
                 };
-                let face = Face::of(run.run(), font.style);
+                let face = Face::of(run.run(), font);
                 for g in run.glyphs() {
                     shaped.push((face.clone(), g.id, x + g.x));
                     x += g.advance;
@@ -1080,7 +1084,8 @@ impl Text {
     fn face(&mut self, face: Face) -> u32 {
         let i = match self.faces.iter().position(|f| {
             f.data.id() == face.data.id()
-                && (f.index, &f.coords, f.slanted) == (face.index, &face.coords, face.slanted)
+                && (f.index, &f.coords, f.slanted, f.emboldened)
+                    == (face.index, &face.coords, face.slanted, face.emboldened)
         }) {
             Some(i) => i,
             None => {
@@ -1788,6 +1793,7 @@ mod tests {
             weight: 400.0,
             stretch: 100.0,
             style: FontStyle::Normal,
+            synthesis: [true; 2],
             family: Rc::new([Family::SansSerif]),
             line_height: LineHeight::Normal,
             align: TextAlign::Start,
@@ -2697,6 +2703,27 @@ mod tests {
         assert!(wide(75.0) < wide(100.0));
         assert_eq!(wide(150.0), wide(100.0));
         assert_eq!(wide(50.0), wide(62.5));
+    }
+
+    #[test]
+    fn synthesis_permissions_preserve_real_faces_and_disable_faux_italic() {
+        let mut t = text();
+        let mut face = |family, synthesis| {
+            let f = Font {
+                family: Rc::new([family]),
+                style: FontStyle::Italic,
+                synthesis,
+                ..font(24.0)
+            };
+            let lines = t.lines(&plain("Lean", &f), 500.0).unwrap();
+            t.faces()[lines.glyphs[0].face as usize].clone()
+        };
+        assert!(face(Family::Monospace, [true; 2]).slanted);
+        assert!(!face(Family::Monospace, [true, false]).slanted);
+        assert!(face(Family::Monospace, [false, true]).slanted);
+        let real = face(Family::SansSerif, [true; 2]);
+        assert!(!real.slanted);
+        assert_eq!(real, face(Family::SansSerif, [false; 2]));
     }
 
     #[test]
