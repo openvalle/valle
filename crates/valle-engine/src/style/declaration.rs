@@ -1054,6 +1054,10 @@ pub(super) fn inherits(v: &V) -> bool {
 }
 
 pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
+    // CSS-wide values need the parent at compute time; binding only validates the property.
+    if super::cascade::Keyword::of(v).is_some() && field != Field::XmlSpace {
+        return Ok(());
+    }
     use Field as F;
     match field {
         F::Font => super::font::shorthand(v, d)?,

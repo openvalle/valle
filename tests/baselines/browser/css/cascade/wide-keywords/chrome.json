@@ -1,0 +1,53 @@
+{
+  "size": [340, 160],
+  "sources": {
+    "tests/baselines/browser/css/cascade/wide-keywords/scene.html": "b77e7254311d231448a7e88edd0b374a402b1d88e7c10508ad59bdc6040c0720"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "inherit",
+        "border": {
+          "x": 24,
+          "y": 24,
+          "width": 100,
+          "height": 70
+        },
+        "padding": {
+          "x": 28,
+          "y": 28,
+          "width": 92,
+          "height": 62
+        },
+        "content": {
+          "x": 32,
+          "y": 38,
+          "width": 78,
+          "height": 42
+        }
+      },
+      {
+        "key": "reset",
+        "border": {
+          "x": 194,
+          "y": 24,
+          "width": 100,
+          "height": 70
+        },
+        "padding": {
+          "x": 197,
+          "y": 27,
+          "width": 94,
+          "height": 64
+        },
+        "content": {
+          "x": 217,
+          "y": 27,
+          "width": 54,
+          "height": 44
+        }
+      }
+    ],
+    "lines": []
+  }
+}

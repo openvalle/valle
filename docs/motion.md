@@ -166,6 +166,15 @@ Supported, among others:
   `fontVariationSettings`, `whiteSpace`.
 - `motionBlur: "auto"`: blur along the element's movement.
 
+CSS properties accept `inherit`, `initial` and `unset`, including shorthands.
+`inherit` copies the parent's computed value (for example, `2em` padding on a
+20px parent becomes 40px); `initial` uses the property's CSS initial value;
+`unset` inherits inherited properties and resets the others. Later declarations
+override earlier shorthand longhands as usual. This does not enable otherwise
+unsupported layout modes: `display: initial` means inline and therefore still
+requires a flex/grid parent or an out-of-flow box. `boxSizing: initial` means
+`content-box`, although Valle's default element style is `border-box`.
+
 Not supported: CSS variables (use JavaScript constants), `@keyframes` and CSS transitions
 (animate with values over time), `position: fixed`/`sticky`, hover and other states. An
 unsupported property or class is an error that says so.

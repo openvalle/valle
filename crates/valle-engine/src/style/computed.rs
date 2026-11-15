@@ -88,6 +88,7 @@ pub enum Join {
 /// A node's computed style.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Style {
+    pub(crate) specified: Option<Rc<super::cascade::Snapshot>>,
     /// A compact row table instead of separate layout/style nodes for repeated leaf boxes.
     pub instances: Option<Rc<Vec<super::instances::Row>>>,
     pub svg_instances: Option<Rc<Vec<super::instances::svg::Row>>>,
@@ -281,6 +282,7 @@ impl Style {
     /// takes a side.
     pub fn lays_out_as(&self, other: &Style) -> bool {
         let Style {
+            specified: _,
             instances: _,
             svg_instances: _,
             layout,
@@ -761,6 +763,7 @@ pub(super) fn compute(
         ..taffy::Style::DEFAULT
     };
     Ok(Style {
+        specified: None,
         instances: None,
         svg_instances: None,
         layout,

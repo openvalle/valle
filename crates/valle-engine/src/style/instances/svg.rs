@@ -18,6 +18,7 @@ pub struct Row {
     pub even_odd: Option<bool>,
     pub color: Option<Specified>,
     pub opacity: f64,
+    inherit_opacity: bool,
     pub stroke: Option<Paint>,
     pub stroke_opacity: Option<f64>,
 }
@@ -36,6 +37,26 @@ struct Bound {
 
 impl Row {
     fn set(&mut self, name: &str, value: &V, scratch: &mut Declared) -> Result<(), String> {
+        use crate::style::cascade::Keyword;
+        if let Some(keyword) = Keyword::of(value) {
+            let inherit = keyword != Keyword::Initial;
+            match name {
+                "fill" => {
+                    self.fill = (!inherit).then_some(Paint::Color(crate::style::color::BLACK))
+                }
+                "stroke" => self.stroke = (!inherit).then_some(Paint::None),
+                "color" => self.color = (!inherit).then(|| crate::style::color::BLACK.into()),
+                "fillOpacity" => self.fill_opacity = (!inherit).then_some(1.0),
+                "strokeOpacity" => self.stroke_opacity = (!inherit).then_some(1.0),
+                "fillRule" => self.even_odd = (!inherit).then_some(false),
+                "opacity" => {
+                    self.opacity = 1.0;
+                    self.inherit_opacity = keyword == Keyword::Inherit;
+                }
+                _ => return Err(format!("{name} is SVG geometry, not a CSS property")),
+            }
+            return Ok(());
+        }
         match name {
             "x" | "y" | "width" | "height" => {
                 let Shape::Rect { at, size, .. } = &mut self.shape else {
@@ -96,7 +117,10 @@ impl Row {
                     "fillOpacity" => self.fill_opacity = scratch.fill_opacity,
                     "fillRule" => self.even_odd = scratch.even_odd,
                     "color" => self.color.clone_from(&scratch.color),
-                    "opacity" => self.opacity = scratch.opacity,
+                    "opacity" => {
+                        self.opacity = scratch.opacity;
+                        self.inherit_opacity = false;
+                    }
                     "stroke" => self.stroke.clone_from(&scratch.svg_stroke),
                     "strokeOpacity" => self.stroke_opacity = scratch.stroke_opacity,
                     _ => unreachable!(),
@@ -126,6 +150,7 @@ impl Table {
                 even_odd: None,
                 color: None,
                 opacity: 1.0,
+                inherit_opacity: false,
                 stroke: None,
                 stroke_opacity: None,
             };
@@ -153,7 +178,11 @@ impl Table {
         self.formula.shared.imports.iter().copied().for_each(f);
     }
 
-    pub fn compute(&self, values: &[V]) -> Result<Rc<Vec<Row>>, String> {
+    pub fn compute(
+        &self,
+        values: &[V],
+        parent: Option<&crate::style::Style>,
+    ) -> Result<Rc<Vec<Row>>, String> {
         let mut rows = Vec::with_capacity(self.rows.len());
         let mut local = Vec::new();
         let mut scratch = Declared::default();
@@ -170,6 +199,9 @@ impl Table {
                         .set(name, &local[*e as usize], &mut scratch)
                         .map_err(|e| format!("{}: attribute {name}: {e}", self.place))?;
                 }
+            }
+            if computed.inherit_opacity {
+                computed.opacity = parent.map_or(1.0, |p| p.opacity);
             }
             rows.push(computed);
         }

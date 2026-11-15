@@ -10,6 +10,7 @@
 pub mod background;
 pub(crate) mod bidi;
 mod cache;
+mod cascade;
 pub mod color;
 mod computed;
 pub(crate) mod css;

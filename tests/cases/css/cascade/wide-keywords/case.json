@@ -1,0 +1,53 @@
+{
+  "spec": "https://www.w3.org/TR/css-cascade-3/#defaulting",
+  "assertion": "CSS-wide keywords copy computed parent values, reset initial values and resolve unset by inheritance, at the declaration's place in shorthand and longhand order.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All three browsers and Valle agree pixel-for-pixel. Computed parent padding remains 10px despite the child font size; explicit initial and unset reset only their longhands."
+  },
+  "layout": [
+    {
+      "key": "inherit",
+      "border": {
+        "x": 24,
+        "y": 24,
+        "width": 100,
+        "height": 70
+      },
+      "padding": {
+        "x": 28,
+        "y": 28,
+        "width": 92,
+        "height": 62
+      },
+      "content": {
+        "x": 32,
+        "y": 38,
+        "width": 78,
+        "height": 42
+      }
+    },
+    {
+      "key": "reset",
+      "border": {
+        "x": 194,
+        "y": 24,
+        "width": 100,
+        "height": 70
+      },
+      "padding": {
+        "x": 197,
+        "y": 27,
+        "width": 94,
+        "height": 64
+      },
+      "content": {
+        "x": 217,
+        "y": 27,
+        "width": 54,
+        "height": 44
+      }
+    }
+  ]
+}

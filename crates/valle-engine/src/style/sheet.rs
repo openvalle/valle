@@ -82,6 +82,8 @@ impl Shading {
 
 /// A variant's styles, bound once; `compute` gives each frame's.
 pub struct Sheet {
+    /// Declarations in children that may request this node's computed values.
+    inherited_by: Vec<Vec<Prop>>,
     instances: Vec<Option<super::instances::Table>>,
     svg_instances: Vec<Option<super::instances::svg::Table>>,
     pub(super) nodes: Vec<Bound>,
@@ -175,7 +177,7 @@ impl Sheet {
         }
         let classes = tailwind::declarations(template)?;
         let late = template.program.late();
-        let nodes = (template.nodes.iter().zip(&classes))
+        let nodes: Vec<Bound> = (template.nodes.iter().zip(&classes))
             .enumerate()
             .map(|(i, (node, classes))| {
                 let nested = parents[i]
@@ -183,7 +185,19 @@ impl Sheet {
                 bind(node, classes, &late, nested)
             })
             .collect::<Result<_, _>>()?;
+        let mut inherited_by = vec![Vec::new(); n];
+        for (i, bound) in nodes.iter().enumerate() {
+            if let Some(p) = parents[i] {
+                inherited_by[p as usize].extend(bound.rest.iter().filter_map(|(_, prop, ..)| {
+                    match prop {
+                        Prop::Const(v) if super::cascade::Keyword::of(v).is_none() => None,
+                        _ => Some(prop.clone()),
+                    }
+                }));
+            }
+        }
         Ok(Sheet {
+            inherited_by,
             instances: (0..n)
                 .map(|i| {
                     template
@@ -405,7 +419,7 @@ impl Sheet {
                     Prop::Const(v) => v,
                     Prop::Expr(e) => &frame.values[*e as usize],
                 };
-                set(&mut d, *field, &presented(v, *attribute))
+                super::cascade::apply(&mut d, *field, &presented(v, *attribute), parent)
                     .map_err(|e| format!("{}: {what}: {e}", b.place))?;
             }
             Cow::Owned(d)
@@ -431,7 +445,7 @@ impl Sheet {
                         Prop::Const(v) => v,
                         Prop::Expr(e) => &frame.values[*e as usize],
                     };
-                    set(&mut d, field[axis], &presented(v, *attribute))
+                    super::cascade::apply(&mut d, field[axis], &presented(v, *attribute), parent)
                         .map_err(|e| format!("{}: {what}: {e}", b.place))?;
                 }
                 Cow::Owned(d)
@@ -441,7 +455,9 @@ impl Sheet {
         let (canvas, resources) = (frame.canvas, frame.resources);
         let mut base = b.base.borrow_mut();
         let kept = base.as_ref().and_then(|s| {
-            if !s.matches(parent, canvas, calcs, resources) {
+            if !s.matches(parent, canvas, calcs, resources)
+                || parent.is_some_and(|p| p.specified.is_some())
+            {
                 return None;
             }
             let mut style = s.style.clone();
@@ -508,7 +524,25 @@ impl Sheet {
             style.instances = Some(table.compute(frame.values, &style, frame.canvas)?);
         }
         if let Some(table) = &self.svg_instances[i] {
-            style.svg_instances = Some(table.compute(frame.values)?);
+            style.svg_instances = Some(table.compute(frame.values, parent)?);
+        }
+        let needed = self.inherited_by[i].iter().any(|prop| {
+            if frame.unsettled(prop) {
+                return false;
+            }
+            let value = match prop {
+                Prop::Const(v) => v,
+                Prop::Expr(e) => &frame.values[*e as usize],
+            };
+            matches!(
+                super::cascade::Keyword::of(value),
+                Some(super::cascade::Keyword::Inherit | super::cascade::Keyword::Unset)
+            )
+        });
+        if needed || b.svg.as_ref().is_some_and(|g| g.tag == Tag::Use) {
+            style.specified = Some(Rc::new(super::cascade::Snapshot(super::cascade::resolved(
+                &declared, &style, canvas,
+            ))));
         }
         Ok(style)
     }
@@ -858,7 +892,7 @@ fn bind(
             )));
         }
         match &*prop {
-            Prop::Const(v) if rest.is_empty() => {
+            Prop::Const(v) if rest.is_empty() && super::cascade::Keyword::of(v).is_none() => {
                 set(&mut declared, field, &presented(v, attribute)).map_err(at)?;
             }
             Prop::Const(v) => {

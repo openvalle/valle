@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+  <meta charset="utf-8" /><style>
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      width: 340px;
+      height: 160px;
+      background: white;
+      display: flex;
+      gap: 20px;
+      padding: 10px;
+    }
+    .parent {
+      width: 150px;
+      height: 140px;
+      font-size: 20px;
+      padding: 0.5em;
+      border: 4px solid #1264a3;
+      background: #e8edf2;
+    }
+  </style>
+  <div id="canvas">
+    <div class="parent">
+      <div
+        data-key="inherit"
+        style="
+          width: 100px;
+          height: 70px;
+          font-size: 10px;
+          padding: inherit;
+          padding-left: 4px;
+          border: inherit;
+          border-color: initial;
+          color: #a63a30;
+          background-color: inherit;
+        "
+      >
+        <div style="width: 20px; height: 20px; background: #f4b642"></div>
+      </div>
+    </div>
+    <div class="parent" style="padding: 10px">
+      <div
+        data-key="reset"
+        style="
+          width: 100px;
+          height: 70px;
+          padding: 20px;
+          border: inherit;
+          padding-top: unset;
+          border-width: initial;
+          border-color: #a63a30;
+          background: #f4b642;
+          opacity: unset;
+        "
+      ></div>
+    </div>
+  </div>
+</html>

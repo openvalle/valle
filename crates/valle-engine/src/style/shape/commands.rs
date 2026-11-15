@@ -59,6 +59,33 @@ fn map_at<P, Q>(at: &[Offset<P>; 2], f: &impl Fn(&P) -> Q) -> [Offset<Q>; 2] {
     })
 }
 
+impl crate::style::cascade::freeze::Freeze for Commands<Len> {
+    fn freeze(&mut self, u: Units) {
+        self.start.freeze(u);
+        let point = |p: &mut Point<Len>| p.at.freeze(u);
+        for command in &mut self.commands {
+            match command {
+                Command::Move(p) | Command::Line(p) | Command::SmoothQuad(p) => point(p),
+                Command::Quad(a, b) | Command::SmoothCubic(a, b) => {
+                    point(a);
+                    point(b);
+                }
+                Command::Cubic(a, b, c) => {
+                    point(a);
+                    point(b);
+                    point(c);
+                }
+                Command::Axis { by, .. } => by.freeze(u),
+                Command::Arc { to, radii, .. } => {
+                    point(to);
+                    radii.freeze(u);
+                }
+                Command::Close => {}
+            }
+        }
+    }
+}
+
 impl Commands<Len> {
     pub(super) fn computed(&self, u: Units, writing: WritingMode) -> Commands {
         let calc = |l: &Len| l.calc(u);

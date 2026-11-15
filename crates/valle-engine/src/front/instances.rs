@@ -6,6 +6,15 @@ use std::rc::Rc;
 /// Pack consecutive sibling leaves from the same JSX site. The original expression program
 /// and guards remain, including expressions that can fail before a value reaches a row.
 pub(crate) fn pack(t: &mut Template) -> Result<(), Error> {
+    let wide = |v: &V| matches!(v, V::Str(s) if matches!(s.trim().to_ascii_lowercase().as_str(), "inherit" | "initial" | "unset"));
+    let prop = |p: &Prop| matches!(p, Prop::Const(v) if wide(v));
+    if t.program.ops.iter().any(|op| matches!(op, Op::Const(v) if wide(v)))
+        || t.nodes.iter().any(|n| n.style.iter().any(|(_, p)| prop(p))
+            || matches!(&n.kind, Kind::Svg { attributes, .. } if attributes.iter().any(|(_, p)| prop(p))))
+        || t.instances.iter().any(|(_, table)| table.rows.iter().flatten().any(prop)
+            || table.formula.as_ref().is_some_and(|f| f.program.ops.iter().any(|op| matches!(op, Op::Const(v) if wide(v))))) {
+        return expand(t, |kind| !matches!(kind, Kind::Svg { .. }));
+    }
     if !t.pictures.is_empty() || t.program.ops.iter().any(|op| matches!(op, Op::Bounds(..))) {
         return expand(t, |_| true);
     }

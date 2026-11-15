@@ -44,6 +44,21 @@ impl Track {
     }
 }
 
+impl super::cascade::freeze::Freeze for Track {
+    fn freeze(&mut self, u: super::units::Units) {
+        match self {
+            Self::FitContent(v) => v.freeze(u),
+            Self::MinMax(a, b) => {
+                for v in [a, b] {
+                    if let Breadth::Len(v) = v {
+                        v.freeze(u);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// A track list: tracks and repetitions of them, each after the names of the line before it.
 /// `none` is empty.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -62,6 +77,17 @@ enum Part {
         /// The names of the line before each track, and of the line after the last.
         names: Vec<Vec<String>>,
     },
+}
+
+impl super::cascade::freeze::Freeze for Tracks {
+    fn freeze(&mut self, u: super::units::Units) {
+        for part in &mut self.parts {
+            match part {
+                Part::Track(v) => v.freeze(u),
+                Part::Repeat { tracks, .. } => tracks.freeze(u),
+            }
+        }
+    }
 }
 
 /// Track lengths: not negative, and percentages of the grid's content box.
