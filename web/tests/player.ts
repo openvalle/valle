@@ -22,6 +22,10 @@ const CASES: {
   nativeResources?: Record<string, string>;
   pixels?: { maxDifference: number; maxPixels: number };
 }[] = [
+  { entry: "tests/cases/css/flex/constraints-matrix/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/flex/wrap-thresholds/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/layout/nested-sizing/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/position/logical-containing-block/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/values/absolute-units/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/values/font-ex/scene.motion.tsx", frames: [0] },
   {

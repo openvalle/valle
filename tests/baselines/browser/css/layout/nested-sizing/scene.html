@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/layout/nested-sizing</title
+  ><style>
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 1010px;
+      height: 224px;
+      background: white;
+    }
+  </style>
+  <div id="canvas">
+    <div
+      data-key="c0"
+      style="
+        position: absolute;
+        left: 12px;
+        top: 12px;
+        width: 220px;
+        height: 90px;
+        padding: 4px;
+        border: 2px solid #17365d;
+        display: flex;
+        align-items: start;
+        background: #eef3f8;
+      "
+    >
+      <div
+        data-key="c0/inner"
+        style="
+          width: 50%;
+          min-width: 146px;
+          max-width: 160px;
+          height: 56px;
+          padding: 6px;
+          border: 2px solid #17365d;
+          display: flex;
+          gap: 10px;
+          background: #dbe9f5;
+          align-items: start;
+        "
+      >
+        <div
+          data-key="c0/inner/a"
+          style="width: 50px; height: 40px; flex-shrink: 0; background: #2463a0"
+        ></div>
+        <div
+          data-key="c0/inner/b"
+          style="width: 70px; height: 40px; flex-shrink: 0; background: #3b856c"
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c1"
+      style="
+        position: absolute;
+        left: 262px;
+        top: 12px;
+        width: max-content;
+        height: 90px;
+        padding: 4px;
+        border: 2px solid #17365d;
+        display: flex;
+        align-items: start;
+        background: #eef3f8;
+      "
+    >
+      <div
+        data-key="c1/inner"
+        style="
+          width: max-content;
+          min-width: 146px;
+          max-width: 160px;
+          height: 56px;
+          padding: 6px;
+          border: 2px solid #17365d;
+          display: flex;
+          gap: 10px;
+          background: #dbe9f5;
+          align-items: start;
+        "
+      >
+        <div
+          data-key="c1/inner/a"
+          style="width: 50px; height: 40px; flex-shrink: 0; background: #2463a0"
+        ></div>
+        <div
+          data-key="c1/inner/b"
+          style="width: 70px; height: 40px; flex-shrink: 0; background: #3b856c"
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c2"
+      style="
+        position: absolute;
+        left: 512px;
+        top: 12px;
+        width: 220px;
+        height: 90px;
+        padding: 4px;
+        border: 2px solid #17365d;
+        display: flex;
+        align-items: start;
+        background: #eef3f8;
+      "
+    >
+      <div
+        data-key="c2/inner"
+        style="
+          width: 50%;
+          min-width: 146px;
+          max-width: 160px;
+          height: 56px;
+          padding: 6px;
+          border: 2px solid #17365d;
+          display: grid;
+          gap: 10px;
+          background: #dbe9f5;
+          grid-template-columns: 50px 70px;
+        "
+      >
+        <div
+          data-key="c2/inner/a"
+          style="width: 50px; height: 40px; flex-shrink: 0; background: #2463a0"
+        ></div>
+        <div
+          data-key="c2/inner/b"
+          style="width: 70px; height: 40px; flex-shrink: 0; background: #3b856c"
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c3"
+      style="
+        position: absolute;
+        left: 762px;
+        top: 12px;
+        width: max-content;
+        height: 90px;
+        padding: 4px;
+        border: 2px solid #17365d;
+        display: flex;
+        align-items: start;
+        background: #eef3f8;
+      "
+    >
+      <div
+        data-key="c3/inner"
+        style="
+          width: max-content;
+          min-width: 146px;
+          max-width: 160px;
+          height: 56px;
+          padding: 6px;
+          border: 2px solid #17365d;
+          display: grid;
+          gap: 10px;
+          background: #dbe9f5;
+          grid-template-columns: 50px 70px;
+        "
+      >
+        <div
+          data-key="c3/inner/a"
+          style="width: 50px; height: 40px; flex-shrink: 0; background: #2463a0"
+        ></div>
+        <div
+          data-key="c3/inner/b"
+          style="width: 70px; height: 40px; flex-shrink: 0; background: #3b856c"
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c4"
+      style="
+        position: absolute;
+        left: 12px;
+        top: 118px;
+        width: 220px;
+        height: 90px;
+        padding: 4px;
+        border: 2px solid #17365d;
+        display: grid;
+        align-items: start;
+        background: #eef3f8;
+        grid-template-columns: 1fr;
+      "
+    >
+      <div
+        data-key="c4/inner"
+        style="
+          width: 50%;
+          min-width: 146px;
+          max-width: 160px;
+          height: 56px;
+          padding: 6px;
+          border: 2px solid #17365d;
+          display: flex;
+          gap: 10px;
+          background: #dbe9f5;
+          align-items: start;
+        "
+      >
+        <div
+          data-key="c4/inner/a"
+          style="width: 50px; height: 40px; flex-shrink: 0; background: #2463a0"
+        ></div>
+        <div
+          data-key="c4/inner/b"
+          style="width: 70px; height: 40px; flex-shrink: 0; background: #3b856c"
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c5"
+      style="
+        position: absolute;
+        left: 262px;
+        top: 118px;
+        width: max-content;
+        height: 90px;
+        padding: 4px;
+        border: 2px solid #17365d;
+        display: grid;
+        align-items: start;
+        background: #eef3f8;
+        grid-template-columns: max-content;
+      "
+    >
+      <div
+        data-key="c5/inner"
+        style="
+          width: max-content;
+          min-width: 146px;
+          max-width: 160px;
+          height: 56px;
+          padding: 6px;
+          border: 2px solid #17365d;
+          display: flex;
+          gap: 10px;
+          background: #dbe9f5;
+          align-items: start;
+        "
+      >
+        <div
+          data-key="c5/inner/a"
+          style="width: 50px; height: 40px; flex-shrink: 0; background: #2463a0"
+        ></div>
+        <div
+          data-key="c5/inner/b"
+          style="width: 70px; height: 40px; flex-shrink: 0; background: #3b856c"
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c6"
+      style="
+        position: absolute;
+        left: 512px;
+        top: 118px;
+        width: 220px;
+        height: 90px;
+        padding: 4px;
+        border: 2px solid #17365d;
+        display: grid;
+        align-items: start;
+        background: #eef3f8;
+        grid-template-columns: 1fr;
+      "
+    >
+      <div
+        data-key="c6/inner"
+        style="
+          width: 50%;
+          min-width: 146px;
+          max-width: 160px;
+          height: 56px;
+          padding: 6px;
+          border: 2px solid #17365d;
+          display: grid;
+          gap: 10px;
+          background: #dbe9f5;
+          grid-template-columns: 50px 70px;
+        "
+      >
+        <div
+          data-key="c6/inner/a"
+          style="width: 50px; height: 40px; flex-shrink: 0; background: #2463a0"
+        ></div>
+        <div
+          data-key="c6/inner/b"
+          style="width: 70px; height: 40px; flex-shrink: 0; background: #3b856c"
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c7"
+      style="
+        position: absolute;
+        left: 762px;
+        top: 118px;
+        width: max-content;
+        height: 90px;
+        padding: 4px;
+        border: 2px solid #17365d;
+        display: grid;
+        align-items: start;
+        background: #eef3f8;
+        grid-template-columns: max-content;
+      "
+    >
+      <div
+        data-key="c7/inner"
+        style="
+          width: max-content;
+          min-width: 146px;
+          max-width: 160px;
+          height: 56px;
+          padding: 6px;
+          border: 2px solid #17365d;
+          display: grid;
+          gap: 10px;
+          background: #dbe9f5;
+          grid-template-columns: 50px 70px;
+        "
+      >
+        <div
+          data-key="c7/inner/a"
+          style="width: 50px; height: 40px; flex-shrink: 0; background: #2463a0"
+        ></div>
+        <div
+          data-key="c7/inner/b"
+          style="width: 70px; height: 40px; flex-shrink: 0; background: #3b856c"
+        ></div>
+      </div>
+    </div>
+  </div>
+</html>
