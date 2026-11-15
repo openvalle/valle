@@ -30,6 +30,7 @@ struct Compound {
     tag: Option<String>,
     ids: Vec<String>,
     classes: Vec<String>,
+    attributes: Vec<Attribute>,
 }
 
 #[derive(Clone, Copy)]
@@ -128,9 +129,7 @@ impl Selector {
         let mut parts = Vec::new();
         let mut relation = Relation::Descendant;
         while !rest.is_empty() {
-            let end = rest
-                .find(|c: char| c.is_ascii_whitespace() || matches!(c, '>' | '+' | '~'))
-                .unwrap_or(rest.len());
+            let end = compound_end(rest)?;
             if end == 0 {
                 return Err(format!("invalid SVG selector {text:?}"));
             }
@@ -139,10 +138,22 @@ impl Selector {
                 tag: None,
                 ids: Vec::new(),
                 classes: Vec::new(),
+                attributes: Vec::new(),
             };
             let mut at = 0;
             while at < token.len() {
                 let marker = token.as_bytes()[at];
+                if marker == b'[' {
+                    let end = boundary(&token[at + 1..], ']')?
+                        .ok_or("unclosed SVG attribute selector")?
+                        + at
+                        + 1;
+                    compound
+                        .attributes
+                        .push(Attribute::parse(&token[at + 1..end])?);
+                    at = end + 1;
+                    continue;
+                }
                 if marker == b'*' && at == 0 {
                     at += 1;
                     continue;
@@ -190,7 +201,7 @@ impl Selector {
         self.0.iter().fold([0; 3], |[ids, classes, tags], (p, _)| {
             [
                 ids + p.ids.len(),
-                classes + p.classes.len(),
+                classes + p.classes.len() + p.attributes.len(),
                 tags + usize::from(p.tag.is_some()),
             ]
         })
@@ -219,6 +230,7 @@ impl Selector {
                     .split_ascii_whitespace()
                     .any(|c| c == class)
             })
+            || compound.attributes.iter().any(|a| !a.matches(node))
         {
             return false;
         }
@@ -234,6 +246,119 @@ impl Selector {
                 .find(|p| p.is_element())
                 .is_some_and(|p| self.at(i - 1, p)),
             Relation::Following => node.prev_siblings().skip(1).any(|p| self.at(i - 1, p)),
+        }
+    }
+}
+
+/// End of one compound, retaining quoted attribute values and function arguments.
+fn compound_end(text: &str) -> Result<usize, String> {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut stack = Vec::new();
+    for (i, c) in text.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if c == '\\' {
+            escaped = true;
+            continue;
+        }
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        if stack.is_empty() && (c.is_ascii_whitespace() || matches!(c, '>' | '+' | '~')) {
+            return Ok(i);
+        }
+        match c {
+            '\'' | '"' => quote = Some(c),
+            '[' => stack.push(']'),
+            '(' => stack.push(')'),
+            ']' | ')' if stack.pop() != Some(c) => {
+                return Err("mismatched SVG selector brackets".into());
+            }
+            _ => {}
+        }
+    }
+    if quote.is_some() || escaped || !stack.is_empty() {
+        return Err("unclosed SVG selector".into());
+    }
+    Ok(text.len())
+}
+
+struct Attribute {
+    name: String,
+    test: Option<(String, String)>,
+}
+
+impl Attribute {
+    fn parse(text: &str) -> Result<Self, String> {
+        let text = text.trim();
+        let end = text
+            .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_')))
+            .unwrap_or(text.len());
+        if end == 0 {
+            return Err("attribute selector needs an unqualified name".into());
+        }
+        let name = text[..end].to_string();
+        let rest = text[end..].trim();
+        if rest.is_empty() {
+            return Ok(Self { name, test: None });
+        }
+        let op = ["~=", "|=", "^=", "$=", "*=", "="]
+            .into_iter()
+            .find(|op| rest.starts_with(op))
+            .ok_or("unsupported SVG attribute selector operator")?;
+        let value = rest[op.len()..].trim();
+        let value = if let Some(q @ ('\'' | '"')) = value.chars().next() {
+            value
+                .strip_prefix(q)
+                .and_then(|v| v.strip_suffix(q))
+                .filter(|v| !v.contains(q) && !v.contains('\\'))
+                .ok_or("attribute selector needs a quoted string without trailing flags")?
+                .to_string()
+        } else if !value.is_empty()
+            && value
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        {
+            value.to_string()
+        } else {
+            return Err("attribute selector needs an identifier or quoted string".into());
+        };
+        Ok(Self {
+            name,
+            test: Some((op.to_string(), value)),
+        })
+    }
+
+    fn matches(&self, node: Node) -> bool {
+        let Some(value) = node
+            .attributes()
+            .find(|a| a.namespace().is_none() && a.name() == self.name)
+            .map(|a| a.value())
+        else {
+            return false;
+        };
+        let Some((op, expected)) = &self.test else {
+            return true;
+        };
+        match op.as_str() {
+            "=" => value == expected,
+            "~=" => !expected.is_empty() && value.split_ascii_whitespace().any(|v| v == expected),
+            "|=" => {
+                value == expected
+                    || value
+                        .strip_prefix(expected)
+                        .is_some_and(|v| v.starts_with('-'))
+            }
+            "^=" => !expected.is_empty() && value.starts_with(expected),
+            "$=" => !expected.is_empty() && value.ends_with(expected),
+            "*=" => !expected.is_empty() && value.contains(expected),
+            _ => unreachable!(),
         }
     }
 }
@@ -307,9 +432,9 @@ fn boundary(text: &str, delimiter: char) -> Result<Option<usize>, String> {
         }
         match c {
             '\'' | '"' => quote = Some(c),
-            '(' => depth += 1,
-            ')' if depth > 0 => depth -= 1,
-            ')' | '{' | '}' => return Err(format!("unexpected {c} in SVG CSS")),
+            '(' | '[' => depth += 1,
+            ')' | ']' if depth > 0 => depth -= 1,
+            ')' | ']' | '{' | '}' => return Err(format!("unexpected {c} in SVG CSS")),
             _ => {}
         }
     }
@@ -350,6 +475,56 @@ fn comments(text: &str) -> Result<String, String> {
 mod tests {
     use super::*;
     use indoc::indoc;
+
+    #[test]
+    fn attributes_match_exact_words_languages_and_substrings() {
+        let xml = roxmltree::Document::parse(r#"<svg xmlns="http://www.w3.org/2000/svg"><rect data-name="Alpha beta,gamma > end" data-lang="en-US" data-empty=""/><rect/></svg>"#).unwrap();
+        let node = xml
+            .descendants()
+            .find(|n| n.has_tag_name((SVG, "rect")))
+            .unwrap();
+        for selector in [
+            "[data-name]",
+            "rect[data-name~='Alpha']",
+            "[data-lang|=en]",
+            "[data-name^=Alpha]",
+            "[data-name$=end]",
+            "[data-name*='beta,gamma >']",
+            "[data-empty='']",
+            "svg > [data-lang][data-empty]",
+        ] {
+            let s = Selector::parse(selector).unwrap();
+            assert!(s.matches(node), "{selector}");
+            assert!(
+                !s.matches(node.next_sibling_element().unwrap()),
+                "{selector}"
+            );
+        }
+        for selector in [
+            "[data-name~=alpha]",
+            "[data-name~='Alpha beta,gamma']",
+            "[missing]",
+            "[data-name*='']",
+            "[data-name^='']",
+            "[data-name$='']",
+            "[data-name~='']",
+        ] {
+            assert!(
+                !Selector::parse(selector).unwrap().matches(node),
+                "{selector}"
+            );
+        }
+        assert_eq!(
+            Selector::parse("rect[data-name][data-lang]")
+                .unwrap()
+                .specificity(),
+            [0, 2, 1]
+        );
+        assert_eq!(split("[data-name='a,b'],rect", ',').unwrap().len(), 2);
+        for bad in ["[x", "[x=]", "[x!=a]", "[x='a' i]", "[x='a' b='c']"] {
+            assert!(Selector::parse(bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn rules_cascade_by_importance_specificity_and_order() {
@@ -419,7 +594,7 @@ mod tests {
             comments("/* comment */ .a {fill:red}").unwrap(),
             "\0 .a {fill:red}"
         );
-        for selector in ["rect:hover", "[fill=red]", "@media all", ".a >", ""] {
+        for selector in ["rect:hover", "[fill=]", "@media all", ".a >", ""] {
             assert!(Selector::parse(selector).is_err(), "{selector}");
         }
         assert!(declarations("fill: rgb(1,2,3").is_err());

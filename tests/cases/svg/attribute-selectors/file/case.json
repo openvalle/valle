@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/selectors-3/",
+  "assertion": "Attribute operators select authored XML values; empty substring selectors match nothing. The first seven boxes are blue and the case-sensitive negative control stays gray.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All three browser captures agree exactly on the seven positive selectors and case-sensitive negative control; native numerical selector tests cover specificity, empty values and malformed input."
+  }
+}

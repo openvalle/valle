@@ -418,8 +418,14 @@ are type names, `*`, `.class`, `#id`, compound selectors such as `rect.icon`, co
 lists, descendants, children (`>`), adjacent siblings (`+`) and following siblings
 (`~`). Rules use CSS specificity and source order; presentation attributes have
 lower priority, inline styles have higher priority, and `!important` takes
-precedence. Declarations use the supported SVG CSS properties. Attribute selectors,
-pseudo-classes, escaped selector identifiers, at-rules and conditional media are
+precedence. Declarations use the supported SVG CSS properties.
+
+SVG file stylesheets accept attribute selectors: `[fill]`, `[data-kind="hero"]`,
+`[class~="accent"]`, `[lang|="en"]`, `[id^="intro"]`, `[id$="end"]` and
+`[id*="title"]`. Names and values are case-sensitive in SVG. Matching happens
+against the authored XML attributes, before style declarations are computed.
+
+Pseudo-classes, escaped selector identifiers, at-rules and conditional media are
 not supported and report errors. Stylesheets are resolved when the SVG is loaded;
 there is no DOM or selector matching on every animation frame.
 
