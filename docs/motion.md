@@ -365,6 +365,16 @@ file discovery includes referenced images; missing files and circular SVG image
 references report their paths. Referenced SVGs keep vector shapes and their own
 styles. External document fragments (`other.svg#id`) are not supported.
 
+SVG files can contain `<style>` blocks and `class` attributes. Supported selectors
+are type names, `*`, `.class`, `#id`, compound selectors such as `rect.icon`, comma
+lists, descendants, children (`>`), adjacent siblings (`+`) and following siblings
+(`~`). Rules use CSS specificity and source order; presentation attributes have
+lower priority, inline styles have higher priority, and `!important` takes
+precedence. Declarations use the supported SVG CSS properties. Attribute selectors,
+pseudo-classes, escaped selector identifiers, at-rules and conditional media are
+not supported and report errors. Stylesheets are resolved when the SVG is loaded;
+there is no DOM or selector matching on every animation frame.
+
 ### SVG patterns
 
 Use `<pattern id="dots" width={20} height={20} patternUnits="userSpaceOnUse">`

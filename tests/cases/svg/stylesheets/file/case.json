@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/styling.html#StyleElement",
+  "assertion": "SVG file stylesheets match class, ID, type, child and sibling selectors, cascade by specificity and importance, and inherit through groups.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed Chrome, Firefox, WebKit and the Metal output: all pixels agree. Unit tests additionally cover selector specificity, declaration order, important overrides, comments, strings and unsupported selectors."
+  }
+}

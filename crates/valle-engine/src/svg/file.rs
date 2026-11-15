@@ -14,6 +14,8 @@ use crate::layout::Natural;
 use crate::style::{Sheet, Style};
 use crate::template::{Kind, Node, Prop, Tag, Template, V};
 
+mod css;
+
 type Load<'a> = dyn FnMut(&str, &mut Vec<Image>) -> Result<Picture, String> + 'a;
 
 const SVG: &str = "http://www.w3.org/2000/svg";
@@ -76,11 +78,13 @@ impl Document {
                 "its <svg> needs xmlns=\"{SVG}\", without which browsers do not draw it"
             ));
         }
+        let stylesheet = css::Sheet::read(&xml)?;
         let mut out = Out {
             nodes: Vec::new(),
             embedded: Vec::new(),
             images,
             load,
+            stylesheet: &stylesheet,
         };
         element(&xml, root, None, &mut out)?;
         let Out {
@@ -109,6 +113,7 @@ impl Document {
 /// Where elements go as they are read: their nodes in preorder, the `<image>`s among them, and
 /// the images those embed.
 struct Out<'a> {
+    stylesheet: &'a css::Sheet,
     nodes: Vec<Node>,
     embedded: Vec<Embedded>,
     images: &'a mut Vec<Image>,
@@ -125,7 +130,7 @@ fn element(
 ) -> Result<Option<u32>, String> {
     let name = x.tag_name().name();
     let fail = |what: String| Err(format!("{}: {what}", place(xml, x)));
-    if x.tag_name().namespace() != Some(SVG) || SILENT.contains(&name) {
+    if x.tag_name().namespace() != Some(SVG) || SILENT.contains(&name) || name == "style" {
         return Ok(None);
     }
     if let Some((_, instead)) = NEVER.iter().find(|(n, _)| *n == name) {
@@ -159,7 +164,10 @@ fn element(
         }
     }
     let mut attributes = Vec::new();
-    let mut style = Vec::new();
+    let style = out
+        .stylesheet
+        .style(x)
+        .map_err(|e| format!("{}: {e}", place(xml, x)))?;
     for a in x.attributes() {
         let key = match a.namespace() {
             None => camel(a.name()),
@@ -178,7 +186,6 @@ fn element(
             return fail("<svg> transform is not supported yet".into());
         }
         if key == "style" {
-            style.extend(declarations(a.value()));
             continue;
         }
         // An image's data is read below, and kept once.
@@ -348,20 +355,6 @@ fn camel(name: &str) -> String {
     out
 }
 
-/// The declarations of a `style` attribute, as React names their properties, without those that
-/// change nothing.
-fn declarations(css: &str) -> Vec<(Rc<str>, Prop)> {
-    let declared = css.split(';').filter_map(|d| {
-        let (key, value) = d.split_once(':')?;
-        let key = camel(&key.trim().to_ascii_lowercase());
-        let value = value.trim();
-        let value = value.strip_suffix("!important").unwrap_or(value).trim();
-        let shown = !key.is_empty() && !INERT.contains(&&*key);
-        shown.then(|| (Rc::from(key), Prop::Const(V::Str(value.into()))))
-    });
-    declared.collect()
-}
-
 /// The width and height of an SVG file with root `x` in px, those in absolute units.
 fn sides(xml: &roxmltree::Document, x: Xml) -> Result<[Option<f32>; 2], String> {
     let side = |name: &str| match x.attribute(name) {
@@ -503,6 +496,24 @@ mod tests {
             unreachable!()
         };
         assert_eq!(*view_box, Some([0.0, 0.0, 24.0, 12.0]));
+    }
+
+    #[test]
+    fn stylesheets_apply_classes_and_override_presentation_attributes() {
+        let source = indoc::indoc! {r#"
+            <svg xmlns="http://www.w3.org/2000/svg">
+              <style>.ink { fill: blue } .ink > rect { stroke: red; stroke-width: 2px } #last { fill: green !important }</style>
+              <g class="ink"><rect width="10" height="10"/><rect id="last" width="10" height="10" fill="red" style="fill: yellow"/></g>
+            </svg>
+        "#};
+        let d = Document::parse(source, &mut vec![]).unwrap();
+        assert_eq!(tags(&d), ["svg", "g", "rect", "rect"]);
+        assert_eq!(d.styles[2].fill, Paint::Color([0.0, 0.0, 1.0, 1.0]));
+        assert_eq!(d.styles[2].stroke.width.resolve(0.0), 2.0);
+        assert_eq!(
+            d.styles[3].fill,
+            Paint::Color([0.0, 128.0 / 255.0, 0.0, 1.0])
+        );
     }
 
     #[test]

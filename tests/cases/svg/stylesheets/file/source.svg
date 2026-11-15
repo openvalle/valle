@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="110" viewBox="0 0 300 110">
+  <style><![CDATA[
+    .palette { fill: #1264a3 }
+    .palette > rect { stroke: #182433; stroke-width: 4px }
+    rect.accent { fill: #f4b642 }
+    #winner { fill: #7446b8 !important }
+    .accent + rect { fill: #26a269 }
+  ]]></style>
+  <rect width="300" height="110" fill="white"/>
+  <g class="palette">
+    <rect x="10" y="20" width="60" height="70"/>
+    <rect class="accent" x="80" y="20" width="60" height="70" fill="red"/>
+    <rect x="150" y="20" width="60" height="70"/>
+    <rect id="winner" class="accent" x="220" y="20" width="60" height="70" style="fill:red;stroke:#182433 !important"/>
+  </g>
+  <style>.accent { stroke: #a63a30 } #winner { stroke: yellow !important }</style>
+</svg>
