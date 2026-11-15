@@ -392,6 +392,12 @@ intrinsic aspect ratio; `auto` fits that ratio inside the positioning area.
 SVG content stays vector until rendering at the output resolution. SVG files as
 `maskImage` are not supported.
 
+Inline SVG also accepts `<image href="resource://picture" x={10} y={20}
+width={120} height={80} preserveAspectRatio="xMidYMid meet" />`. Declare the image
+resource as for `<Image>`; `input://name` accepts a picture supplied by a Timeline.
+Its position and size can animate, while the resource reference is fixed. Raster
+and SVG resources share fitting, clipping, transforms and `imageRendering`.
+
 Inside an SVG file, `<image href="./picture.png">` (or `xlink:href`) loads PNG,
 JPEG, WebP or another SVG through the host resource reader. Paths are relative to
 the containing SVG, including nested files. Base64 data URIs also work. Project

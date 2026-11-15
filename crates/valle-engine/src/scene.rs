@@ -1114,6 +1114,58 @@ mod tests {
     }
 
     #[test]
+    fn inline_svg_images_share_resource_loading_and_validate_their_kind() {
+        big_stack(|| {
+            let source = indoc! {r##"
+                export const composition = { width: 20, height: 20, fps: 1, duration: 2 };
+                export const controls = { resources: { tile: resource({ kind: 'image', default: './tile.png' }) } };
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  return <svg width="20" height="20"><image href="resource://tile" x={seconds * 5} width="10" height="20"/></svg>;
+                }
+            "##};
+            let bytes = png(1, &[[255, 80, 0, 128]]);
+            let count = std::cell::Cell::new(0);
+            let read = |path: &str| match path {
+                "s.motion.tsx" => Some(source.as_bytes().to_vec()),
+                "tile.png" => {
+                    count.set(count.get() + 1);
+                    Some(bytes.clone())
+                }
+                _ => None,
+            };
+            let mut scene =
+                Scene::load("s.motion.tsx", &read, &Inputs::default(), fonts()).unwrap();
+            let first = scene.frame(Tick(0)).unwrap().items;
+            assert!(!first.is_empty());
+            let next = scene.front.composition.fps.frame_start(1).unwrap();
+            assert_ne!(scene.frame(next).unwrap().items, first);
+            assert_eq!(scene.frame(Tick(0)).unwrap().items, first);
+            assert_eq!(count.get(), 1);
+            for (body, expected) in [
+                (
+                    source.replace("resource://tile", "resource://missing"),
+                    "declares no resource missing",
+                ),
+                (
+                    source.replace("kind: 'image'", "kind: 'video'"),
+                    "is a video, not an image",
+                ),
+            ] {
+                let read = |path: &str| match path {
+                    "s.motion.tsx" => Some(body.as_bytes().to_vec()),
+                    "tile.png" => Some(bytes.clone()),
+                    _ => None,
+                };
+                let error = Scene::load("s.motion.tsx", &read, &Inputs::default(), fonts())
+                    .and_then(|mut s| s.frame(Tick(0)).map(drop))
+                    .unwrap_err();
+                assert!(error.contains(expected), "{error}");
+            }
+        });
+    }
+
+    #[test]
     fn images_come_from_the_resources_the_scene_declares() {
         big_stack(|| {
             let source = indoc! {"

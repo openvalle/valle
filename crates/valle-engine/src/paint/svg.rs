@@ -815,12 +815,16 @@ impl<'a> Drawing<'a> {
             at,
             size: given,
             fit,
+            resource,
         } = s.svg.as_deref()?.element
         else {
             return None;
         };
-        let embedded = self.embedded.iter().find(|e| e.node as usize == i)?;
-        let [nw, nh] = match embedded.picture.natural() {
+        let picture = match resource {
+            Some(r) => self.pictures.get(r as usize)?,
+            None => &self.embedded.iter().find(|e| e.node as usize == i)?.picture,
+        };
+        let [nw, nh] = match picture.natural() {
             Natural::Size(size) => size.map(f64::from),
             Natural::Ratio(ratio) => [150.0 * f64::from(ratio.unwrap_or(2.0)), 150.0],
         };
@@ -836,11 +840,7 @@ impl<'a> Drawing<'a> {
         }
         let [x, y] = [0, 1].map(|k| at[k].resolve(size[k]));
         let placed = Matrix::translate(x, y).times(svg::viewport([0.0, 0.0, nw, nh], fit, [w, h]));
-        Some((
-            [x, y, w, h],
-            mapped(placed, [0.0, 0.0, nw, nh]),
-            &embedded.picture,
-        ))
+        Some(([x, y, w, h], mapped(placed, [0.0, 0.0, nw, nh]), picture))
     }
 
     /// The box around the bounding boxes of `elements`, each through its transform.

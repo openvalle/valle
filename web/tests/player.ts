@@ -28,6 +28,8 @@ const CASES: {
   { entry: "tests/cases/svg/absolute-units/file/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/text-path-length/inline/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/text-path-length/file/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/svg/inline-image/inline/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/svg/inline-image/file/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/filter-tile/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/filter-image/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/filter-specular/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },

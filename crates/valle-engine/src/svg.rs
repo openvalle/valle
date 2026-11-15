@@ -109,9 +109,11 @@ pub enum Element {
         fit: Fit,
     },
     Marker(Marker),
-    /// An image an SVG file embeds, in a viewport at `at` and `size` big, its natural size on an
+    /// An inline image resource or an SVG file's embedded image, in a viewport at `at` and
+    /// `size` big, its natural size on an
     /// axis without one, or what its ratio makes of the other's, the image placed by its fit.
     Image {
+        resource: Option<u32>,
         at: [Length; 2],
         size: [Option<Length>; 2],
         fit: Fit,
@@ -689,11 +691,7 @@ pub fn presentational(tag: Tag, name: &str) -> bool {
 pub fn tables() -> String {
     let mut elements = serde_json::Map::new();
     let mut holding = serde_json::Map::new();
-    // An <image> shows an image an SVG file embeds; inline, an <Image> shows one.
-    for tag in Tag::ALL
-        .into_iter()
-        .filter(|&t| !matches!(t, Tag::Image | Tag::TextRun))
-    {
+    for tag in Tag::ALL.into_iter().filter(|&t| t != Tag::TextRun) {
         elements.insert(tag.name().into(), own(tag).into());
         match holds(tag) {
             Holds::Any => {
@@ -976,6 +974,13 @@ pub fn computed(
         }
         Tag::TextRun => Element::TextRun(text("value").unwrap_or_default().into()),
         Tag::Image => Element::Image {
+            resource: text("href")
+                .map(|href| {
+                    href.strip_prefix("resource://")
+                        .and_then(|n| n.parse().ok())
+                        .ok_or_else(|| format!("image href: {href} is not a bound image resource"))
+                })
+                .transpose()?,
             at: [length("x")?, length("y")?],
             size: [auto("width")?, auto("height")?],
             fit: fitting()?.1,

@@ -1,0 +1,12 @@
+{
+  "size": [320, 160],
+  "sources": {
+    "tests/baselines/browser/svg/inline-image/file/scene.html": "10efb29f9e43bf64617937d644a3c0a9d4f8c9e6e5a2311eb7f3d792c8d486d8",
+    "tests/cases/svg/inline-image/file/vector.svg": "ad703f8a1c970a646131e57ca3c8041cc72704a08f9f8dab6b5e48d18c198e31",
+    "tests/cases/svg/inline-image/file/raster.png": "d53f2774d848dd77df8c1bca998b56d37c6b3b9be968f90f56afb5e1b985d6b9"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

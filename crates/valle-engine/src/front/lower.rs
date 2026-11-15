@@ -782,13 +782,18 @@ pub fn variant(
                 }
             }
             "svg" => {
-                let at = || n.site.map_or("<feImage>".into(), |s| place(&At::Site(s)));
                 let tag = n.tag.as_deref().ok_or("an svg node without a tag")?;
                 let tag = Tag::by_name(tag).ok_or_else(|| format!("svg tag {tag}"))?;
-                let resource = if tag == Tag::FeImage {
+                let at = || {
+                    n.site.map_or_else(
+                        || Rc::from(format!("<{}>", tag.name())),
+                        |s| place(&At::Site(s)),
+                    )
+                };
+                let resource = if matches!(tag, Tag::FeImage | Tag::Image) {
                     n.src
                         .as_deref()
-                        .map(|name| image(name, &format!("{}: <feImage> href", at())))
+                        .map(|name| image(name, &format!("{}: <{}> href", at(), tag.name())))
                         .transpose()?
                 } else {
                     None

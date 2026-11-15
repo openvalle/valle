@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/struct.html#ImageElement",
+  "assertion": "Inline and file SVG images resolve raster and vector resources, preserveAspectRatio meet/slice/none, explicit clipping, pixelated sampling and parent transforms.",
+  "at": [0],
+  "browser": {
+    "selected": "webkit",
+    "reason": "Reviewed all three browsers. WebKit applies the image preserveAspectRatio slice and clipping as specified; Chromium instead retains the referenced SVG fit. Firefox differs only in raster/color rounding. Browser page embeds the file markup because image-document security blocks nested file loads."
+  }
+}

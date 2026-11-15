@@ -2389,7 +2389,7 @@ mod tests {
                 ("<svg>hi</svg>", "text must be inside SVG <text>"),
                 (
                     "<svg><image href=\"data:image/png;base64,\" /></svg>",
-                    "<image> in an <svg> is not supported yet",
+                    "<image> href is resource://name or input://name",
                 ),
                 ("<svg><View /></svg>", "<View> cannot be inside an <svg>"),
                 (
