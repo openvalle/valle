@@ -1,8 +1,5 @@
 {
-  "size": [
-    520,
-    300
-  ],
+  "size": [520, 300],
   "sources": {
     "tests/baselines/browser/css/text/inline-writing/scene.html": "2e6cd52fd33723361f0125a53288ee0eb3473dd03a21d0355801f3646b9b76a7",
     "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"

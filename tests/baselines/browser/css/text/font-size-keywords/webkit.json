@@ -1,8 +1,5 @@
 {
-  "size": [
-    440,
-    260
-  ],
+  "size": [440, 260],
   "sources": {
     "tests/baselines/browser/css/text/font-size-keywords/scene.html": "bbbaf04c305c8bf1f86b4194e200525ed2c1bd6aa560c465285d160ffb74778c"
   },

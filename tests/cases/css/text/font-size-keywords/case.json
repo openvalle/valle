@@ -1,9 +1,7 @@
 {
   "spec": "https://www.w3.org/TR/css-fonts-3/#font-size-prop",
   "assertion": "A fixed 16px medium size table resolves em widths; smaller in the font shorthand resolves against the parent computed size.",
-  "at": [
-    0
-  ],
+  "at": [0],
   "layout": [
     {
       "key": "s0",

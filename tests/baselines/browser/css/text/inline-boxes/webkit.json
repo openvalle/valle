@@ -1,8 +1,5 @@
 {
-  "size": [
-    520,
-    260
-  ],
+  "size": [520, 260],
   "sources": {
     "tests/baselines/browser/css/text/inline-boxes/scene.html": "ef00aa0622cd5e9581992933bba5e0fc391b120a96d1fc2ba80de1e368bd1352",
     "tests/resources/svg/pixels.png": "d8f66d52df52b8a99d21ba37b5f535585d6a2889925ee919edf84aa36bc4516d",

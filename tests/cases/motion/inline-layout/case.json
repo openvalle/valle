@@ -1,0 +1,32 @@
+{
+  "spec": "docs/motion.md#inline-text-boxes",
+  "assertion": "Animated inline boxes and nested font alignment compose with grid sizing, rounded overflow, transforms, masks, shadows and backdrop blending. Forward, reverse and alternating seeks match fresh frames.",
+  "at": [0, 0.5, 1, 1.75],
+  "valle": {
+    "reason": "Reviewed frames 0, 2, 4 and 7 for complete synthesized glyphs, changing badge widths and wrapping, rounded clips, mask edges, shadows and backdrop blending. Independent glyph controls and seek comparisons also guard missing content.",
+    "maxDifference": 1
+  },
+  "layout": [
+    {
+      "key": "canvas",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 704,
+        "height": 360
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 704,
+        "height": 360
+      },
+      "content": {
+        "x": 16,
+        "y": 16,
+        "width": 672,
+        "height": 328
+      }
+    }
+  ]
+}

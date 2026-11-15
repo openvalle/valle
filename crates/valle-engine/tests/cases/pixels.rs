@@ -574,6 +574,202 @@ fn ellipsis_allowance_rejects_clipped_text_without_the_marker() {
 }
 
 #[test]
+fn fractional_glyphs_survive_translation_and_offscreen_compositing() {
+    if !std::env::var("VALLE_TEST_LAYERS")
+        .unwrap_or_default()
+        .split(',')
+        .any(|layer| layer == "gpu")
+    {
+        return;
+    }
+    crate::with_stack(|| {
+        use valle_engine::{paint::Item, time::Tick};
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let sample = crate::scene::load(
+            &root,
+            &root.join("tests/cases/css/text/font-position/scene.motion.tsx"),
+            Tick::ZERO,
+        )
+        .unwrap();
+        let line = sample
+            .frame
+            .layout
+            .lines
+            .iter()
+            .flatten()
+            .find(|line| line.string.contains("12Q?"))
+            .unwrap();
+        let glyphs: Vec<_> = line
+            .glyphs
+            .iter()
+            .filter(|g| g.position_shift.is_some())
+            .take(4)
+            .collect();
+        assert_eq!(glyphs.len(), 4);
+        let face = glyphs[0].face;
+        let gpu = valle_native::gpu::adapter(None)
+            .and_then(|c| Gpu::with(c.adapter))
+            .unwrap();
+        let mut renderer = Renderer::new(&gpu, 128, 360);
+        for phase in [0.0, 0.2, 0.5, 0.7, 0.8] {
+            let items: Vec<_> = (0..6)
+                .map(|row| Item::Glyphs {
+                    face,
+                    size: 16.4,
+                    color: [1.0; 4],
+                    stroke: 0.0,
+                    glyphs: glyphs
+                        .iter()
+                        .map(|g| {
+                            (
+                                g.id,
+                                [
+                                    20.0 + phase + g.x - glyphs[0].x,
+                                    40.0 + phase + row as f32 * 60.0,
+                                ],
+                            )
+                        })
+                        .collect(),
+                })
+                .collect();
+            let rgba = renderer
+                .render(&items, &[], sample.scene.faces(), &[])
+                .unwrap();
+            assert!(
+                rgba.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter(|p| p[3] > 128)
+                    .count()
+                    > 500
+            );
+            let group = Item::Group {
+                opacity: 0.8,
+                blend: valle_engine::style::Blend::Normal,
+                items,
+            };
+            let grouped = renderer
+                .render(&[group], &[], sample.scene.faces(), &[])
+                .unwrap();
+            for (i, (plain, layer)) in rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(grouped.as_chunks::<4>().0.iter())
+                .enumerate()
+            {
+                let want = (plain[3] as f32 * 0.8).round() as u8;
+                assert!(
+                    want.abs_diff(layer[3]) <= 2,
+                    "phase {phase}, pixel {i}: opacity expected {want}, got {}",
+                    layer[3]
+                );
+            }
+            for row in 1..6 {
+                let (mut changed, mut max) = (0, 0);
+                for y in 0..60 {
+                    for x in 0..128 {
+                        let a = rgba[(y * 128 + x) * 4 + 3];
+                        let b = rgba[((y + row * 60) * 128 + x) * 4 + 3];
+                        let delta = a.abs_diff(b);
+                        changed += usize::from(delta > 2);
+                        max = max.max(delta);
+                    }
+                }
+                // Integer translation keeps subpixel coverage; allow only quantization noise.
+                assert_eq!(
+                    changed, 0,
+                    "phase {phase}, row {row}: {changed} changed pixels, max {max}"
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn nested_inline_glyphs_keep_coverage_through_layers() {
+    if !std::env::var("VALLE_TEST_LAYERS")
+        .unwrap_or_default()
+        .split(',')
+        .any(|layer| layer == "gpu")
+    {
+        return;
+    }
+    crate::with_stack(|| {
+        use valle_engine::{paint::Item, time::Tick};
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let gpu = valle_native::gpu::adapter(None)
+            .and_then(|c| Gpu::with(c.adapter))
+            .unwrap();
+        for seconds in ["0", "0.5", "1", "1.75"] {
+            let sample = crate::scene::load(
+                &root,
+                &root.join("tests/cases/motion/inline-layout/scene.motion.tsx"),
+                Tick::parse_seconds(seconds).unwrap(),
+            )
+            .unwrap();
+            let actual = draw(&gpu, &sample).unwrap();
+            // The third card's superscript is inside the fully opaque part of its mask,
+            // above its underline, over white. Draw each glyph independently as a control.
+            let (i, lines) = sample
+                .frame
+                .layout
+                .lines
+                .iter()
+                .enumerate()
+                .find_map(|(i, l)| {
+                    let rect = sample.frame.layout.boxes[i].content;
+                    l.as_ref()
+                        .filter(|l| {
+                            rect.x < 100.0
+                                && rect.y > 180.0
+                                && l.glyphs.iter().any(|g| g.position_shift.is_some())
+                        })
+                        .map(|l| (i, l))
+                })
+                .unwrap();
+            let rect = sample.frame.layout.boxes[i].content;
+            let mut checked = 0;
+            for g in lines.glyphs.iter().filter(|g| g.position_shift.is_some()) {
+                let item = Item::Glyphs {
+                    face: g.face,
+                    size: g.size,
+                    color: [1.0; 4],
+                    stroke: 0.0,
+                    glyphs: vec![(g.id, [rect.x + g.x, rect.y + g.y])],
+                };
+                let reference = Renderer::new(&gpu, 704, 360)
+                    .render(&[item], &[], sample.scene.faces(), &[])
+                    .unwrap();
+                let mut ink = 0;
+                for (k, p) in reference
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p[3] > 240)
+                {
+                    ink += 1;
+                    assert!(
+                        actual[k * 4 + 2] < 180,
+                        "at {seconds}s, glyph {}, pixel {k}: solid reference alpha {}, blue {}",
+                        g.id,
+                        p[3],
+                        actual[k * 4 + 2]
+                    );
+                }
+                assert!(
+                    ink >= 2,
+                    "the independent glyph control must contain solid ink"
+                );
+                checked += 1;
+            }
+            assert_eq!(checked, 4);
+        }
+    });
+}
+
+#[test]
 fn motion_baselines_reject_wrong_interpolation_echo_and_exposure() {
     if !std::env::var("VALLE_TEST_LAYERS")
         .unwrap_or_default()
