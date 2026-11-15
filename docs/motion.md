@@ -459,9 +459,11 @@ the tile and override `patternContentUnits`. `patternTransform` transforms the
 whole repeated pattern. `href="#anotherPattern"` inherits missing attributes and,
 when empty, copies its children with the referencing pattern's inherited styles.
 Zero-sized tiles paint nothing; local reference cycles terminate without painting.
-Tiles clip their contents at the tile edges. The renderer rasterizes each tile once at
-its displayed density and wraps sampling across its edges; the tile texture is bounded
-by the output canvas size. Very large tiles can therefore lose fine detail.
+Tiles clip their contents at the tile edges. Tiles fitting the output surface are
+rasterized at their displayed density and sampled periodically. Oversized tiles
+render only their visible instances at output resolution, preserving fine detail
+without allocating a texture for the whole tile. Subpixel repeats retain sampled
+tiles; they are not expanded into more instances than output pixels.
 
 Markers clip to their `markerWidth` × `markerHeight` viewport by default.
 Set `overflow="visible"` or `style={{ overflow: "visible" }}` on `<marker>`

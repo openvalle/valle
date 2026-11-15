@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/pservers.html#Patterns",
+  "assertion": "Oversized tiles retain one-unit lines at output density. Only visible instances are drawn; fractional tile boundaries preserve uniform alpha and transformed tiles retain sharp geometry.",
+  "at": [0],
+  "browser": {
+    "selected": "firefox",
+    "reason": "Firefox preserves the one-unit geometry of oversized vector tiles. Chromium and WebKit downsample them and blur the lines. The native GPU test also compares the pattern with directly painted lines at 4K and verifies uniform alpha across fractional tile boundaries. Native output matches the axis-aligned lines and uniform half-opacity fill exactly; 2700 rotated edge pixels differ by at most 60 from Firefox due to antialiasing. The rotated pattern is also tested against directly transformed vector geometry.",
+    "pixels": {
+      "maxDifference": 65,
+      "maxPixels": 2800
+    }
+  }
+}

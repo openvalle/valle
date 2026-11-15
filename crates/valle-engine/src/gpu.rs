@@ -38,6 +38,7 @@ use crate::transition;
 
 mod filter;
 mod mipmap;
+mod pattern;
 mod plan;
 mod video;
 use plan::{Plan, Reach, Seen, Under};
@@ -1451,10 +1452,89 @@ impl<'a> Renderer<'a> {
                     let Some(t) = plan.transform(pattern) else {
                         continue;
                     };
-                    // Rasterize a tile once at its displayed density. A layer is canvas-sized;
-                    // very large tiles fit that surface rather than allocating unbounded textures.
+                    // Reuse a raster tile at its displayed density when it fits a layer.
+                    // Oversized, resolvable tiles draw only their visible vector instances.
                     let density = pattern.radius_scale();
                     let pixels = [w, h].map(|v| (v * density).ceil().max(1.0));
+                    if (pixels[0] > self.size[0] as f64 || pixels[1] > self.size[1] as f64)
+                        && let Some([columns, rows]) = pattern::repeats(
+                            pattern,
+                            [*x, *y, *w, *h],
+                            matrix.bounds(*rect),
+                            self.size,
+                        )
+                    {
+                        if columns.is_empty() || rows.is_empty() {
+                            continue;
+                        }
+                        let layer = plan.layer();
+                        let around = std::mem::replace(
+                            &mut plan.seen,
+                            Seen {
+                                here: Under {
+                                    root: layer,
+                                    open: Vec::new(),
+                                },
+                                group: Under {
+                                    root: layer,
+                                    open: Vec::new(),
+                                },
+                            },
+                        );
+                        let outer = std::mem::take(&mut plan.reach);
+                        // Adjacent clipped tiles partition a pixel's coverage. Add their
+                        // premultiplied contributions in an isolated layer to avoid seams.
+                        let clipped = if pattern::contained(items, [*w, *h], Matrix::IDENTITY) {
+                            items.clone()
+                        } else {
+                            vec![Item::Clip {
+                                rect: Rect {
+                                    x: 0.,
+                                    y: 0.,
+                                    width: *w as f32,
+                                    height: *h as f32,
+                                },
+                                radii: SQUARE,
+                                items: items.clone(),
+                            }]
+                        };
+                        let tile = Item::Group {
+                            opacity: 1.,
+                            blend: Blend::PlusLighter,
+                            items: clipped,
+                        };
+                        for row in rows {
+                            for col in columns.clone() {
+                                let placed = pattern.times(Matrix::translate(
+                                    x + col as f64 * w,
+                                    y + row as f64 * h,
+                                ));
+                                let Some(index) = plan.transform(placed) else {
+                                    continue;
+                                };
+                                self.plan(
+                                    std::slice::from_ref(&tile),
+                                    layer,
+                                    (index, placed),
+                                    faces,
+                                    plan,
+                                    atlas,
+                                )?;
+                            }
+                        }
+                        plan.seen = around;
+                        let reach = Reach::of(matrix, *rect).grown(1.);
+                        plan.bounds[layer] = reach;
+                        plan.reach = outer.union(reach);
+                        let [width, height] = self.size.map(|s| s as f32);
+                        let at = plan.words(
+                            [*opacity, 0., 0., 0., -1., -1., width + 2., height + 2.]
+                                .into_iter()
+                                .chain([0.; 12]),
+                        );
+                        plan.steps.push(Step::Composite { target, layer, at });
+                        continue;
+                    }
                     let pixels = [
                         pixels[0].min(self.size[0] as f64),
                         pixels[1].min(self.size[1] as f64),

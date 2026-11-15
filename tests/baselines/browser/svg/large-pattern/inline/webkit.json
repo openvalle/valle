@@ -1,0 +1,10 @@
+{
+  "size": [480, 220],
+  "sources": {
+    "tests/baselines/browser/svg/large-pattern/inline/scene.html": "18034c0baa690e5c390cd7bcc1a8881edeca6423bdda90dc5e4fa3ab06f4daea"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}
