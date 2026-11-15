@@ -1,0 +1,10 @@
+{
+  "size": [320, 180],
+  "sources": {
+    "tests/baselines/browser/svg/marker-overflow/inline/scene.html": "fa2192c9a0cede22a3798de8959f0fba33b474a23123363c22bc2efacfc4c783"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

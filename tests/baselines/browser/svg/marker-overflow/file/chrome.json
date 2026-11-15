@@ -1,0 +1,11 @@
+{
+  "size": [320, 180],
+  "sources": {
+    "tests/baselines/browser/svg/marker-overflow/file/scene.html": "6278bb25a23827277074bbf75586a02983e9eed1f82ecb847ea252fd60171268",
+    "tests/cases/svg/marker-overflow/file/source.svg": "eeab47c8feaefa2c59113087f734192149e400b7cbba4735789d7d6927cc1ac8"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

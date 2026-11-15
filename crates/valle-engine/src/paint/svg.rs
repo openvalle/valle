@@ -1133,13 +1133,20 @@ impl<'a> Drawing<'a> {
         if items.is_empty() {
             return None;
         }
-        let item = Item::Clip {
-            rect: rect([0.0, 0.0, w, h]),
-            radii: SQUARE,
-            items: vec![Item::Transform {
-                matrix: fitted,
-                items,
-            }],
+        let content = Item::Transform {
+            matrix: fitted,
+            items,
+        };
+        let item = if self.styles[n].layout.overflow.x == taffy::Overflow::Visible
+            && self.styles[n].layout.overflow.y == taffy::Overflow::Visible
+        {
+            content
+        } else {
+            Item::Clip {
+                rect: rect([0.0, 0.0, w, h]),
+                radii: SQUARE,
+                items: vec![content],
+            }
         };
         Some((m.orient, base, item))
     }
@@ -1433,6 +1440,42 @@ fn painted(path: Path, even_odd: bool, fill: Fill, cover: [f64; 4], scale: f64) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn marker_overflow_uses_css_cascade_and_keeps_its_view_box_transform() {
+        let source = indoc::indoc! {r##"
+            <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" style="overflow:visible">
+              <defs>
+                <marker id="default" viewBox="0 0 10 10" markerWidth="20" markerHeight="20"><rect x="-5" y="-5" width="20" height="20"/></marker>
+                <marker id="visible" viewBox="0 0 10 10" markerWidth="20" markerHeight="20" overflow="visible"><rect x="-5" y="-5" width="20" height="20"/></marker>
+                <marker id="override" overflow="hidden" style="overflow:visible"><rect width="10" height="10"/></marker>
+                <marker id="initial" style="overflow:initial"><rect width="10" height="10"/></marker>
+                <marker id="inherit" style="overflow:inherit"><rect width="10" height="10"/></marker>
+              </defs>
+            </svg>
+        "##};
+        let doc = Document::parse(source, &mut vec![]).unwrap();
+        let cache = Cache::default();
+        let drawing = Drawing::new(&doc.template, &doc.styles, &[], &[], &cache);
+        for (id, clipped) in [
+            ("default", true),
+            ("visible", false),
+            ("override", false),
+            ("initial", false),
+            ("inherit", false),
+        ] {
+            let (_, _, item) = drawing
+                .marker(id, 1.0, [100.0; 2], Matrix::IDENTITY)
+                .unwrap();
+            assert_eq!(matches!(item, Item::Clip { .. }), clipped, "{id}");
+            if id == "visible" {
+                let Item::Transform { matrix, .. } = item else {
+                    panic!()
+                };
+                assert_eq!(matrix, Matrix::scale(2.0));
+            }
+        }
+    }
 
     #[test]
     fn gradient_color_space_inherits_through_elements_not_href() {

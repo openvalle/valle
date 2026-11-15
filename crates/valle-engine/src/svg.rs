@@ -589,6 +589,7 @@ fn own(tag: Tag) -> &'static [&'static str] {
         Tag::Use => &["href", "xlinkHref", "x", "y", "width", "height"],
         Tag::Symbol => &["viewBox", "preserveAspectRatio"],
         Tag::Marker => &[
+            "overflow",
             "viewBox",
             "preserveAspectRatio",
             "refX",
@@ -684,7 +685,9 @@ pub fn holds(tag: Tag) -> Holds {
 /// Whether an attribute is a presentation attribute: a style property of the same name, which
 /// the element's style overrides. An `<svg>`'s `width` and `height` are its box's.
 pub fn presentational(tag: Tag, name: &str) -> bool {
-    PRESENTATION.contains(&name) || (tag == Tag::Svg && matches!(name, "width" | "height"))
+    PRESENTATION.contains(&name)
+        || (tag == Tag::Svg && matches!(name, "width" | "height"))
+        || (tag == Tag::Marker && name == "overflow")
 }
 
 /// The tables the frontend checks SVG in JSX by, as JSON: each element's own attributes and the

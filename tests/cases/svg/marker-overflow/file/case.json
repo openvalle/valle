@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/painting.html#MarkerElement",
+  "assertion": "Markers clip to their viewport by default; overflow visible reveals larger marker content. CSS overrides presentation attributes while preserving viewBox and reference-point transforms and strokeWidth scaling.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three browsers: default and explicitly hidden markers show 20px squares, visible markers show 40px squares. CSS overrides the attribute; viewBox, reference-point placement and strokeWidth scaling agree."
+  }
+}

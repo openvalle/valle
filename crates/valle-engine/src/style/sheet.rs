@@ -797,8 +797,8 @@ fn bind(
             }
         }; 2];
     }
-    // An <svg> clips what it draws to its box, as Chrome's style for it has it.
-    if tag == Some(Tag::Svg) {
+    // SVG viewports and markers clip by default through the user-agent style.
+    if matches!(tag, Some(Tag::Svg | Tag::Marker)) {
         declared.overflow = pair(&V::Str("hidden".into()), overflow)?.into();
     }
     // Presentation attributes, the classes, the style, then the important classes, each over
@@ -885,7 +885,10 @@ fn bind(
                 "{place}: {what}: a <Span> is part of a text, not a box, so it takes text properties, background, padding and border"
             ));
         }
-        if tag.is_some_and(|t| t != Tag::Svg) && !field.drawn_in_svg() {
+        if tag.is_some_and(|t| t != Tag::Svg)
+            && !field.drawn_in_svg()
+            && !(tag == Some(Tag::Marker) && field == Field::Overflow)
+        {
             return Err(format!(
                 "{place}: {what} on an element in an <svg> is not supported yet"
             ));

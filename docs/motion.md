@@ -447,6 +447,12 @@ Tiles clip their contents at the tile edges. The renderer rasterizes each tile o
 its displayed density and wraps sampling across its edges; the tile texture is bounded
 by the output canvas size. Very large tiles can therefore lose fine detail.
 
+Markers clip to their `markerWidth` × `markerHeight` viewport by default.
+Set `overflow="visible"` or `style={{ overflow: "visible" }}` on `<marker>`
+to show artwork outside that viewport; `hidden` clips it. This does not change
+the marker's `viewBox`, reference point, orientation or scaling with stroke width.
+CSS style overrides the presentation attribute.
+
 ### SVG text
 
 `xmlSpace="preserve"` (XML files: `xml:space="preserve"`) preserves leading,
