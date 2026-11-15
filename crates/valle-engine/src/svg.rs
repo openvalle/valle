@@ -231,7 +231,7 @@ pub struct Computed {
 
 /// Presentation attributes: style properties of the same name, which the element's style
 /// overrides. Every SVG element takes them.
-const PRESENTATION: [&str; 52] = [
+const PRESENTATION: [&str; 53] = [
     "xmlSpace",
     "fill",
     "fillOpacity",
@@ -283,6 +283,7 @@ const PRESENTATION: [&str; 52] = [
     "floodColor",
     "lightingColor",
     "floodOpacity",
+    "colorInterpolation",
     "colorInterpolationFilters",
 ];
 
@@ -1624,6 +1625,7 @@ pub fn gradient(
     stops: &[(f64, Rgba)],
     bbox: [f64; 4],
     viewport: [f64; 2],
+    linear: bool,
 ) -> Option<(Ramp, Matrix)> {
     fn pick<T>(chain: &[&Gradient], f: impl Fn(&Gradient) -> Option<T>) -> Option<T> {
         chain.iter().find_map(|g| f(g))
@@ -1648,7 +1650,20 @@ pub fn gradient(
     };
     let transform = pick(chain, |g| g.transform).unwrap_or(Matrix::IDENTITY);
     let (first, last) = (stops.first()?, stops.last()?);
-    let color = |c: Rgba| c.map(|v| v as f32);
+    let space = if linear {
+        Space::SrgbLinear
+    } else {
+        Space::Srgb
+    };
+    let color = |c: Rgba| {
+        std::array::from_fn(|k| {
+            if linear && k < 3 {
+                crate::style::color::linear(c[k]) as f32
+            } else {
+                c[k] as f32
+            }
+        })
+    };
     let percent = |p| Length {
         em: 0.0,
         units: 0.0,
@@ -1687,7 +1702,7 @@ pub fn gradient(
         let ramp = Ramp {
             geometry: Geometry::Line([[0.0, 0.0], [1.0, 0.0]]),
             spread: Spread::Pad,
-            space: Space::Srgb,
+            space,
             premultiplied: false,
             segments: vec![paint::Segment {
                 at: [0.0, 1.0],
@@ -1713,7 +1728,7 @@ pub fn gradient(
     let ramp = Ramp {
         geometry,
         spread: pick(chain, |g| g.spread).unwrap_or(Spread::Pad),
-        space: Space::Srgb,
+        space,
         premultiplied: false,
         segments,
     };
@@ -2004,7 +2019,7 @@ mod tests {
                 ("fx", V::Num(10.0)),
             ],
         );
-        let (ramp, _) = super::gradient(&[&radial], &stops, bbox, [200.0, 100.0]).unwrap();
+        let (ramp, _) = super::gradient(&[&radial], &stops, bbox, [200.0, 100.0], false).unwrap();
         let Geometry::Focal {
             focus,
             center,
@@ -2017,9 +2032,12 @@ mod tests {
         assert_eq!((focus, center), ([10.0, 50.0], [100.0, 50.0]));
         assert!((radius - 15.81).abs() < 0.01, "{radius}");
         // No stops, or a bounding box without area for its units: nothing.
-        assert_eq!(super::gradient(&[&base], &[], bbox, [1.0; 2]), None);
+        assert_eq!(super::gradient(&[&base], &[], bbox, [1.0; 2], false), None);
         let flat = [10.0, 20.0, 100.0, 0.0];
-        assert_eq!(super::gradient(&[&base], &stops, flat, [1.0; 2]), None);
+        assert_eq!(
+            super::gradient(&[&base], &stops, flat, [1.0; 2], false),
+            None
+        );
         let e = attributes(Tag::RadialGradient, &[("r", V::Num(-1.0))]).unwrap_err();
         assert_eq!(e, "r is negative");
         let e = attributes(Tag::LinearGradient, &[("href", text("other.svg#g"))]).unwrap_err();
@@ -2184,6 +2202,6 @@ mod tests {
 
     /// A gradient over `bbox` in a viewport 100 units a side.
     fn gradient_of(chain: &[&Gradient], stops: &[(f64, Rgba)], bbox: [f64; 4]) -> (Ramp, Matrix) {
-        super::gradient(chain, stops, bbox, [100.0; 2]).unwrap()
+        super::gradient(chain, stops, bbox, [100.0; 2], false).unwrap()
     }
 }

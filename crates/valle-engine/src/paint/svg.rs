@@ -1315,7 +1315,8 @@ impl<'a> Drawing<'a> {
             chain.push(g);
             next = g.href.as_deref();
         }
-        svg::gradient(&chain, &stops, bbox, size)
+        let linear = self.styles[*self.ids.get(id)?].gradient_linear;
+        svg::gradient(&chain, &stops, bbox, size, linear)
     }
 }
 
@@ -1432,6 +1433,53 @@ fn painted(path: Path, even_odd: bool, fill: Fill, cover: [f64; 4], scale: f64) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gradient_color_space_inherits_through_elements_not_href() {
+        use crate::style::gradient::Space;
+        let source = indoc::indoc! {r##"
+            <svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+              <defs color-interpolation="linearRGB">
+                <linearGradient id="linear"><stop stop-color="#808080"/><stop offset="1" stop-color="white" stop-opacity="0.5"/></linearGradient>
+                <linearGradient id="override" href="#linear" style="color-interpolation:sRGB"/>
+                <radialGradient id="inherit" href="#linear" style="color-interpolation:inherit"/>
+                <linearGradient id="initial" href="#linear" style="color-interpolation:initial"/>
+              </defs>
+              <linearGradient id="separate" href="#linear"/>
+            </svg>
+        "##};
+        let doc = Document::parse(source, &mut vec![]).unwrap();
+        let cache = Cache::default();
+        let drawing = Drawing::new(&doc.template, &doc.styles, &[], &[], &cache);
+        for (id, linear) in [
+            ("linear", true),
+            ("override", false),
+            ("inherit", true),
+            ("initial", false),
+            ("separate", false),
+        ] {
+            let (ramp, _) = drawing
+                .gradient(id, [120.0, 80.0], [0.0, 0.0, 120.0, 80.0])
+                .unwrap();
+            assert_eq!(
+                ramp.space,
+                if linear {
+                    Space::SrgbLinear
+                } else {
+                    Space::Srgb
+                }
+            );
+            let first = ramp.segments[0].colors[0];
+            let gray = 128.0 / 255.0;
+            let expected = if linear { color::linear(gray) } else { gray };
+            assert!((f64::from(first[0]) - expected).abs() < 1e-6);
+            assert_eq!(ramp.segments.last().unwrap().colors[1][3], 0.5);
+            assert!(!ramp.premultiplied);
+        }
+        let error =
+            Document::parse(&source.replace("linearRGB", "display-p3"), &mut vec![]).unwrap_err();
+        assert!(error.contains("colorInterpolation"), "{error}");
+    }
 
     #[test]
     fn clipping_cycles_are_empty_and_shared_references_can_be_reused() {

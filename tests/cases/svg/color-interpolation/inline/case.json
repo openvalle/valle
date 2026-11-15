@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/painting.html#ColorInterpolationProperty",
+  "assertion": "Gradient stop interpolation uses the computed color-interpolation property: sRGB by default, linearRGB when specified or inherited. Stop alpha remains unpremultiplied during interpolation. CSS overrides presentation attributes.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three browsers and native frames. Black-to-white midpoints are 128 in sRGB and 188 in linearRGB. Native differences are 13015 gradient pixels with a maximum channel delta of 1, confined to color rounding; geometry and translucent interpolation agree.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 13200
+    }
+  }
+}

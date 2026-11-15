@@ -217,6 +217,7 @@ pub(super) enum Field {
     FloodColor,
     LightingColor,
     FloodOpacity,
+    ColorInterpolation,
     ColorInterpolationFilters,
     MotionBlur,
     BackdropFilter,
@@ -337,7 +338,7 @@ pub(super) enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 282] = [
+const FIELDS: [(&str, Field); 283] = [
     ("font", Field::Font),
     ("xmlSpace", Field::XmlSpace),
     ("display", Field::Display),
@@ -614,6 +615,7 @@ const FIELDS: [(&str, Field); 282] = [
     ("floodColor", Field::FloodColor),
     ("lightingColor", Field::LightingColor),
     ("floodOpacity", Field::FloodOpacity),
+    ("colorInterpolation", Field::ColorInterpolation),
     (
         "colorInterpolationFilters",
         Field::ColorInterpolationFilters,
@@ -787,6 +789,7 @@ impl Field {
                 | Field::FloodColor
                 | Field::LightingColor
                 | Field::FloodOpacity
+                | Field::ColorInterpolation
                 | Field::ColorInterpolationFilters
                 | Field::Filter
                 | Field::MixBlendMode
@@ -864,6 +867,7 @@ impl Field {
                 | Field::FloodColor
                 | Field::LightingColor
                 | Field::FloodOpacity
+                | Field::ColorInterpolation
                 | Field::ColorInterpolationFilters
                 | Field::Filter
                 | Field::MotionBlur
@@ -896,6 +900,7 @@ impl Field {
                 | Field::FloodColor
                 | Field::LightingColor
                 | Field::FloodOpacity
+                | Field::ColorInterpolation
                 | Field::ColorInterpolationFilters
                 | Field::Filter
         )

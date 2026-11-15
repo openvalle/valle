@@ -423,6 +423,12 @@ pseudo-classes, escaped selector identifiers, at-rules and conditional media are
 not supported and report errors. Stylesheets are resolved when the SVG is loaded;
 there is no DOM or selector matching on every animation frame.
 
+Gradients accept `colorInterpolation="sRGB"` (the default), `"linearRGB"` or
+`"auto"` (sRGB). The property inherits from the gradient's document ancestors,
+not from the element being painted or the gradient named by `href`. It controls
+both linear and radial gradient stop interpolation, including translucent stops;
+`colorInterpolationFilters` controls filter operations separately.
+
 ### SVG patterns
 
 Use `<pattern id="dots" width={20} height={20} patternUnits="userSpaceOnUse">`

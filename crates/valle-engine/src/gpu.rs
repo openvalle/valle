@@ -1415,6 +1415,7 @@ impl<'a> Renderer<'a> {
                         .chain([a, b, c, d]);
                     plan.gradients.extend(words.map(f32::to_bits));
                     let space = match ramp.space {
+                        Space::SrgbLinear if !ramp.premultiplied => 7,
                         _ if !ramp.premultiplied => 4,
                         Space::Srgb => 0,
                         Space::SrgbLinear => 1,

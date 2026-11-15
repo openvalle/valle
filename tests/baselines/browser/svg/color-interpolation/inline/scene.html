@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>color-interpolation</title
+  ><style>
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      width: 320px;
+      height: 160px;
+      background: white;
+    }
+    svg,
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <svg xmlns="http://www.w3.org/2000/svg" width="320" height="160">
+      <defs>
+        <linearGradient id="s">
+          <stop stop-color="black" />
+          <stop offset="1" stop-color="white" />
+        </linearGradient>
+        <linearGradient id="l" href="#s" color-interpolation="linearRGB" />
+        <radialGradient id="r" color-interpolation="linearRGB">
+          <stop stop-color="#204080" />
+          <stop offset="1" stop-color="#e06020" stop-opacity="0.2" />
+        </radialGradient>
+        <g color-interpolation="linearRGB">
+          <linearGradient id="a">
+            <stop stop-color="#204080" />
+            <stop offset="1" stop-color="#e06020" stop-opacity="0.2" />
+          </linearGradient>
+          <linearGradient id="b" href="#a" style="color-interpolation: sRGB" />
+        </g>
+      </defs>
+      <rect x="10" y="10" width="140" height="40" fill="url(#s)" />
+      <rect x="170" y="10" width="140" height="40" fill="url(#l)" />
+      <rect x="10" y="70" width="90" height="70" fill="url(#r)" />
+      <rect x="115" y="70" width="90" height="70" fill="url(#a)" />
+      <rect x="220" y="70" width="90" height="70" fill="url(#b)" />
+    </svg>
+  </div>
+</html>

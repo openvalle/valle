@@ -135,6 +135,7 @@ fn inherited(field: Field) -> bool {
             | ClipRule
             | Marker(_)
             | PaintOrder
+            | ColorInterpolation
             | ColorInterpolationFilters
     )
 }
@@ -204,6 +205,7 @@ fn copy(d: &mut Declared, s: &Declared, field: Field) {
         F::LightingColor => fields!(lighting_color),
         F::FloodColor => fields!(flood_color),
         F::FloodOpacity => fields!(flood_opacity),
+        F::ColorInterpolation => fields!(gradient_linear),
         F::ColorInterpolationFilters => fields!(filter_linear),
         F::MotionBlur => fields!(motion_blur),
         F::BackdropFilter => fields!(backdrop),
@@ -456,6 +458,7 @@ pub(super) fn resolved(d: &Declared, s: &Style, canvas: [f64; 2]) -> Declared {
         flood_color = s.flood_color.clone(),
         lighting_color = s.lighting_color.clone(),
         flood_opacity = s.flood_opacity,
+        gradient_linear = s.gradient_linear,
         filter_linear = s.filter_linear
     );
     d.variants = f.variants.clone().map(Some);

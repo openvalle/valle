@@ -32,6 +32,8 @@ const CASES: {
   { entry: "tests/cases/svg/inline-image/file/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/external-fragments/inline/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/external-fragments/file/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/svg/color-interpolation/inline/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/svg/color-interpolation/file/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/filter-tile/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/filter-image/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/filter-specular/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },

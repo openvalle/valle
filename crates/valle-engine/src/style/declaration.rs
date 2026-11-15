@@ -143,6 +143,7 @@ pub(super) struct Declared {
     pub(super) lighting_color: Option<Option<color::Specified>>,
     pub(super) flood_color: Option<Option<color::Specified>>,
     pub(super) flood_opacity: Option<f64>,
+    pub(super) gradient_linear: Option<bool>,
     pub(super) filter_linear: Option<bool>,
     pub(super) filter: Vec<filter::Function<Len, Option<color::Specified>>>,
     /// `motionBlur` as the frontend gives it, if declared: the trail in the box's own px, or
@@ -300,6 +301,7 @@ impl Default for Declared {
             flood_color: None,
             lighting_color: None,
             flood_opacity: None,
+            gradient_linear: None,
             filter_linear: None,
             filter: Vec::new(),
             motion_blur: None,
@@ -1279,6 +1281,12 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::LightingColor => d.lighting_color = Some(current_color(v)?),
         F::FloodColor => d.flood_color = Some(current_color(v)?),
         F::FloodOpacity => d.flood_opacity = Some(alpha(v)?),
+        F::ColorInterpolation => {
+            d.gradient_linear = Some(keyword(
+                v,
+                &[("auto", false), ("linearrgb", true), ("srgb", false)],
+            )?)
+        }
         F::ColorInterpolationFilters => {
             d.filter_linear = Some(keyword(
                 v,

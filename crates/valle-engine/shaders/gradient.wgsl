@@ -17,8 +17,8 @@ struct Gradient {
   // turn clockwise from up the colors start at; or the focus, and the center.
   shape: vec4f,
   // x: past the stops, 0 their ends' colors, 1 the stops repeated, 2 reflected; y: the color
-  // space, 0 sRGB, 1 linear sRGB, 2 Oklab, 3 Oklch, 5 CIE Lab, 6 LCH, all premultiplied, 4 sRGB
-  // not; z: 0 along a line, 1 out to an ellipse, 2 around a turn, 3 out from a focus; w: the
+  // space: 0 sRGB, 1 linear sRGB, 2 Oklab, 3 Oklch, 5 CIE Lab, 6 LCH, premultiplied;
+  // 4 sRGB and 7 linear sRGB, straight. z: 0 along a line, 1 out to an ellipse, 2 around a turn, 3 out from a focus; w: the
   // transform.
   form: vec4u,
   // The first segment, and how many there are.
@@ -142,6 +142,9 @@ struct Out {
 fn working(c: vec4f, space: u32) -> vec4f {
   if (space == 0u) {
     return vec4f(clamp(c.rgb, vec3f(0.0), vec3f(c.a)), c.a);
+  }
+  if (space == 7u) {
+    return vec4f(encode(clamp(c.rgb, vec3f(0.0), vec3f(1.0))) * c.a, c.a);
   }
   if (space == 4u) {
     return vec4f(clamp(c.rgb, vec3f(0.0), vec3f(1.0)) * c.a, c.a);

@@ -1,0 +1,11 @@
+{
+  "size": [320, 160],
+  "sources": {
+    "tests/baselines/browser/svg/color-interpolation/file/scene.html": "ddc78ffccabb4e734676c61d323d8763ee1e68b778aca9387b68cf014dd7d165",
+    "tests/cases/svg/color-interpolation/file/source.svg": "f1f55528d8725f83d91cf771cc7d97ad9c1299ea529ed8eca1f6a3c1b3d1b37a"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

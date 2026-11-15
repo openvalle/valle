@@ -151,6 +151,7 @@ pub struct Style {
     pub lighting_color: Option<color::Specified>,
     pub flood_color: Option<color::Specified>,
     pub flood_opacity: f64,
+    pub gradient_linear: bool,
     pub filter_linear: bool,
     pub filter: Vec<filter::Function>,
     /// `motionBlur: "auto"`: the scene measures the trail of its last filter.
@@ -305,6 +306,7 @@ impl Style {
             flood_color: _,
             lighting_color: _,
             flood_opacity: _,
+            gradient_linear: _,
             filter_linear: _,
             filter: _,
             backdrop: _,
@@ -827,6 +829,9 @@ pub(super) fn compute(
             .clone()
             .unwrap_or_else(|| Some(color::BLACK.into())),
         flood_opacity: d.flood_opacity.unwrap_or(1.0),
+        gradient_linear: d
+            .gradient_linear
+            .unwrap_or_else(|| parent.is_some_and(|p| p.gradient_linear)),
         filter_linear: d
             .filter_linear
             .unwrap_or_else(|| parent.is_none_or(|p| p.filter_linear)),
