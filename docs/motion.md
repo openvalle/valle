@@ -710,6 +710,13 @@ accept the same names, including audio gain and pan automation.
 
 ## Text and fonts
 
+`font` accepts the CSS shorthand, for example `font: "italic 700 24px/1.4 sans-serif"`.
+Give a size and family; style, small caps, weight, stretch and line height are
+optional. Omitted font longhands reset to their defaults. Later longhands can
+override the shorthand. Family names remain case-sensitive resource names;
+quote names containing spaces. System UI font keywords such as `caption` are
+not supported: declare the font resource explicitly.
+
 Built-in fonts, used without declaring them: Noto Sans (the default, and `sans-serif`), Noto
 Serif (`serif`), Noto Sans Mono (`monospace`), Noto Sans SC and KR for Chinese and Korean, and
 Noto Color Emoji. They are downloaded once into the cache on first use.

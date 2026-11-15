@@ -1,0 +1,33 @@
+<!doctype html><meta charset="utf-8" /><style>
+  @font-face {
+    font-family: TestSans;
+    src: url("/tests/resources/NotoSans.ttf");
+    font-weight: 100 900;
+  }
+  body {
+    margin: 0;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  #canvas {
+    width: 320px;
+    height: 140px;
+    padding: 16px;
+    background: white;
+  }
+  .bold {
+    font: 700 24px/40px TestSans;
+    color: #182433;
+  }
+  .reset {
+    font-weight: 900;
+    font-style: italic;
+    font: 20px/32px TestSans;
+    color: #2563eb;
+  }
+</style>
+<div id="canvas">
+  <div class="bold" data-key="bold">Valle 2026</div>
+  <div class="reset" data-key="reset">Font shorthand</div>
+</div>

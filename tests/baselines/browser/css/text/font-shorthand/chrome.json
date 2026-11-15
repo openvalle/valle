@@ -1,0 +1,54 @@
+{
+  "size": [320, 140],
+  "sources": {
+    "tests/baselines/browser/css/text/font-shorthand/scene.html": "1978f679d3ccf3cbde35a989c1f7020bba97d09bc6ac52d89768da4359be0dbb",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "bold",
+        "border": {
+          "x": 16,
+          "y": 16,
+          "width": 288,
+          "height": 40
+        },
+        "padding": {
+          "x": 16,
+          "y": 16,
+          "width": 288,
+          "height": 40
+        },
+        "content": {
+          "x": 16,
+          "y": 16,
+          "width": 288,
+          "height": 40
+        }
+      },
+      {
+        "key": "reset",
+        "border": {
+          "x": 16,
+          "y": 56,
+          "width": 288,
+          "height": 32
+        },
+        "padding": {
+          "x": 16,
+          "y": 56,
+          "width": 288,
+          "height": 32
+        },
+        "content": {
+          "x": 16,
+          "y": 56,
+          "width": 288,
+          "height": 32
+        }
+      }
+    ],
+    "lines": []
+  }
+}

@@ -392,6 +392,101 @@ pub(super) fn weight(v: &V) -> Result<Weight, String> {
     Ok(Weight::Absolute(w))
 }
 
+/// The CSS font shorthand. The family keeps its case and quoted whitespace;
+/// omitted longhands reset, instead of inheriting an earlier declaration.
+pub(super) fn shorthand(v: &V, d: &mut Declared) -> Result<(), String> {
+    let value = v.text();
+    let parts = css::slashes(&value);
+    if parts.is_empty() || parts.len() > 2 {
+        return Err("font needs [style variant weight stretch] size[/line-height] family".into());
+    }
+    let words = css::words(parts[0]);
+    let mut style = FontStyle::Normal;
+    let mut bold = Weight::Absolute(400.0);
+    let mut width = 100.0;
+    let mut caps = false;
+    let mut seen = [false; 4];
+    let mut normals = 0;
+    let mut size = None;
+    for (i, word) in words.iter().enumerate() {
+        if let Ok(length) = length_text(word, PADDING) {
+            size = Some((i, length));
+            break;
+        }
+        let lower = word.to_ascii_lowercase();
+        let v = V::Str(lower.as_str().into());
+        let field = match lower.as_str() {
+            "normal" => {
+                normals += 1;
+                continue;
+            }
+            "italic" | "oblique" => {
+                style = font_style(&v)?;
+                0
+            }
+            "small-caps" => {
+                caps = true;
+                1
+            }
+            "bold" | "bolder" | "lighter" => {
+                bold = weight(&v)?;
+                2
+            }
+            _ if css::num(&lower).is_some_and(|n| n.unit.is_empty()) => {
+                bold = weight(&v)?;
+                2
+            }
+            _ => {
+                width = stretch(&v)
+                    .map_err(|_| format!("{word}: expected a font prefix or a size with a unit"))?;
+                3
+            }
+        };
+        if seen[field] {
+            return Err(format!("{word}: repeated font prefix"));
+        }
+        seen[field] = true;
+    }
+    let (at, size) =
+        size.ok_or("font needs a size and family; system font keywords are not supported")?;
+    if normals + seen.iter().filter(|&&v| v).count() > 4 {
+        return Err("font has too many optional prefixes".into());
+    }
+    let (line, family) = if parts.len() == 2 {
+        if at + 1 != words.len() {
+            return Err("font: family follows the line height, after /".into());
+        }
+        let after = css::words(parts[1]);
+        let first = after.first().ok_or("font: / needs a line height")?;
+        (
+            leading(&V::Str((*first).into()))?,
+            parts[1][first.len()..].trim(),
+        )
+    } else {
+        let offset = words[at].as_ptr() as usize - parts[0].as_ptr() as usize + words[at].len();
+        (Leading::Normal, parts[0][offset..].trim())
+    };
+    let family = families(&V::Str(family.into()))?;
+    d.font_size = Some(size);
+    d.font_family = Some(family);
+    d.font_style = Some(style);
+    d.font_weight = Some(bold);
+    d.stretch = Some(width);
+    d.line_height = Some(line);
+    d.variants = std::array::from_fn(|_| Some(Rc::<[Feature]>::from([])));
+    d.variants[Variant::Caps as usize] = Some(if caps {
+        Rc::from([Feature {
+            tag: *b"smcp",
+            value: 1,
+        }])
+    } else {
+        Rc::new([])
+    });
+    d.features = Some(Rc::new([]));
+    d.variations = Some(Rc::new([]));
+    Ok(())
+}
+
 /// `font-stretch`: a keyword, or a percentage of the normal width, 0% or more.
 pub(super) fn stretch(v: &V) -> Result<f64, String> {
     let keywords = [
@@ -793,6 +888,61 @@ mod tests {
 
     use super::*;
     use crate::testing::styles::{error, num, one, styles, text, view};
+
+    #[test]
+    fn font_shorthand_sets_and_resets_its_longhands() {
+        let s = one(&[(
+            "font",
+            text("italic small-caps 700 condensed 24px/1.4 sans-serif"),
+        )]);
+        assert_eq!(s.font.size, 24.0);
+        assert_eq!(s.font.weight, 700.0);
+        assert_eq!(s.font.style, FontStyle::Italic);
+        assert_eq!(s.font.stretch, 75.0);
+        assert_eq!(
+            s.font.variants[Variant::Caps as usize].as_ref(),
+            &[Feature {
+                tag: *b"smcp",
+                value: 1
+            }]
+        );
+        let s = one(&[
+            ("fontStyle", text("italic")),
+            ("fontWeight", num(800.0)),
+            ("fontFeatureSettings", text("'liga' 0")),
+            ("font", text("20px / 28px serif")),
+        ]);
+        assert_eq!(s.font.style, FontStyle::Normal);
+        assert_eq!(s.font.weight, 400.0);
+        assert!(s.font.features.is_empty());
+        assert_eq!(s.font.family.as_ref(), &[Family::Serif]);
+        assert_eq!(
+            one(&[
+                ("font", text("16px sans-serif")),
+                ("fontWeight", num(900.0))
+            ])
+            .font
+            .weight,
+            900.0
+        );
+        for value in [
+            "bold sans-serif",
+            "italic italic 20px serif",
+            "24px/ serif",
+            "24px/1/2 serif",
+            "24px",
+            "caption",
+        ] {
+            let e = error(&[("font", text(value))]);
+            assert!(!e.is_empty(), "{value}");
+        }
+        let mut d = Declared::default();
+        shorthand(&V::Str("20px 'Brand Font', sans-serif".into()), &mut d).unwrap();
+        assert_eq!(
+            d.font_family.unwrap()[0],
+            Family::Named("Brand Font".into())
+        );
+    }
 
     #[test]
     fn underline_position_parses_and_is_not_reset_by_decoration() {

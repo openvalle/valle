@@ -1,0 +1,57 @@
+{
+  "spec": "https://www.w3.org/TR/CSS2/fonts.html#font-shorthand",
+  "assertion": "Font shorthand assigns weight, size, line height and family and resets omitted italic and weight declarations.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All browsers agree on box sizes and shorthand resets. Reviewed native differences are confined to glyph edges (1473 pixels, maximum channel delta 140); numerical layout assertions and font parser tests cover the longhand values and cascade order.",
+    "pixels": {
+      "maxDifference": 140,
+      "maxPixels": 1500
+    }
+  },
+  "layout": [
+    {
+      "key": "bold",
+      "border": {
+        "x": 16,
+        "y": 16,
+        "width": 288,
+        "height": 40
+      },
+      "padding": {
+        "x": 16,
+        "y": 16,
+        "width": 288,
+        "height": 40
+      },
+      "content": {
+        "x": 16,
+        "y": 16,
+        "width": 288,
+        "height": 40
+      }
+    },
+    {
+      "key": "reset",
+      "border": {
+        "x": 16,
+        "y": 56,
+        "width": 288,
+        "height": 32
+      },
+      "padding": {
+        "x": 16,
+        "y": 56,
+        "width": 288,
+        "height": 32
+      },
+      "content": {
+        "x": 16,
+        "y": 56,
+        "width": 288,
+        "height": 32
+      }
+    }
+  ]
+}

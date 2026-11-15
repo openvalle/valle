@@ -1056,6 +1056,7 @@ pub(super) fn inherits(v: &V) -> bool {
 pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
     use Field as F;
     match field {
+        F::Font => super::font::shorthand(v, d)?,
         F::XmlSpace => {
             d.collapse = Some(keyword(
                 v,

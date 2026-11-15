@@ -123,6 +123,7 @@ pub(super) fn camel(property: &str) -> String {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Field {
     XmlSpace,
+    Font,
     Display,
     Position,
     Inset(Sides),
@@ -335,7 +336,8 @@ pub(super) enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 280] = [
+const FIELDS: [(&str, Field); 281] = [
+    ("font", Field::Font),
     ("xmlSpace", Field::XmlSpace),
     ("display", Field::Display),
     ("position", Field::Position),
@@ -756,7 +758,8 @@ impl Field {
     pub(super) fn drawn_in_svg(self) -> bool {
         matches!(
             self,
-            Field::XmlSpace
+            Field::Font
+                | Field::XmlSpace
                 | Field::TextAnchor
                 | Field::DominantBaseline
                 | Field::AlignmentBaseline
@@ -996,7 +999,8 @@ impl Field {
     pub(super) fn textual(self) -> bool {
         matches!(
             self,
-            Field::Visibility
+            Field::Font
+                | Field::Visibility
                 | Field::Color
                 | Field::FontSize
                 | Field::FontWeight
