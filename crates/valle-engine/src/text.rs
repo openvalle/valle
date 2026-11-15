@@ -366,6 +366,7 @@ pub struct Text {
     paragraphs: HashMap<ParagraphKey, Paragraph>,
     /// The ascent, descent and line gap of each font's first face, px.
     metrics: HashMap<Shaping, [f32; 3]>,
+    x_heights: HashMap<Shaping, f32>,
     ellipses: HashMap<Shaping, Ellipsis>,
     faces: Vec<Face>,
     /// Glyph outlines by face and glyph id, in font units y up, and their units per em.
@@ -476,6 +477,7 @@ impl Text {
             layouts: LayoutContext::new(),
             paragraphs: HashMap::new(),
             metrics: HashMap::new(),
+            x_heights: HashMap::new(),
             ellipses: HashMap::new(),
             faces: Vec::new(),
             outlines: HashMap::new(),
@@ -874,8 +876,12 @@ impl Text {
 
     /// The font's x-height in pixels, used by SVG's middle baseline.
     pub(crate) fn x_height(&mut self, font: &Font) -> Result<f32, Error> {
+        let key = Shaping::of(font, false);
+        if let Some(height) = self.x_heights.get(&key) {
+            return Ok(*height);
+        }
         let layout = self.alone("x", font)?;
-        Ok(layout
+        let height = layout
             .lines()
             .find_map(|line| {
                 line.items().find_map(|item| match item {
@@ -883,7 +889,10 @@ impl Text {
                     _ => None,
                 })
             })
-            .unwrap_or(font.size as f32 * 0.5))
+            .filter(|h| *h > 0.0)
+            .unwrap_or(font.size as f32 * 0.5);
+        self.x_heights.insert(key, height);
+        Ok(height)
     }
 
     /// The ascent, descent and line gap, px, of the first face of `font`, at its size and

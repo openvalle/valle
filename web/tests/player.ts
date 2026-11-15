@@ -23,6 +23,7 @@ const CASES: {
   pixels?: { maxDifference: number; maxPixels: number };
 }[] = [
   { entry: "tests/cases/css/values/absolute-units/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/values/font-ex/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/font-units/inline/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/font-units/file/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/absolute-units/inline/scene.motion.tsx", frames: [0] },

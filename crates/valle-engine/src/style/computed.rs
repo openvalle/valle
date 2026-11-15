@@ -88,6 +88,8 @@ pub enum Join {
 /// A node's computed style.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Style {
+    /// Selected font x-height in CSS pixels, for relative lengths and explicit inheritance.
+    pub(crate) x_height: f64,
     pub(crate) specified: Option<Rc<super::cascade::Snapshot>>,
     /// A compact row table instead of separate layout/style nodes for repeated leaf boxes.
     pub instances: Option<Rc<Vec<super::instances::Row>>>,
@@ -284,6 +286,7 @@ impl Style {
     /// takes a side.
     pub fn lays_out_as(&self, other: &Style) -> bool {
         let Style {
+            x_height: _,
             specified: _,
             instances: _,
             svg_instances: _,
@@ -481,17 +484,36 @@ pub(super) fn computed_transforms(d: &Declared, units: Units) -> Vec<transform::
         .collect()
 }
 
+/// Font metrics are supplied by the scene after its explicit font resources have loaded.
+/// SVG file parsing can compute provisional styles before that final pass.
+pub(super) type FontMetrics<'a> = &'a dyn Fn(&Font) -> Result<f64, String>;
+
+pub(super) struct Environment<'a> {
+    pub canvas: [f64; 2],
+    pub resources: &'a [Slot],
+    pub fonts: Option<FontMetrics<'a>>,
+}
+
+impl Environment<'_> {
+    pub fn x_height(&self, font: &Font) -> Result<f64, String> {
+        match self.fonts {
+            Some(fonts) => fonts(font),
+            None => Ok(font.size * 0.5),
+        }
+    }
+}
+
 /// The computed style of a node with these declared values under `parent` (`None`: the canvas,
 /// a block container with CSS's initial text properties), after `first` calcs in the frame.
 pub(super) fn compute(
     d: &Declared,
     parent: Option<&Style>,
-    canvas: [f64; 2],
+    env: &Environment,
     first: usize,
     node: usize,
     text: bool,
-    resources: &[Slot],
 ) -> Result<Style, String> {
+    let (canvas, resources) = (env.canvas, env.resources);
     let initial;
     let (inherited, inherited_color, inherited_visible, container) = match parent {
         Some(p) => (p.font.as_ref(), p.color, p.visible, p.layout.display),
@@ -505,10 +527,49 @@ pub(super) fn compute(
         None => (Paint::Color(color::BLACK), 1.0, false),
     };
     let mut stroke = parent.map_or_else(Stroke::initial, |p| p.stroke.clone());
-    let units = |em| Units { em, canvas };
+    let inherited_ex = if d.ex {
+        env.x_height(inherited)?
+    } else {
+        inherited.size * 0.5
+    };
     let size = match &d.font_size {
         None => inherited.size,
-        Some(l) => l.px(units(inherited.size), inherited.size),
+        Some(l) => l.px(
+            Units {
+                em: inherited.size,
+                ex: inherited_ex,
+                canvas,
+            },
+            inherited.size,
+        ),
+    };
+    let mut selected = inherited.clone();
+    selected.size = size;
+    selected.weight = match d.font_weight {
+        None => inherited.weight,
+        Some(Weight::Absolute(w)) => w,
+        Some(Weight::Bolder) => bolder(inherited.weight),
+        Some(Weight::Lighter) => lighter(inherited.weight),
+    };
+    selected.stretch = d.stretch.unwrap_or(inherited.stretch);
+    selected.style = d.font_style.unwrap_or(inherited.style);
+    selected.family = d
+        .font_family
+        .clone()
+        .unwrap_or_else(|| inherited.family.clone());
+    selected.variations = d
+        .variations
+        .clone()
+        .unwrap_or_else(|| inherited.variations.clone());
+    let x_height = if d.ex {
+        env.x_height(&selected)?
+    } else {
+        size * 0.5
+    };
+    let units = |em| Units {
+        em,
+        ex: x_height,
+        canvas,
     };
     let rtl = d.rtl.unwrap_or(inherited.rtl);
     let bidi = d.bidi.unwrap_or_default();
@@ -530,18 +591,10 @@ pub(super) fn compute(
     };
     let font = Font {
         size,
-        weight: match d.font_weight {
-            None => inherited.weight,
-            Some(Weight::Absolute(w)) => w,
-            Some(Weight::Bolder) => bolder(inherited.weight),
-            Some(Weight::Lighter) => lighter(inherited.weight),
-        },
+        weight: selected.weight,
         stretch: d.stretch.unwrap_or(inherited.stretch),
         style: d.font_style.unwrap_or(inherited.style),
-        family: match &d.font_family {
-            None => inherited.family.clone(),
-            Some(f) => f.clone(),
-        },
+        family: selected.family,
         line_height: match &d.line_height {
             None => inherited.line_height,
             Some(Leading::Normal) => LineHeight::Normal,
@@ -767,6 +820,7 @@ pub(super) fn compute(
         ..taffy::Style::DEFAULT
     };
     Ok(Style {
+        x_height,
         specified: None,
         instances: None,
         svg_instances: None,

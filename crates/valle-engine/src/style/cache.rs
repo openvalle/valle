@@ -138,6 +138,7 @@ impl Updates {
     pub fn apply(&self, style: &mut Style, d: &Declared, canvas: [f64; 2]) -> bool {
         let u = Units {
             em: style.font.size,
+            ex: style.x_height,
             canvas,
         };
         if self.inset {
@@ -242,7 +243,14 @@ mod tests {
             assert_eq!(reused, fresh);
             assert_eq!(
                 sheet
-                    .compute_only(&[0, 2], &values, [200.0, 100.0], &[], &reused)
+                    .compute_only(
+                        &[0, 2],
+                        &values,
+                        [200.0, 100.0],
+                        &[],
+                        &reused,
+                        &mut crate::testing::text()
+                    )
                     .unwrap(),
                 [fresh[0].clone(), fresh[2].clone()]
             );

@@ -430,6 +430,7 @@ mod tests {
         parse(s).unwrap().1.computed(
             Units {
                 em: 20.0,
+                ex: 20.0 * 0.5,
                 canvas: [800.0, 600.0],
             },
             WritingMode::Horizontal,
@@ -524,6 +525,7 @@ mod tests {
             .1;
         let u = Units {
             em: 16.0,
+            ex: 16.0 * 0.5,
             canvas: [200.0, 100.0],
         };
         let rl = path

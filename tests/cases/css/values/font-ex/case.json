@@ -1,0 +1,95 @@
+{
+  "spec": "https://www.w3.org/TR/CSS2/syndata.html#length-units",
+  "assertion": "ex uses the selected font x-height. Pinned Noto Sans has 536/1000 units/em at weight 400 and 546/1000 at weight 700. Checks calc, inherited font size and font variation against pixel controls.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All three reviewed browser images agree exactly. Independent font metrics give widths of 67px at weight 400 and 68.25px at weight 700 with a 125px font."
+  },
+  "layout": [
+    {
+      "key": "bar0",
+      "border": {
+        "x": 12,
+        "y": 12,
+        "width": 67,
+        "height": 12
+      },
+      "padding": {
+        "x": 12,
+        "y": 12,
+        "width": 67,
+        "height": 12
+      },
+      "content": {
+        "x": 12,
+        "y": 12,
+        "width": 67,
+        "height": 12
+      }
+    },
+    {
+      "key": "bar1",
+      "border": {
+        "x": 12,
+        "y": 40,
+        "width": 130,
+        "height": 12
+      },
+      "padding": {
+        "x": 12,
+        "y": 40,
+        "width": 130,
+        "height": 12
+      },
+      "content": {
+        "x": 12,
+        "y": 40,
+        "width": 130,
+        "height": 12
+      }
+    },
+    {
+      "key": "bar2",
+      "border": {
+        "x": 12,
+        "y": 68,
+        "width": 67,
+        "height": 12
+      },
+      "padding": {
+        "x": 12,
+        "y": 68,
+        "width": 67,
+        "height": 12
+      },
+      "content": {
+        "x": 12,
+        "y": 68,
+        "width": 67,
+        "height": 12
+      }
+    },
+    {
+      "key": "bar3",
+      "border": {
+        "x": 12,
+        "y": 96,
+        "width": 68.25,
+        "height": 12
+      },
+      "padding": {
+        "x": 12,
+        "y": 96,
+        "width": 68.25,
+        "height": 12
+      },
+      "content": {
+        "x": 12,
+        "y": 96,
+        "width": 68.25,
+        "height": 12
+      }
+    }
+  ]
+}

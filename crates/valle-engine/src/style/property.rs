@@ -1121,7 +1121,7 @@ mod tests {
             (
                 "width",
                 text("1vq"),
-                "style width: 1vq: vq is not supported; use px, cm, mm, in, pt, pc, em, rem, %, vw, vh, vmin or vmax",
+                "style width: 1vq: vq is not supported; use px, cm, mm, in, pt, pc, em, ex, rem, %, vw, vh, vmin or vmax",
             ),
             ("padding", num(-1.0), "style padding: -1 is negative"),
             (

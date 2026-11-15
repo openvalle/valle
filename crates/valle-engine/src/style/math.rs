@@ -411,6 +411,7 @@ mod tests {
         };
         let u = Units {
             em: 16.0,
+            ex: 16.0 * 0.5,
             canvas: [200.0, 100.0],
         };
         let v = length_text("calc(-2 * min(10px, max(2px, 25%)) + 30px)", a).unwrap();

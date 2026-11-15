@@ -150,6 +150,9 @@ arbitrary values such as `w-[340px]`; both can be used together, `style` winning
 Lengths also accept `cm`, `mm`, `in`, `pt` and `pc`, including inside `calc()`.
 They use CSS reference pixels: `1in = 96px = 2.54cm = 25.4mm = 72pt = 6pc`.
 Output resolution scales the result; these units do not read screen DPI.
+`ex` uses the selected font’s x-height, including in `calc()`, transforms and
+spacing. In `fontSize` it uses the parent font; other lengths use the element’s
+font. Explicitly inherited lengths keep their resolved size.
 
 Supported, among others:
 

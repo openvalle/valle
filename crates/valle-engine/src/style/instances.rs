@@ -49,6 +49,7 @@ struct Bound {
 /// Only the declarations an instance can use. Keeping a full Declared per row would also
 /// retain and clone the defaults for grids, fonts, background layers and unrelated features.
 struct Fixed {
+    ex: bool,
     inset: [Len; 2],
     size: [Len; 2],
     radii: [[Len; 2]; 4],
@@ -66,6 +67,7 @@ impl Fixed {
     fn new(d: Declared) -> Self {
         let [top, _, _, left] = d.inset;
         Self {
+            ex: d.ex,
             inset: [left, top],
             size: d.size,
             radii: d.radii,
@@ -83,6 +85,7 @@ impl Fixed {
     /// Reset the row's drawing declarations before applying dynamic values. The same scratch
     /// declaration can then use the normal parser without copying unrelated defaults.
     fn reset(&self, d: &mut Declared) {
+        d.ex = self.ex;
         d.inset[3].clone_from(&self.inset[0]);
         d.inset[0].clone_from(&self.inset[1]);
         d.size.clone_from(&self.size);
@@ -235,11 +238,12 @@ impl Table {
         &self,
         values: &[V],
         parent: &Style,
-        canvas: [f64; 2],
+        env: &super::computed::Environment,
     ) -> Result<Rc<Vec<Row>>, String> {
-        let u = Units {
+        let mut u = Units {
             em: parent.font.size,
-            canvas,
+            ex: parent.x_height,
+            canvas: env.canvas,
         };
         let mut rows = Vec::with_capacity(self.rows.len());
         let mut local = Vec::new();
@@ -258,6 +262,9 @@ impl Table {
                     Prop::Expr(e) => &values[*e as usize],
                 };
                 set(&mut d, *field, v).map_err(|e| format!("{}: style {name}: {e}", self.place))?;
+            }
+            if d.ex {
+                u.ex = env.x_height(&parent.font)?;
             }
             rows.push(Row {
                 rect: Rect {
@@ -389,6 +396,25 @@ mod tests {
             let next = scene.frame(Tick::parse_seconds("1").unwrap()).unwrap();
             assert!(Rc::ptr_eq(&first.layout, &next.layout));
             assert_ne!(first.items, next.items);
+        });
+    }
+
+    #[test]
+    fn ex_transforms_in_rows_match_independent_boxes() {
+        run(|| {
+            let mut table = scene("translate:'1ex 0px'", "fontSize:125+t*125", "");
+            let mut plain = scene("translate:'1ex 0px'", "fontSize:125+t*125", "margin:0");
+            for time in ["0", "1", "0"] {
+                let at = Tick::parse_seconds(time).unwrap();
+                let a = table.frame(at).unwrap();
+                let b = plain.frame(at).unwrap();
+                assert!(!a.template.instances.is_empty());
+                let rows = a.styles[1].instances.as_ref().unwrap();
+                for (row, style) in rows.iter().zip(&b.styles[1..]) {
+                    assert_eq!(row.transform, style.transform);
+                    assert_eq!(row.origin, style.transform_origin);
+                }
+            }
         });
     }
 

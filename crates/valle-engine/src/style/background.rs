@@ -455,6 +455,7 @@ mod tests {
             .computed(
                 Units {
                     em: 16.0,
+                    ex: 16.0 * 0.5,
                     canvas: [200.0, 100.0],
                 },
                 [0.0; 4],

@@ -359,6 +359,7 @@ mod tests {
         let current = [0.25, 0.5, 0.75, 1.0];
         let u = Units {
             em: 20.0,
+            ex: 20.0 * 0.5,
             canvas: [200.0, 100.0],
         };
         assert_eq!(

@@ -289,6 +289,7 @@ mod tests {
         .unwrap();
         let u = Units {
             em: 20.0,
+            ex: 20.0 * 0.5,
             canvas: [400.0, 200.0],
         };
         let Function::Translate(t) = fs[0].computed(u) else {

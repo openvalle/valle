@@ -99,6 +99,13 @@ impl Picture {
                 Natural::Size(s) => s.map(f64::from),
                 _ => [300.0, 150.0],
             };
+            doc.styles = crate::style::Sheet::new(&doc.template)?.compute_with_text(
+                &[],
+                true,
+                canvas.map(|v| v as f32),
+                &[],
+                text,
+            )?;
             crate::svg::text::shape(&doc.template, &mut doc.styles, text, |_| canvas)?;
             for image in &mut doc.embedded {
                 image.picture.shape_text(text)?;

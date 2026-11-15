@@ -64,7 +64,18 @@ pub(super) fn apply(
 
 fn initial_values() -> Result<Declared, String> {
     let d = Declared::default();
-    let style = computed::compute(&d, None, [0.0; 2], 0, 0, false, &[])?;
+    let style = computed::compute(
+        &d,
+        None,
+        &computed::Environment {
+            canvas: [0.0; 2],
+            resources: &[],
+            fonts: None,
+        },
+        0,
+        0,
+        false,
+    )?;
     let mut d = resolved(&d, &style, [0.0; 2]);
     // Valle's element defaults differ from these CSS initial values.
     d.box_sizing = taffy::BoxSizing::ContentBox;
@@ -389,6 +400,7 @@ pub(super) fn resolved(d: &Declared, s: &Style, canvas: [f64; 2]) -> Declared {
     let mut d = d.clone();
     let u = Units {
         em: s.font.size,
+        ex: s.x_height,
         canvas,
     };
     freeze::declaration(&mut d, u);
@@ -596,8 +608,19 @@ mod tests {
     #[test]
     fn every_css_property_accepts_all_three_keywords() {
         let initial = initial_values().unwrap();
-        let mut parent =
-            computed::compute(&Declared::default(), None, [100.0; 2], 0, 0, false, &[]).unwrap();
+        let mut parent = computed::compute(
+            &Declared::default(),
+            None,
+            &computed::Environment {
+                canvas: [100.0; 2],
+                resources: &[],
+                fonts: None,
+            },
+            0,
+            0,
+            false,
+        )
+        .unwrap();
         parent.specified = Some(Rc::new(Snapshot(initial)));
         for name in super::super::properties() {
             let field = Field::by_name(name).unwrap();

@@ -21,6 +21,7 @@ pub(super) enum Len {
     Px(f64),
     Percent(f64),
     Em(f64),
+    Ex(f64),
     /// Percentages of the canvas width, height, the smaller and the larger.
     Vw(f64),
     Vh(f64),
@@ -49,6 +50,7 @@ pub(super) enum Sizing {
 #[derive(Clone, Copy)]
 pub(super) struct Units {
     pub(super) em: f64,
+    pub(super) ex: f64,
     pub(super) canvas: [f64; 2],
 }
 
@@ -64,6 +66,7 @@ impl Len {
             Len::Px(v) => Len::Px(f(v)),
             Len::Percent(v) => Len::Percent(f(v)),
             Len::Em(v) => Len::Em(f(v)),
+            Len::Ex(v) => Len::Ex(f(v)),
             Len::Vw(v) => Len::Vw(f(v)),
             Len::Vh(v) => Len::Vh(f(v)),
             Len::Vmin(v) => Len::Vmin(f(v)),
@@ -76,7 +79,7 @@ impl Len {
     pub(super) fn negative(&self) -> bool {
         match *self {
             Len::Auto | Len::Calc(_) | Len::Sizing(_) => false,
-            Len::Px(v) | Len::Percent(v) | Len::Em(v) => v < 0.0,
+            Len::Px(v) | Len::Percent(v) | Len::Em(v) | Len::Ex(v) => v < 0.0,
             Len::Vw(v) | Len::Vh(v) | Len::Vmin(v) | Len::Vmax(v) => v < 0.0,
         }
     }
@@ -89,6 +92,7 @@ impl Len {
             Len::Px(v) => *v,
             Len::Percent(p) => p / 100.0 * base,
             Len::Em(e) => e * u.em,
+            Len::Ex(e) => e * u.ex,
             Len::Vw(v) => v / 100.0 * w,
             Len::Vh(v) => v / 100.0 * h,
             Len::Vmin(v) => v / 100.0 * w.min(h),
@@ -117,6 +121,7 @@ impl Len {
             Len::Px(v) => Len::Px(v * k),
             Len::Percent(v) => Len::Percent(v * k),
             Len::Em(v) => Len::Em(v * k),
+            Len::Ex(v) => Len::Ex(v * k),
             Len::Vw(v) => Len::Vw(v * k),
             Len::Vh(v) => Len::Vh(v * k),
             Len::Vmin(v) => Len::Vmin(v * k),
@@ -388,6 +393,7 @@ pub(super) fn unit(n: css::Num, a: Accept) -> Result<Len, String> {
         "pt" => Len::Px(n.value * (96.0 / 72.0)),
         "pc" => Len::Px(n.value * 16.0),
         "em" => Len::Em(n.value),
+        "ex" => Len::Ex(n.value),
         "rem" => Len::Px(n.value * REM),
         "%" if a.percent => Len::Percent(n.value),
         "%" => return Err("percentages are not supported here".into()),
@@ -398,7 +404,7 @@ pub(super) fn unit(n: css::Num, a: Accept) -> Result<Len, String> {
     })
 }
 
-const UNITS: &str = "px, cm, mm, in, pt, pc, em, rem, %, vw, vh, vmin or vmax";
+const UNITS: &str = "px, cm, mm, in, pt, pc, em, ex, rem, %, vw, vh, vmin or vmax";
 
 /// A viewport unit. The canvas is the viewport, small, large and dynamic alike, and the inline
 /// and block axes are horizontal and vertical.
@@ -481,7 +487,7 @@ mod tests {
         assert_eq!(l.margin.left, auto_px(-5.0));
         assert_eq!(one(&[("fontSize", text("10vw"))]).font.size, 20.0);
         assert!(error(&[("width", text("1vq"))]).ends_with(
-            "1vq: vq is not supported; use px, cm, mm, in, pt, pc, em, rem, %, vw, vh, vmin or vmax"
+            "1vq: vq is not supported; use px, cm, mm, in, pt, pc, em, ex, rem, %, vw, vh, vmin or vmax"
         ));
     }
 
@@ -541,7 +547,7 @@ mod tests {
             ("calc(1px) 2px", "calc(1px) 2px is not a length"),
             (
                 "calc(1vq)",
-                "vq is not supported; use px, cm, mm, in, pt, pc, em, rem, %, vw, vh, vmin or vmax",
+                "vq is not supported; use px, cm, mm, in, pt, pc, em, ex, rem, %, vw, vh, vmin or vmax",
             ),
         ] {
             let got = error(&[("width", text(bad))]);

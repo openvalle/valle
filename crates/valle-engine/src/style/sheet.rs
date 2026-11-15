@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use crate::{svg, transition};
 
-use super::computed::{Instance, Shaded, Source, Style, compute};
+use super::computed::{Environment, FontMetrics, Instance, Shaded, Source, Style, compute};
 use super::declaration::{Declared, overflow, pair, presented, set};
 use super::property::{Field, camel, unsupported};
 use super::{cache, tailwind};
@@ -262,7 +262,32 @@ impl Sheet {
         canvas: [f32; 2],
         resources: &[Slot],
     ) -> Result<Vec<Style>, Error> {
+        self.computed(values, settled, canvas, resources, None)
+    }
+
+    pub(crate) fn compute_with_text(
+        &self,
+        values: &[V],
+        settled: bool,
+        canvas: [f32; 2],
+        resources: &[Slot],
+        text: &mut crate::text::Text,
+    ) -> Result<Vec<Style>, Error> {
+        let fonts = RefCell::new(text);
+        let metrics = |font: &super::Font| fonts.borrow_mut().x_height(font).map(f64::from);
+        self.computed(values, settled, canvas, resources, Some(&metrics))
+    }
+
+    fn computed(
+        &self,
+        values: &[V],
+        settled: bool,
+        canvas: [f32; 2],
+        resources: &[Slot],
+        fonts: Option<FontMetrics<'_>>,
+    ) -> Result<Vec<Style>, Error> {
         let frame = Frame {
+            fonts,
             values,
             late: (!settled).then_some(&self.late[..]),
             canvas: canvas.map(f64::from),
@@ -374,8 +399,12 @@ impl Sheet {
         canvas: [f32; 2],
         resources: &[Slot],
         like: &[Style],
+        text: &mut crate::text::Text,
     ) -> Result<Vec<Style>, Error> {
+        let fonts = RefCell::new(text);
+        let metrics = |font: &super::Font| fonts.borrow_mut().x_height(font).map(f64::from);
         let frame = Frame {
+            fonts: Some(&metrics),
             values,
             late: None,
             canvas: canvas.map(f64::from),
@@ -455,7 +484,8 @@ impl Sheet {
         let (canvas, resources) = (frame.canvas, frame.resources);
         let mut base = b.base.borrow_mut();
         let kept = base.as_ref().and_then(|s| {
-            if !s.matches(parent, canvas, calcs, resources)
+            if declared.ex
+                || !s.matches(parent, canvas, calcs, resources)
                 || parent.is_some_and(|p| p.specified.is_some())
             {
                 return None;
@@ -469,7 +499,7 @@ impl Sheet {
         let mut style = match kept {
             Some(style) => style,
             None => {
-                let style = compute(&declared, parent, canvas, calcs, i, b.text, resources)
+                let style = compute(&declared, parent, &frame.environment(), calcs, i, b.text)
                     .map_err(|e| format!("{}: {e}", b.place))?;
                 if b.updates.is_some() {
                     *base = Some(Box::new(cache::Base::new(
@@ -526,7 +556,7 @@ impl Sheet {
             style.shader = Some(shaded.map_err(|e| format!("{}: {} {e}", b.place, s.tag))?);
         }
         if let Some(table) = &self.instances[i] {
-            style.instances = Some(table.compute(frame.values, &style, frame.canvas)?);
+            style.instances = Some(table.compute(frame.values, &style, &frame.environment())?);
         }
         if let Some(table) = &self.svg_instances[i] {
             style.svg_instances = Some(table.compute(frame.values, parent)?);
@@ -743,6 +773,7 @@ impl Sheet {
 /// What a frame's styles are computed for: the program's values, the canvas's size in px, and
 /// the scene's resources.
 pub(super) struct Frame<'a> {
+    pub(super) fonts: Option<FontMetrics<'a>>,
     pub(super) values: &'a [V],
     /// The late expressions, to leave out, while the values are not settled.
     pub(super) late: Option<&'a [bool]>,
@@ -751,6 +782,14 @@ pub(super) struct Frame<'a> {
 }
 
 impl Frame<'_> {
+    fn environment(&self) -> Environment<'_> {
+        Environment {
+            canvas: self.canvas,
+            resources: self.resources,
+            fonts: self.fonts,
+        }
+    }
+
     /// Whether a declaration of `prop` waits for the values to settle.
     pub(super) fn unsettled(&self, prop: &Prop) -> bool {
         matches!((prop, self.late), (Prop::Expr(e), Some(late)) if late.get(*e as usize) == Some(&true))
@@ -942,6 +981,7 @@ fn bind(
                 && g.template.is_none()
             {
                 let none = Frame {
+                    fonts: None,
                     values: &[],
                     late: None,
                     canvas: [0.0; 2],
@@ -1027,6 +1067,7 @@ fn bind(
                 .all(|p| matches!(p, Prop::Const(_)))
             {
                 let none = Frame {
+                    fonts: None,
                     values: &[],
                     late: None,
                     canvas: [0.0; 2],
@@ -1311,7 +1352,15 @@ mod tests {
         assert_eq!(sheet.reaching(&styles), [0, 1, 4, 5, 6, 7, 9]);
         // Alone, as `compute` gives them, their calcs numbered as there.
         let only = sheet.reaching(&styles);
-        let alone = (sheet.compute_only(&only, &values, CANVAS, &resources(), &styles)).unwrap();
+        let alone = (sheet.compute_only(
+            &only,
+            &values,
+            CANVAS,
+            &resources(),
+            &styles,
+            &mut crate::testing::text(),
+        ))
+        .unwrap();
         assert!(only.iter().zip(&alone).all(|(&i, s)| *s == styles[i]));
     }
 

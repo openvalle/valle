@@ -352,7 +352,7 @@ impl Scene {
         let (_, sheet, measured) = &self.sheets[0];
         let resources = &self.front.resources;
         let settled = measured.is_empty();
-        sheet.compute(values, settled, canvas, resources)
+        sheet.compute_with_text(values, settled, canvas, resources, &mut self.text)
     }
 
     /// Layout-dependent checks, including font shaping and the settling of `bounds()` values.
@@ -410,7 +410,8 @@ impl Scene {
                 })
             };
             eval::settle(&template.program, clock, &mut values, &bounds)?;
-            let painted = sheet.compute(&values, true, canvas, resources)?;
+            let painted =
+                sheet.compute_with_text(&values, true, canvas, resources, &mut self.text)?;
             contained(&template, sheet, &styles, &painted)?;
             styles = painted;
         }
@@ -522,7 +523,7 @@ impl Scene {
 
     /// Restyle a trail sample. A changed layout needs the full layout-dependent checks.
     fn restyled(
-        &self,
+        &mut self,
         template: &Rc<Template>,
         reach: &[usize],
         then: &[V],
@@ -535,7 +536,7 @@ impl Scene {
         let c = self.front.composition;
         let canvas = [c.width as f32, c.height as f32];
         let resources = &self.front.resources;
-        let moved = sheet.compute_only(reach, then, canvas, resources, styles)?;
+        let moved = sheet.compute_only(reach, then, canvas, resources, styles, &mut self.text)?;
         let alike = (reach.iter().zip(&moved)).all(|(&i, s)| s.lays_out_as(&styles[i]))
             && same_text(template, reach, then, now);
         if !alike {
@@ -549,7 +550,7 @@ impl Scene {
     /// lays out as in the frame, of the values `now`, `styles` and `laid`, that alone is styled
     /// again, on the frame's boxes, and `None` where it does not.
     fn moved(
-        &self,
+        &mut self,
         template: &Rc<Template>,
         reach: &[usize],
         then: &[V],
@@ -643,7 +644,13 @@ impl Typesetter {
             guards: Vec::new(),
             pictures: Vec::new(),
         };
-        let mut styles = Sheet::new(&template)?.compute(&[], true, self.canvas, &self.resources)?;
+        let mut styles = Sheet::new(&template)?.compute_with_text(
+            &[],
+            true,
+            self.canvas,
+            &self.resources,
+            text,
+        )?;
         let laid = layout(&template, &[], &styles, self.canvas, text, &[])?;
         text.sweep();
         Ok((styles.remove(0), laid))
@@ -1925,6 +1932,42 @@ mod tests {
                 assert!(!Rc::ptr_eq(&first.layout, &next.layout), "{expression}");
                 let again = scene.frame(Tick::parse_seconds("0").unwrap()).unwrap();
                 assert_eq!(first.items, again.items, "{expression}");
+            }
+        });
+    }
+
+    #[test]
+    fn ex_lengths_follow_font_metrics_inheritance_and_seeks() {
+        big_stack(|| {
+            let source = indoc! {"
+                export const composition = {width:400,height:200,fps:30,duration:3};
+                export default function Scene() {
+                  const {seconds} = useCurrentTime();
+                  return <View style={{fontSize:125 + 125 * seconds}}>
+                    <View style={{width:'1ex',height:10}} />
+                    <View style={{fontSize:'1ex',width:'1em',height:10}} />
+                    <View style={{width:'2ex'}}>
+                      <View style={{fontSize:300,width:'inherit',height:10}} />
+                    </View>
+                    {[0,1,2].map(i => <View key={i} style={{position:'absolute',left:i*80,
+                      top:100,width:'1ex',height:10,backgroundColor:'red'}} />)}
+                  </View>;
+                }
+            "};
+            let mut scene = load(source).unwrap();
+            for seconds in ["0", "1", "0"] {
+                let at = Tick::parse_seconds(seconds).unwrap();
+                let frame = scene.frame(at).unwrap();
+                let ex = if seconds == "1" { 134.0 } else { 67.0 };
+                for (i, width) in [(1, ex), (2, ex), (3, ex * 2.0), (4, ex * 2.0)] {
+                    assert!((frame.layout.boxes[i].border.width - width).abs() < 0.001);
+                }
+                for i in 5..8 {
+                    assert!((frame.layout.boxes[i].border.width - ex).abs() < 0.001);
+                }
+                let fresh = load(source).unwrap().frame(at).unwrap();
+                assert_eq!(frame.layout.boxes, fresh.layout.boxes);
+                assert_eq!(frame.items, fresh.items);
             }
         });
     }

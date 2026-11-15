@@ -66,6 +66,8 @@ pub(super) enum Shown {
 /// properties `None`, which takes the parent's.
 #[derive(Clone, Debug)]
 pub(super) struct Declared {
+    /// A value may need the selected font's x-height (including inside calc or transforms).
+    pub(super) ex: bool,
     pub(super) display: Shown,
     pub(super) position: Position,
     /// Top, right, bottom, left, as the sides below.
@@ -234,6 +236,7 @@ pub(super) struct Declared {
 impl Default for Declared {
     fn default() -> Declared {
         Declared {
+            ex: false,
             display: Shown::Block,
             position: Position::Static,
             inset: [AUTO; 4],
@@ -1061,6 +1064,16 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
     // CSS-wide values need the parent at compute time; binding only validates the property.
     if super::cascade::Keyword::of(v).is_some() && field != Field::XmlSpace {
         return Ok(());
+    }
+    if let V::Str(s) = v {
+        d.ex |= s.as_bytes().windows(2).enumerate().any(|(i, unit)| {
+            unit.eq_ignore_ascii_case(b"ex")
+                && i > 0
+                && s.as_bytes()[i - 1].is_ascii_digit()
+                && s.as_bytes()
+                    .get(i + 2)
+                    .is_none_or(|c| !c.is_ascii_alphabetic())
+        });
     }
     use Field as F;
     match field {

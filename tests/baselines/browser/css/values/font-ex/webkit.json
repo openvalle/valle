@@ -1,0 +1,96 @@
+{
+  "size": [320, 128],
+  "sources": {
+    "tests/baselines/browser/css/values/font-ex/scene.html": "fcf8336bc8ed54f7d82a37174bfe1823fb9ae505236acc8ac6384f69a64e01d1",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "bar0",
+        "border": {
+          "x": 12,
+          "y": 12,
+          "width": 67,
+          "height": 12
+        },
+        "padding": {
+          "x": 12,
+          "y": 12,
+          "width": 67,
+          "height": 12
+        },
+        "content": {
+          "x": 12,
+          "y": 12,
+          "width": 67,
+          "height": 12
+        }
+      },
+      {
+        "key": "bar1",
+        "border": {
+          "x": 12,
+          "y": 40,
+          "width": 130,
+          "height": 12
+        },
+        "padding": {
+          "x": 12,
+          "y": 40,
+          "width": 130,
+          "height": 12
+        },
+        "content": {
+          "x": 12,
+          "y": 40,
+          "width": 130,
+          "height": 12
+        }
+      },
+      {
+        "key": "bar2",
+        "border": {
+          "x": 12,
+          "y": 68,
+          "width": 67,
+          "height": 12
+        },
+        "padding": {
+          "x": 12,
+          "y": 68,
+          "width": 67,
+          "height": 12
+        },
+        "content": {
+          "x": 12,
+          "y": 68,
+          "width": 67,
+          "height": 12
+        }
+      },
+      {
+        "key": "bar3",
+        "border": {
+          "x": 12,
+          "y": 96,
+          "width": 68.25,
+          "height": 12
+        },
+        "padding": {
+          "x": 12,
+          "y": 96,
+          "width": 68.25,
+          "height": 12
+        },
+        "content": {
+          "x": 12,
+          "y": 96,
+          "width": 68.25,
+          "height": 12
+        }
+      }
+    ],
+    "lines": []
+  }
+}
