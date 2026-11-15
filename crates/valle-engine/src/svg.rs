@@ -384,7 +384,7 @@ pub enum Holds {
 }
 
 pub fn holds(tag: Tag) -> Holds {
-    const SHAPES: [Tag; 7] = [
+    const CLIP_CONTENT: [Tag; 9] = [
         Tag::Path,
         Tag::Circle,
         Tag::Ellipse,
@@ -392,13 +392,15 @@ pub fn holds(tag: Tag) -> Holds {
         Tag::Line,
         Tag::Polyline,
         Tag::Polygon,
+        Tag::Text,
+        Tag::Use,
     ];
     match tag {
         Tag::Svg | Tag::G | Tag::Defs | Tag::Mask | Tag::Symbol | Tag::Marker | Tag::Pattern => {
             Holds::Any
         }
         Tag::LinearGradient | Tag::RadialGradient => Holds::Only(&[Tag::Stop], "<stop>s"),
-        Tag::ClipPath => Holds::Only(&SHAPES, "shapes"),
+        Tag::ClipPath => Holds::Only(&CLIP_CONTENT, "shapes, text and use elements"),
         Tag::Text | Tag::Tspan => Holds::Only(
             &[Tag::Tspan, Tag::TextPath, Tag::TextRun],
             "text, <tspan>s and <textPath>s",

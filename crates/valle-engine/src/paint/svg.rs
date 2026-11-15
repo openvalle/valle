@@ -676,33 +676,54 @@ impl<'a> Drawing<'a> {
         }
         let mut items = Vec::new();
         for &k in &self.template.nodes[n].children {
-            let s = &self.styles[k as usize];
-            let Some(c) = s.svg.as_deref() else {
-                continue;
-            };
-            let Element::Shape(shape) = &c.element else {
-                continue;
-            };
-            if s.layout.display == Display::None || !s.visible {
-                continue;
-            }
-            let Some(path) = svg::path(shape, size) else {
-                continue;
-            };
-            let path = Item::Path {
-                path,
-                even_odd: s.clip_even_odd,
-                color: [1.0; 4],
-            };
-            items.push(match self.local(k as usize, s, c, size, None) {
-                Some(matrix) => Item::Transform {
-                    matrix,
-                    items: vec![path],
-                },
-                None => path,
-            });
+            self.clip_element(k as usize, size, None, &mut items);
         }
         (!items.is_empty()).then_some(Item::Transform { matrix, items })
+    }
+
+    /// Clip contents contribute silhouettes, ignoring paint, opacity and filters. A use
+    /// must directly reference a shape or text; groups and indirect use chains draw nothing.
+    fn clip_element(&self, i: usize, size: [f64; 2], copy: Option<&Instance>, out: &mut Vec<Item>) {
+        let s = self.style(i, copy);
+        let Some(c) = s.svg.as_deref() else { return };
+        if s.layout.display == Display::None {
+            return;
+        }
+        let mut items = Vec::new();
+        match &c.element {
+            Element::Shape(shape) if s.visible => {
+                if let Some(path) = svg::path(shape, size) {
+                    items.push(Item::Path {
+                        path,
+                        even_odd: s.clip_even_odd,
+                        color: [1.0; 4],
+                    });
+                }
+            }
+            Element::Text(_) => {
+                for &k in &self.template.nodes[i].children {
+                    self.clip_element(k as usize, size, copy, &mut items);
+                }
+            }
+            Element::Use { .. } => {
+                if let Some(instance) = s.instance.as_deref()
+                    && instance
+                        .style(instance.root)
+                        .and_then(|s| s.svg.as_deref())
+                        .is_some_and(|c| matches!(c.element, Element::Shape(_) | Element::Text(_)))
+                {
+                    self.clip_element(instance.root, size, Some(instance), &mut items);
+                }
+            }
+            _ => {}
+        }
+        if items.is_empty() {
+            return;
+        }
+        match self.local(i, s, c, size, copy) {
+            Some(matrix) => out.push(Item::Transform { matrix, items }),
+            None => out.extend(items),
+        }
     }
 
     /// What mask `id` shows of `i`, in `i`'s user units in a viewport `size` user units big,
@@ -1159,6 +1180,70 @@ mod tests {
     use crate::front::Inputs;
     use crate::scene::Scene;
     use crate::time::Tick;
+
+    #[test]
+    fn clipping_text_ignores_paint_and_uses_instance_typography() {
+        let source = indoc::indoc! {r##"
+            export const composition = { width: 200, height: 100, fps: 1, duration: 1 };
+            export default function Scene() { return <svg width={200} height={100}>
+              <defs><text id="label" x={0} y={50}>Ab<tspan>cd</tspan></text>
+              <clipPath id="cut"><use href="#label" x={10} fontSize={SIZE} ATTRS /></clipPath></defs>
+              <rect width={200} height={100} fill="red" clipPath="url(#cut)"/>
+            </svg>; }
+        "##};
+        let render = |attrs: &str, size: &str| {
+            let source = source.replace("ATTRS", attrs).replace("SIZE", size);
+            let mut scene = Scene::load(
+                "clip.motion.tsx",
+                &|_| Some(source.as_bytes().to_vec()),
+                &Inputs::default(),
+                crate::testing::fonts(),
+            )
+            .unwrap();
+            scene.frame(Tick::ZERO).unwrap().items
+        };
+        let normal = render("", "32");
+        assert!(!normal.is_empty());
+        assert_eq!(
+            normal,
+            render(
+                "fill=\"none\" stroke=\"blue\" strokeWidth={20} opacity={0}",
+                "32"
+            )
+        );
+        assert_ne!(normal, render("", "48"));
+        assert!(render("style={{display: \"none\"}}", "32").is_empty());
+    }
+
+    #[test]
+    fn clipping_text_follows_positions_on_backward_seeks() {
+        let source = indoc::indoc! {r##"
+            export const composition = { width: 200, height: 100, fps: 4, duration: 2 };
+            export default function Scene() {
+              const { seconds } = useCurrentTime();
+              return <svg width={200} height={100}><defs>
+                <clipPath id="cut"><text x={10+seconds*20} y={55} fontSize={40}>A<tspan dx={seconds*4}>B</tspan></text></clipPath>
+              </defs><rect width={200} height={100} fill="red" clipPath="url(#cut)"/></svg>;
+            }
+        "##};
+        let load = || {
+            Scene::load(
+                "clip.motion.tsx",
+                &|_| Some(source.as_bytes().to_vec()),
+                &Inputs::default(),
+                crate::testing::fonts(),
+            )
+            .unwrap()
+        };
+        let mut scene = load();
+        for frame in [0, 5, 2, 7, 0] {
+            let at = Tick::from_seconds(frame as f64 / 4.0).unwrap();
+            assert_eq!(
+                scene.frame(at).unwrap().items,
+                load().frame(at).unwrap().items
+            );
+        }
+    }
 
     #[test]
     fn pattern_tiles_follow_geometry_on_backward_seeks() {

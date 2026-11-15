@@ -501,7 +501,10 @@ mod tests {
         let e = svg("<svg />");
         assert_eq!(e, "2:3: an <svg> inside an <svg> is not supported yet");
         let e = svg("<clipPath><g /></clipPath>");
-        assert_eq!(e, "2:13: <g> cannot be inside <clipPath>: it holds shapes");
+        assert_eq!(
+            e,
+            "2:13: <g> cannot be inside <clipPath>: it holds shapes, text and use elements"
+        );
         assert_eq!(
             svg("<circle><g /></circle>"),
             "2:11: <circle> holds no elements"

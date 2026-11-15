@@ -1,0 +1,11 @@
+{
+  "size": [380, 230],
+  "sources": {
+    "tests/baselines/browser/svg/clip-content/inline/scene.html": "49023b4fd0fa5466640e5490939c609e366071892b3ea51752746b46b0505967",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

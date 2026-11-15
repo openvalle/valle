@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      @font-face {
+        font-family: TestSans;
+        src: url("/tests/resources/NotoSans.ttf");
+        font-weight: 100 900;
+      }
+      body {
+        margin: 0;
+      }
+      #canvas {
+        width: 380px;
+        height: 230px;
+        background: white;
+      }
+      svg {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="canvas">
+      <svg xmlns="http://www.w3.org/2000/svg" width="380" height="230" font-family="TestSans">
+        <defs>
+          <linearGradient id="ink">
+            <stop stop-color="#2563eb" />
+            <stop offset="1" stop-color="#e11d48" />
+          </linearGradient>
+          <path id="ring" d="M0 0H60V60H0Z M15 15H45V45H15Z" />
+          <text id="label" x="0" y="0">Use</text>
+          <clipPath id="letters">
+            <!-- prettier-ignore -->
+            <text x="20" y="75" font-size="62" font-weight="700" fill="none" stroke="red" stroke-width="10" opacity="0">VA<tspan dx="3">LLE</tspan></text>
+          </clipPath>
+          <clipPath id="reused">
+            <use href="#ring" x="20" y="110" clip-rule="evenodd" transform="rotate(8 50 140)" />
+            <use href="#label" x="100" y="160" font-size="52" />
+          </clipPath>
+          <clipPath id="normalized" clipPathUnits="objectBoundingBox">
+            <text x="0.1" y="0.8" font-size="0.8">A</text>
+          </clipPath>
+        </defs>
+        <rect width="380" height="95" fill="url(#ink)" clip-path="url(#letters)" />
+        <rect y="95" width="250" height="110" fill="#0d9488" clip-path="url(#reused)" />
+        <rect x="265" y="105" width="95" height="95" fill="#f97316" clip-path="url(#normalized)" />
+      </svg>
+    </div>
+  </body>
+</html>

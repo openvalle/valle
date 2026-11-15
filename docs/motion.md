@@ -317,8 +317,14 @@ is `spacing` (default) or `spacingAndGlyphs`.
 `textPath` reads a local `#id` and places shaped glyphs along that path. `startOffset`
 is in user units or a percentage of its length; glyphs outside the path are hidden.
 It supports `method="align"` and `side="left"`; stretching glyph outlines along the
-curve, text decorations and text as a clipPath child are not implemented. All text
+curve and text decorations are not implemented. All text
 is vector geometry in both inline SVG and SVG resources; no host fonts are read.
+
+`<clipPath>` accepts basic shapes, `<text>` (including its tspans and textPath),
+and `<use>` directly referencing a shape or text. They contribute glyph or shape
+silhouettes regardless of fill, stroke, opacity or filters; `display` and
+`visibility` still apply. Referenced text uses the use instance's inherited font.
+A use referencing a group or another use does not contribute a silhouette.
 
 ## Valle filters
 

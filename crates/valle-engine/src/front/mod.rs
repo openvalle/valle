@@ -2387,7 +2387,7 @@ mod tests {
                 ),
                 (
                     "<svg><clipPath><g /></clipPath></svg>",
-                    "<g> cannot be inside <clipPath>: it holds shapes",
+                    "<g> cannot be inside <clipPath>: it holds shapes, text and use elements",
                 ),
                 ("<mask />", "<mask> must be inside an <svg>"),
                 ("<svg>hi</svg>", "text must be inside SVG <text>"),

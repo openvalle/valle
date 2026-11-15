@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/css-masking-1/#ClipPathElement",
+  "assertion": "Text, tspans and directly referenced text or shapes contribute opaque silhouettes to clipping, with transformed use instances and object-bounding-box fractions. Fill, stroke and opacity do not change the clip.",
+  "at": [0],
+  "browser": {
+    "selected": "firefox",
+    "reason": "Reviewed all three captures and native/difference images. Firefox and WebKit preserve clip text when opacity is zero; isolated Chrome controls confirm that zero opacity removes the clip. CSS Masking section 6.1 requires opaque silhouettes independent of paint and opacity. Firefox is closest to the vector glyph edges (2034 changed pixels, maximum channel difference 72); glyph positions, use transform, evenodd hole and fractional clip agree.",
+    "pixels": {
+      "maxDifference": 75,
+      "maxPixels": 2100
+    }
+  }
+}
