@@ -2358,10 +2358,6 @@ mod tests {
                 ("<Mask source={\"red\"} />", "text must be inside <Text>"),
                 ("<circle />", "<circle> must be inside an <svg>"),
                 (
-                    "<svg><svg /></svg>",
-                    "an <svg> inside an <svg> is not supported yet",
-                ),
-                (
                     "<svg><path fill-rule=\"evenodd\" /></svg>",
                     "write fillRule, not fill-rule",
                 ),

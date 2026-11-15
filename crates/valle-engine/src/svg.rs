@@ -92,6 +92,8 @@ pub enum Element {
     Svg {
         view_box: Option<[f64; 4]>,
         fit: Fit,
+        at: [Length; 2],
+        size: [Option<Length>; 2],
     },
     G,
     Text(text::Position),
@@ -129,6 +131,42 @@ pub enum Element {
         size: [Option<Length>; 2],
         fit: Fit,
     },
+}
+
+/// A nested SVG viewport in its parent's user coordinates.
+pub(crate) struct Viewport {
+    pub rect: [f64; 4],
+    pub matrix: Matrix,
+    pub units: [f64; 2],
+}
+
+impl Element {
+    pub(crate) fn viewport(&self, parent: [f64; 2]) -> Option<Viewport> {
+        let Element::Svg {
+            view_box,
+            fit,
+            at,
+            size,
+        } = self
+        else {
+            return None;
+        };
+        let [w, h] = [0, 1].map(|k| size[k].as_ref().map_or(parent[k], |v| v.resolve(parent[k])));
+        if w <= 0.0 || h <= 0.0 {
+            return None;
+        }
+        let (fit, units) = match *view_box {
+            Some([.., w, h]) if w <= 0.0 || h <= 0.0 => return None,
+            Some(b) => (viewport(b, *fit, [w, h]), [b[2], b[3]]),
+            None => (Matrix::IDENTITY, [w, h]),
+        };
+        let [x, y] = [0, 1].map(|k| at[k].resolve(parent[k]));
+        Some(Viewport {
+            rect: [x, y, w, h],
+            matrix: Matrix::translate(x, y).times(fit),
+            units,
+        })
+    }
 }
 
 /// A marker: what its children draw, through its viewBox by its fit in a viewport `size` big,
@@ -286,7 +324,14 @@ const NEVER: [(&str, &str); 6] = [
 /// The attributes an element takes besides `id`, `transform` and the presentation attributes.
 fn own(tag: Tag) -> &'static [&'static str] {
     match tag {
-        Tag::Svg => &["width", "height", "viewBox", "preserveAspectRatio"],
+        Tag::Svg => &[
+            "x",
+            "y",
+            "width",
+            "height",
+            "viewBox",
+            "preserveAspectRatio",
+        ],
         Tag::G | Tag::Defs => &[],
         Tag::Pattern => &[
             "x",
@@ -498,7 +543,12 @@ pub fn computed(
     let element = match tag {
         Tag::Svg => {
             let (view_box, fit) = fitting()?;
-            Element::Svg { view_box, fit }
+            Element::Svg {
+                view_box,
+                fit,
+                at: [length("x")?, length("y")?],
+                size: [auto("width")?, auto("height")?],
+            }
         }
         Tag::G => Element::G,
         Tag::Path => Element::Shape(match shape {
@@ -1453,6 +1503,7 @@ mod tests {
         let Element::Svg {
             view_box: Some(v),
             fit,
+            ..
         } = c.element
         else {
             panic!("{c:?}")

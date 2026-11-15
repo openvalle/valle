@@ -140,9 +140,6 @@ fn element(
             None if tag == Tag::Stop => {
                 return fail("<stop> must be inside a <linearGradient> or <radialGradient>".into());
             }
-            None if tag == Tag::Svg => {
-                return fail("an <svg> inside an <svg> is not supported yet".into());
-            }
             _ => {}
         }
     }
@@ -498,8 +495,6 @@ mod tests {
             e.starts_with("2:3: <foreignObject> is not supported: "),
             "{e}"
         );
-        let e = svg("<svg />");
-        assert_eq!(e, "2:3: an <svg> inside an <svg> is not supported yet");
         let e = svg("<clipPath><g /></clipPath>");
         assert_eq!(
             e,

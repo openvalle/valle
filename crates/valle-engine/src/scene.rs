@@ -774,7 +774,12 @@ fn measured(template: &Template) -> Result<Measured, Error> {
         if nodes.next().is_some() {
             return fail("more than one element has this key path; give them keys that differ");
         }
-        if matches!(template.nodes[i].kind, Kind::Svg { tag, .. } if tag != Tag::Svg) {
+        let nested_svg = template
+            .nodes
+            .iter()
+            .any(|n| matches!(n.kind, Kind::Svg { .. }) && n.children.contains(&(i as u32)));
+        if matches!(template.nodes[i].kind, Kind::Svg { tag, .. } if tag != Tag::Svg || nested_svg)
+        {
             return fail("an element in an <svg> has no box; measure the <svg>");
         }
         out.insert(path.clone(), i);

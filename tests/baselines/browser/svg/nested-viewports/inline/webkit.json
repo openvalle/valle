@@ -1,0 +1,11 @@
+{
+  "size": [420, 260],
+  "sources": {
+    "tests/baselines/browser/svg/nested-viewports/inline/scene.html": "61205ac836af75ea91e0a714c19a60ae991f026f05f01f4c7452961ee958fa49",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

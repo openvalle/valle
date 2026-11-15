@@ -1,0 +1,12 @@
+{
+  "size": [420, 260],
+  "sources": {
+    "tests/baselines/browser/svg/nested-viewports/file/scene.html": "c0ec38f3a10af2d4a036686a2df3b9fdff73f4ad0d4421a1fce6b17d7b4c1cd7",
+    "tests/cases/svg/nested-viewports/file/source.svg": "08e1a6f20a717b87984a1d060f50e107d1f33df818f6ae2ec865a3f854b7cbdf",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

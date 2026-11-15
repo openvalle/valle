@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/coords.html#EstablishingANewSVGViewport",
+  "assertion": "Nested SVG establishes viewports with percentage sizes, viewBox fitting, percentage child geometry and text, independent clipping, attribute sizes independent of CSS box sizing and transforms. Zero-size viewports draw nothing.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three browser captures and native/difference images. Viewport positions, clipping, percentages and text agree; differences are confined to ellipse, diagonal and glyph antialiasing (1638 pixels, maximum channel difference 128). Attribute width sets the nested viewport independently of CSS box width. Numeric tests assert viewport transforms and zero-size suppression.",
+    "pixels": {
+      "maxDifference": 130,
+      "maxPixels": 1700
+    }
+  }
+}

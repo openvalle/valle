@@ -269,6 +269,16 @@ All three properties inherit and also apply to vertical text columns.
 </Text>
 ```
 
+### Nested SVG viewports
+
+An `<svg>` inside another SVG establishes its own viewport. `x` and `y` place it
+in the parent; `width` and `height` default to 100% of the parent viewport and can
+be numbers or percentages in those attributes. Its `viewBox` and `preserveAspectRatio` fit its contents;
+percentages inside it resolve against that new viewport. It clips overflowing
+content by default; `style={{ overflow: "visible" }}` shows it outside the viewport.
+Nested SVG accepts transforms and can contain further nested viewports. The same
+rules apply when loading an SVG file.
+
 ### SVG patterns
 
 Use `<pattern id="dots" width={20} height={20} patternUnits="userSpaceOnUse">`

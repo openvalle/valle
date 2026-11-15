@@ -23,7 +23,7 @@ use crate::template::Template;
 /// as with a viewBox without area.
 pub fn document(document: &Document, first: Rect, cache: &Cache) -> Option<Item> {
     let root = document.styles.first()?.svg.as_deref()?;
-    let Element::Svg { view_box, fit } = root.element else {
+    let Element::Svg { view_box, fit, .. } = root.element else {
         return None;
     };
     let size = [first.width, first.height];
@@ -221,6 +221,35 @@ impl<'a> Drawing<'a> {
         let scale = matrix.radius_scale();
         let mut items = Vec::new();
         match &c.element {
+            Element::Svg { .. } if !self.template.roots.contains(&(i as u32)) => {
+                let Some(view) = c.element.viewport(size) else {
+                    return;
+                };
+                for &k in &self.template.nodes[i].children {
+                    self.element(
+                        k as usize,
+                        view.units,
+                        matrix.times(view.matrix),
+                        &mut items,
+                        copy,
+                    );
+                }
+                if !items.is_empty() {
+                    items = vec![Item::Transform {
+                        matrix: view.matrix,
+                        items,
+                    }];
+                    if s.layout.overflow.x != taffy::Overflow::Visible
+                        || s.layout.overflow.y != taffy::Overflow::Visible
+                    {
+                        items = vec![Item::Clip {
+                            rect: rect(view.rect),
+                            radii: SQUARE,
+                            items,
+                        }];
+                    }
+                }
+            }
             Element::G | Element::Text(_) | Element::Svg { .. } => {
                 for &k in &self.template.nodes[i].children {
                     self.element(k as usize, size, matrix, &mut items, copy);
@@ -563,6 +592,11 @@ impl<'a> Drawing<'a> {
             Element::Shape(shape) => svg::path(shape, size).map(|p| svg::bounds(&p)),
             Element::G | Element::Text(_) => {
                 self.around(&self.template.nodes[i].children, size, copy)
+            }
+            Element::Svg { .. } => {
+                let view = c.element.viewport(size)?;
+                self.around(&self.template.nodes[i].children, view.units, copy)
+                    .map(|b| mapped(view.matrix, b))
             }
             Element::Image { .. } => self.image(i, size, copy).map(|(viewport, ..)| viewport),
             Element::Use { .. } => {
@@ -1180,6 +1214,94 @@ mod tests {
     use crate::front::Inputs;
     use crate::scene::Scene;
     use crate::time::Tick;
+
+    #[test]
+    fn nested_viewports_resolve_percentages_and_bounds() {
+        let xml = indoc::indoc! {r#"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200">
+          <svg id="inner" x="10%" y="10%" width="55%" height="50%"
+            style="width:20px" viewBox="0 0 110 50" preserveAspectRatio="none">
+            <rect width="100%" height="100%"/>
+          </svg>
+          <svg id="zero" width="0" height="100"><rect width="400" height="200"/></svg>
+        </svg>"#};
+        let doc = Document::parse(xml, &mut Vec::new()).unwrap();
+        let cache = Cache::default();
+        let drawing = Drawing::new(&doc.template, &doc.styles, &[], &cache);
+        let i = drawing.ids["inner"];
+        let view = doc.styles[i]
+            .svg
+            .as_deref()
+            .unwrap()
+            .element
+            .viewport([400.0, 200.0])
+            .unwrap();
+        for (actual, expected) in view.rect.into_iter().zip([40.0, 20.0, 220.0, 100.0]) {
+            assert!((actual - expected).abs() < 1e-9);
+        }
+        assert_eq!(view.units, [110.0, 50.0]);
+        for (actual, expected) in view
+            .matrix
+            .apply([110.0, 50.0])
+            .into_iter()
+            .zip([260.0, 120.0])
+        {
+            assert!((actual - expected).abs() < 1e-9);
+        }
+        for (actual, expected) in drawing
+            .bbox(i, [400.0, 200.0], None)
+            .unwrap()
+            .into_iter()
+            .zip(view.rect)
+        {
+            assert!((actual - expected).abs() < 1e-5);
+        }
+        let mut items = Vec::new();
+        drawing.element(
+            drawing.ids["zero"],
+            [400.0, 200.0],
+            Matrix::IDENTITY,
+            &mut items,
+            None,
+        );
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn nested_viewports_recompute_sizes_on_backward_seeks() {
+        let source = indoc::indoc! {r##"
+            export const composition = { width: 200, height: 100, fps: 4, duration: 2 };
+            export default function Scene() {
+              const { seconds } = useCurrentTime();
+              return <svg width={200} height={100}>
+                <svg x={10} width={80+seconds*20} height="80%" viewBox="0 0 40 40">
+                  <svg x="10%" y="20%" width="80%" height="50%"><rect width="100%" height="100%"/></svg>
+                </svg>
+              </svg>;
+            }
+        "##};
+        let load = || {
+            Scene::load(
+                "nested.motion.tsx",
+                &|_| Some(source.as_bytes().to_vec()),
+                &Inputs::default(),
+                crate::testing::fonts(),
+            )
+            .unwrap()
+        };
+        let mut scene = load();
+        let initial = scene.frame(Tick::ZERO).unwrap().items;
+        assert_ne!(
+            initial,
+            scene.frame(Tick::from_seconds(1.0).unwrap()).unwrap().items
+        );
+        for frame in [0, 5, 2, 7, 0] {
+            let at = Tick::from_seconds(frame as f64 / 4.0).unwrap();
+            assert_eq!(
+                scene.frame(at).unwrap().items,
+                load().frame(at).unwrap().items
+            );
+        }
+    }
 
     #[test]
     fn clipping_text_ignores_paint_and_uses_instance_typography() {

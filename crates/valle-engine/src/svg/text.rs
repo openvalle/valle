@@ -250,7 +250,23 @@ fn units(
     {
         if let Some(c) = styles[i].svg.as_deref() {
             match &c.element {
-                Element::Svg { view_box, .. } | Element::Symbol { view_box, .. } => {
+                Element::Svg { view_box, .. } => {
+                    if let Some([_, _, w, h]) = view_box {
+                        return [*w, *h];
+                    }
+                    let nested = template.nodes.iter().any(|n| {
+                        n.children.contains(&(i as u32))
+                            && matches!(n.kind, crate::template::Kind::Svg { .. })
+                    });
+                    return if nested {
+                        c.element
+                            .viewport(units(template, styles, i, viewport))
+                            .map_or([0.0; 2], |v| v.units)
+                    } else {
+                        viewport(i)
+                    };
+                }
+                Element::Symbol { view_box, .. } => {
                     return view_box.map_or_else(|| viewport(i), |[_, _, w, h]| [w, h]);
                 }
                 Element::Pattern(p) => {

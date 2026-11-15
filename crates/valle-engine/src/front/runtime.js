@@ -2011,7 +2011,6 @@
     if ((type === "tspan" || type === "textPath") && !G.svgText)
       fail(at, "<" + type + "> must be inside SVG <text>");
     if (type !== "svg" && G.svg === 0) fail(at, "<" + type + "> must be inside an <svg>");
-    if (type === "svg" && G.svg > 0) fail(at, "an <svg> inside an <svg> is not supported yet");
     if (++G.nodes > MAX_NODES) fail(at, "a frame has more than " + MAX_NODES + " elements");
     const attributes = [];
     for (const [k, v] of entries(props)) {
@@ -2029,7 +2028,7 @@
           "<" + type + "> " + k + ": event handlers are not supported, a video has no interaction",
         );
       }
-      if (type === "svg" && k === "transform") {
+      if (type === "svg" && G.svg === 0 && k === "transform") {
         fail(at, "<svg> transform is not supported yet: transform it with its style");
       }
       if (!SVG[type].includes(k) && !SVG_ATTRIBUTES.includes(k)) {

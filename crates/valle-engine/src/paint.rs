@@ -1898,7 +1898,7 @@ impl Painter<'_> {
     /// nothing.
     fn svg(&self, i: usize, out: &mut Drawn) {
         let s = &self.styles[i];
-        let Some(Element::Svg { view_box, fit }) = s.svg.as_deref().map(|c| &c.element) else {
+        let Some(Element::Svg { view_box, fit, .. }) = s.svg.as_deref().map(|c| &c.element) else {
             return;
         };
         let (rect, radii) = area(s, &self.layout.boxes[i], Area::ContentBox);

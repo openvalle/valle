@@ -176,7 +176,12 @@ impl Sheet {
         let classes = tailwind::declarations(template)?;
         let late = template.program.late();
         let nodes = (template.nodes.iter().zip(&classes))
-            .map(|(node, classes)| bind(node, classes, &late))
+            .enumerate()
+            .map(|(i, (node, classes))| {
+                let nested = parents[i]
+                    .is_some_and(|p| matches!(template.nodes[p as usize].kind, Kind::Svg { .. }));
+                bind(node, classes, &late, nested)
+            })
             .collect::<Result<_, _>>()?;
         Ok(Sheet {
             instances: (0..n)
@@ -462,7 +467,8 @@ impl Sheet {
             ));
         }
         style.source = b.source;
-        let boxed = (b.svg.as_ref()).is_none_or(|g| g.tag == Tag::Svg);
+        let nested = self.parents[i].is_some_and(|p| self.nodes[p as usize].svg.is_some());
+        let boxed = (b.svg.as_ref()).is_none_or(|g| g.tag == Tag::Svg && !nested);
         if boxed && (style.clip_ref.is_some() || style.mask_ref.is_some()) {
             return Err(format!(
                 "{}: clip-path: url() and mask: url() are supported in an <svg> only, not on a \
@@ -701,7 +707,12 @@ impl Frame<'_> {
 pub(super) type Written<'a> = (Rc<str>, Cow<'a, Prop>, Rc<str>, bool);
 
 /// A node's declarations, with those its classes make.
-fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result<Bound, Error> {
+fn bind(
+    node: &Node,
+    classes: &[tailwind::Declaration],
+    late: &[bool],
+    nested: bool,
+) -> Result<Bound, Error> {
     let place = node.place();
     let late_prop = |p: &Prop| matches!(p, Prop::Expr(e) if late.get(*e as usize) == Some(&true));
     if let Kind::Text { content } | Kind::Span { content, .. } = &node.kind
@@ -723,7 +734,7 @@ fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result
         } => (Some(*tag), &attributes[..], geometry),
         _ => (None, &[][..], &None),
     };
-    if matches!(&node.kind, Kind::Svg { tag, .. } if *tag != Tag::Svg) {
+    if matches!(&node.kind, Kind::Svg { tag, .. } if *tag != Tag::Svg || nested) {
         declared.transform_origin = [const {
             super::position::Offset {
                 end: false,
@@ -832,12 +843,13 @@ fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result
     }
     let svg = match tag {
         Some(tag) => {
-            let geometry = attributes
-                .iter()
-                .filter(|(k, _)| !svg::presentational(tag, k));
+            let geometry = attributes.iter().filter(|(k, _)| {
+                !svg::presentational(tag, k)
+                    || (nested && tag == Tag::Svg && matches!(k.as_ref(), "width" | "height"))
+            });
             if let Some((k, _)) = geometry
                 .clone()
-                .find(|(_, p)| tag == Tag::Svg && late_prop(p))
+                .find(|(_, p)| tag == Tag::Svg && !nested && late_prop(p))
             {
                 return Err(format!(
                     "{place}: attribute {k}: {LATE}, and an <svg>'s {k} changes its layout"
