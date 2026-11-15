@@ -462,6 +462,9 @@ is `spacing` (default) or `spacingAndGlyphs`.
 
 `textPath` reads a local `#id` and places shaped glyphs along that path. `startOffset`
 is in user units or a percentage of its length; glyphs outside the path are hidden.
+A referenced path's `pathLength` calibrates numeric offsets: a 200-unit path with
+`pathLength="100"` maps `startOffset="20"` to 40 geometric units. Percentages still
+measure the full path, and glyph sizes and advances remain unchanged.
 It supports `method="align"` and `side="left"`; stretching glyph outlines along the
 curve is not implemented. All text
 is vector geometry in both inline SVG and SVG resources; no host fonts are read.

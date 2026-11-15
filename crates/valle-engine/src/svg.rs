@@ -221,7 +221,7 @@ pub struct Computed {
     pub element: Element,
     /// Its `transform` attribute: from its user units to its parent's.
     pub transform: Option<Matrix>,
-    /// A shape's `pathLength`: the length its dashes take its path to have.
+    /// A shape's authored length, calibrating dashes and text path offsets.
     pub path_length: Option<f64>,
     pub id: Option<Rc<str>>,
 }

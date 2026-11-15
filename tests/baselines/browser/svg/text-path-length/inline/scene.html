@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>text-path-length</title
+  ><style>
+    @font-face {
+      font-family: TestSans;
+      src: url(/tests/resources/NotoSans.ttf);
+      font-weight: 100 900;
+    }
+    svg {
+      font-family: TestSans;
+    }
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      width: 320px;
+      height: 180px;
+      background: white;
+    }
+    svg,
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="320"
+      height="180"
+      font-family="sans-serif"
+      font-size="24"
+    >
+      <defs>
+        <path id="a" d="M10 40H210" pathLength="100" />
+        <path id="b" d="M10 80H210" />
+        <path id="c" d="M10 120H210" pathLength="50" />
+      </defs>
+      <path d="M50 10V145M10 40H250M10 80H250M10 120H250" fill="none" stroke="#ddd" />
+      <text fill="#2878b8"><textPath href="#a" startOffset="20">HI</textPath></text>
+      <text fill="#2878b8"><textPath href="#b" startOffset="40">HI</textPath></text>
+      <text fill="#309060"><textPath href="#c" startOffset="20%">HI</textPath></text>
+    </svg>
+  </div>
+</html>

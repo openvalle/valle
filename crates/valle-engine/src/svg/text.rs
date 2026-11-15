@@ -180,16 +180,26 @@ struct Placed {
 struct Track {
     segments: Vec<(PathSeg, f64)>,
     length: f64,
+    unit_scale: f64,
 }
 
 impl Track {
-    fn new(path: &Path) -> Self {
+    fn new(path: &Path, authored: Option<f64>) -> Self {
         let segments: Vec<_> = super::bez(path, 1.0)
             .segments()
             .map(|s| (s, s.arclen(0.001)))
             .collect();
         let length = segments.iter().map(|(_, l)| l).sum();
-        Self { segments, length }
+        let unit_scale = authored.map_or(1.0, |n| length / n);
+        Self {
+            segments,
+            length,
+            unit_scale,
+        }
+    }
+
+    fn offset(&self, value: Length) -> f64 {
+        value.units * self.unit_scale + value.percent / 100.0 * self.length
     }
 
     fn point(&self, mut distance: f64) -> Option<([f64; 2], f64)> {
@@ -475,7 +485,13 @@ fn subtree(
                 _ => None,
             });
             // A missing reference draws no text, as it draws no referenced shape.
-            tracks.insert(n, Track::new(&path.unwrap_or_default()));
+            tracks.insert(
+                n,
+                Track::new(
+                    &path.unwrap_or_default(),
+                    target.and_then(|c| c.path_length),
+                ),
+            );
         }
     }
     let mut placed = Vec::<Placed>::new();
@@ -525,7 +541,7 @@ fn subtree(
                 let Element::Text(p) = &styles[n].svg.as_deref().unwrap().element else {
                     unreachable!()
                 };
-                shift[0] = p.offset.resolve(tracks[&n].length) - f64::from(glyph.x);
+                shift[0] = tracks[&n].offset(p.offset) - f64::from(glyph.x);
                 shift[1] = 0.0;
             }
             let new_chunk = placed.is_empty() || absolute.iter().any(Option::is_some) || new_track;
@@ -1058,8 +1074,79 @@ mod tests {
     }
 
     #[test]
+    fn path_length_calibrates_offsets_without_resizing_glyphs() {
+        let path = crate::path::parse("M10 20H210").unwrap();
+        let track = Track::new(&path, Some(100.0));
+        let value = |s: &str| super::super::length(&V::Str(s.into())).unwrap();
+        assert_eq!(track.offset(value("20")), 40.0);
+        assert_eq!(track.offset(value("20px")), 40.0);
+        assert_eq!(track.offset(value("20%")), 40.0);
+        assert_eq!(track.offset(value("-10")), -20.0);
+        assert_eq!(
+            track.point(track.offset(value("20"))),
+            Some(([50.0, 20.0], 0.0))
+        );
+        let draw = |attributes: &str, offset: &str| {
+            let source = indoc::formatdoc!(
+                r##"
+                export const composition={{width:320,height:100,fps:1,duration:1}};
+                export default function Scene() {{ return <svg width="320" height="100">
+                <defs><path id="p" d="M10 50H210" {attributes}/></defs>
+                <text fontSize="24"><textPath href="#p" startOffset="{offset}">ABCD</textPath></text>
+                </svg>; }}
+            "##
+            );
+            let mut scene = Scene::load(
+                "s.motion.tsx",
+                &|_| Some(source.as_bytes().to_vec()),
+                &Inputs::default(),
+                crate::testing::fonts(),
+            )
+            .unwrap();
+            scene.frame(Tick::ZERO).unwrap().items
+        };
+        assert_eq!(draw("pathLength=\"100\"", "20"), draw("", "40"));
+        assert_eq!(draw("pathLength=\"100\"", "20%"), draw("", "20%"));
+        assert_eq!(
+            draw("pathLength=\"100\" transform=\"scale(2)\"", "20"),
+            draw("transform=\"scale(2)\"", "80")
+        );
+    }
+
+    #[test]
+    fn animated_path_calibration_keeps_seek_results_independent() {
+        let source = indoc::indoc! {r##"
+            export const composition = {width:320,height:100,fps:2,duration:2};
+            export default function Scene() {
+                const {seconds:t}=useCurrentTime();
+                return <svg width="320" height="100"><defs>
+                    <path id="p" d="M10 50H210" pathLength={100+t*100}/>
+                </defs><text fontSize="24"><textPath href="#p" startOffset={20+t*20}>HI</textPath></text></svg>;
+            }
+        "##};
+        let mut scene = Scene::load(
+            "s.motion.tsx",
+            &|_| Some(source.as_bytes().to_vec()),
+            &Inputs::default(),
+            crate::testing::fonts(),
+        )
+        .unwrap();
+        let first = scene.frame(Tick::ZERO).unwrap().items;
+        for seconds in ["1", "0.5", "0"] {
+            assert_eq!(
+                scene
+                    .frame(Tick::parse_seconds(seconds).unwrap())
+                    .unwrap()
+                    .items,
+                first,
+                "at {seconds}"
+            );
+        }
+    }
+
+    #[test]
     fn text_path_samples_curves_and_clips_outside_the_path() {
-        let t = Track::new(&crate::path::parse("M10 20H110").unwrap());
+        let t = Track::new(&crate::path::parse("M10 20H110").unwrap(), None);
         assert_eq!(t.length, 100.0);
         assert_eq!(t.point(50.0), Some(([60.0, 20.0], 0.0)));
         assert!(t.point(-1.0).is_none());

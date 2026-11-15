@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/paths.html#PathLengthAttribute",
+  "assertion": "Numeric startOffset is calibrated by pathLength; percentage offsets remain relative to total geometry, and glyph size and spacing are unchanged. The three text runs begin at x=50.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three browsers: numeric and percentage offsets put the three runs at x=50 with unchanged glyph size. Browser differences are limited to rasterized edges; numerical assertions verify calibrated offsets and transformed paths. Native differences are 466 glyph-edge pixels with maximum channel delta 94; reviewed magnified glyphs and difference images confirm matching placement and unchanged guide geometry.",
+    "pixels": {
+      "maxDifference": 96,
+      "maxPixels": 480
+    }
+  }
+}

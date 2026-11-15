@@ -1,0 +1,12 @@
+{
+  "size": [320, 180],
+  "sources": {
+    "tests/baselines/browser/svg/text-path-length/file/scene.html": "cc0b7e94e6960b753cd654886217903809fc2e741df8d54f7e9e8c9d03f9a6ec",
+    "tests/cases/svg/text-path-length/file/source.svg": "5f0b3ea951daa53bc91a2f0bf5babdf8a49a07aeccccd1996fdd8ed33abe725f",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}
