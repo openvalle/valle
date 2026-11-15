@@ -549,8 +549,9 @@ impl Sheet {
                 let Some(id) = id.as_deref() else {
                     continue;
                 };
-                if matches!(tag(i), Some(Tag::ClipPath | Tag::Mask))
-                    || parent == Some(Tag::ClipPath)
+                if tag(i) == Some(Tag::Mask)
+                    || name != "clip-path"
+                        && (tag(i) == Some(Tag::ClipPath) || parent == Some(Tag::ClipPath))
                 {
                     return Err(format!(
                         "{place}: {name}: url() on a <clipPath> or a <mask>, or in a <clipPath>, \
@@ -1495,11 +1496,6 @@ mod tests {
                 "clip-path: url(#m) names no <clipPath>",
             ),
             (3, ("mask", "url(#n)"), "mask: url(#n) names no <mask>"),
-            (
-                4,
-                ("clipPath", "url(#c)"),
-                "in a <clipPath>, is not supported yet",
-            ),
             (2, ("mask", "url(#m)"), "on a <clipPath> or a <mask>"),
             (0, ("mask", "url(#m)"), "not on a box yet"),
         ] {

@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/masking.html#EstablishingANewClippingPath",
+  "assertion": "Clip paths intersect their own referenced region; children intersect before union. Bounding-box coordinates scale coordinates and transforms within the target box.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three browsers: intersection and union regions agree. Firefox quantizes the translated edge differently. Native matches Chrome except for 60 edge pixels by one channel level.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 60
+    }
+  }
+}

@@ -440,6 +440,11 @@ silhouettes regardless of fill, stroke, opacity or filters; `display` and
 `visibility` still apply. Referenced text uses the use instance's inherited font.
 A use referencing a group or another use does not contribute a silhouette.
 
+A `clipPath` or a shape inside it can itself set `clipPath="url(#other)"`.
+The referenced region intersects that silhouette before it is combined with
+the other children. Transforms and `objectBoundingBox` coordinates apply in
+each reference's own space. Cyclic clipping references produce an empty clip.
+
 ### SVG filter graphs
 
 Define `<filter id="…">` inside `<defs>` and apply `filter="url(#…)"` to an SVG

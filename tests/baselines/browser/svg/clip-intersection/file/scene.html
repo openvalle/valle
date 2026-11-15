@@ -1,0 +1,33 @@
+<!doctype html><meta charset="utf-8" /><style>
+  body {
+    margin: 0;
+  }
+  #canvas {
+    width: 320px;
+    height: 160px;
+  }
+</style>
+<div id="canvas">
+  <svg xmlns="http://www.w3.org/2000/svg" width="320" height="160">
+    <defs>
+      <clipPath id="half"><rect x="40" y="0" width="60" height="100" /></clipPath>
+      <clipPath id="whole" clip-path="url(#half)">
+        <rect x="0" y="20" width="100" height="60" />
+      </clipPath>
+      <clipPath id="child">
+        <rect x="0" y="20" width="100" height="60" clip-path="url(#half)" />
+        <rect x="10" y="100" width="30" height="30" />
+      </clipPath>
+      <clipPath id="fraction" clipPathUnits="objectBoundingBox" transform="translate(.1 0)">
+        <rect width="0.5" height="1" />
+      </clipPath>
+      <clipPath id="cycle" clip-path="url(#cycle)"><rect width="100" height="100" /></clipPath>
+    </defs>
+    <rect width="320" height="160" fill="white" />
+    <rect width="100" height="140" fill="#2563eb" clip-path="url(#whole)" />
+    <g transform="translate(110 0)">
+      <rect width="100" height="140" fill="#dc2626" clip-path="url(#child)" />
+    </g>
+    <rect x="220" y="20" width="80" height="60" fill="#059669" clip-path="url(#fraction)" />
+  </svg>
+</div>

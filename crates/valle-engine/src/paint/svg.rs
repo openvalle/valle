@@ -641,7 +641,7 @@ impl<'a> Drawing<'a> {
         match &c.element {
             Element::Shape(svg::Shape::Text { bounds, .. }) => Some(*bounds),
             Element::Shape(shape) => svg::path(shape, size).map(|p| svg::bounds(&p)),
-            Element::G | Element::Text(_) => {
+            Element::G | Element::Text(_) | Element::ClipPath { .. } => {
                 self.around(&self.template.nodes[i].children, size, copy)
             }
             Element::Svg { .. } => {
@@ -745,6 +745,9 @@ impl<'a> Drawing<'a> {
     /// clip rule. `None` where it shows nothing.
     fn clip(&self, id: &str, i: usize, size: [f64; 2], copy: Option<&Instance>) -> Option<Item> {
         let &n = self.ids.get(id)?;
+        if self.resources.borrow().contains(&n) {
+            return None;
+        }
         let c = self.styles[n].svg.as_deref()?;
         let Element::ClipPath { user_space } = c.element else {
             return None;
@@ -760,9 +763,20 @@ impl<'a> Drawing<'a> {
             matrix = matrix.times(svg::fractions(bbox));
         }
         let mut items = Vec::new();
+        self.resources.borrow_mut().push(n);
         for &k in &self.template.nodes[n].children {
             self.clip_element(k as usize, size, None, &mut items);
         }
+        if let Some(id) = self.styles[n].clip_ref.as_deref() {
+            items = match self.clip(id, n, size, None) {
+                Some(mask) => vec![Item::Mask {
+                    mask: vec![mask],
+                    items,
+                }],
+                None => Vec::new(),
+            };
+        }
+        self.resources.borrow_mut().pop();
         (!items.is_empty()).then_some(Item::Transform { matrix, items })
     }
 
@@ -811,6 +825,15 @@ impl<'a> Drawing<'a> {
         }
         if items.is_empty() {
             return;
+        }
+        if let Some(id) = s.clip_ref.as_deref() {
+            let Some(mask) = self.clip(id, i, size, copy) else {
+                return;
+            };
+            items = vec![Item::Mask {
+                mask: vec![mask],
+                items,
+            }];
         }
         match self.local(i, s, c, size, copy) {
             Some(matrix) => out.push(Item::Transform { matrix, items }),
@@ -1271,6 +1294,30 @@ fn painted(path: Path, even_odd: bool, fill: Fill, cover: [f64; 4], scale: f64) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipping_cycles_are_empty_and_shared_references_can_be_reused() {
+        let source = indoc::indoc! {r##"
+            <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+              <defs>
+                <clipPath id="a" clip-path="url(#b)"><rect width="100" height="100"/></clipPath>
+                <clipPath id="b" clip-path="url(#a)"><rect width="100" height="100"/></clipPath>
+                <clipPath id="good"><rect width="50" height="100"/></clipPath>
+                <clipPath id="both" clip-path="url(#good)"><rect width="100" height="50" clip-path="url(#good)"/></clipPath>
+              </defs>
+              <rect id="target" width="100" height="100"/>
+            </svg>
+        "##};
+        let d = Document::parse(source, &mut vec![]).unwrap();
+        let cache = Cache::default();
+        let drawing = Drawing::new(&d.template, &d.styles, &d.embedded, &cache);
+        let target = drawing.ids["target"];
+        assert!(drawing.clip("a", target, [100.0; 2], None).is_none());
+        assert!(drawing.resources.borrow().is_empty());
+        let first = drawing.clip("both", target, [100.0; 2], None).unwrap();
+        assert_eq!(Some(first), drawing.clip("both", target, [100.0; 2], None));
+        assert!(drawing.resources.borrow().is_empty());
+    }
     use crate::front::Inputs;
     use crate::scene::Scene;
     use crate::time::Tick;
