@@ -163,6 +163,45 @@ impl Plan {
             let b = n.inputs.get(1).map_or(a, |i| layers[*i]);
             let linear = n.linear;
             let layer = match &n.op {
+                Operation::Turbulence(noise) => {
+                    let origin = if graph.definition.primitive_user_space {
+                        [0.; 2]
+                    } else {
+                        [bbox[0], bbox[1]]
+                    };
+                    let tile = [
+                        (region[0] - origin[0]) / units[0],
+                        (region[1] - origin[1]) / units[1],
+                        region[2] / units[0],
+                        region[3] / units[1],
+                    ];
+                    let (frequency, stitch) = noise.stitch(tile);
+                    let parameters = [
+                        frequency[0] as f32,
+                        frequency[1] as f32,
+                        noise.octaves as f32,
+                        u8::from(noise.fractal) as f32,
+                        origin[0] as f32,
+                        origin[1] as f32,
+                        units[0] as f32,
+                        units[1] as f32,
+                        stitch[0],
+                        stitch[1],
+                        stitch[2],
+                        stitch[3],
+                    ];
+                    self.graph_pass(
+                        [blank; 2],
+                        13,
+                        Pass {
+                            linear,
+                            region,
+                            matrix,
+                        },
+                        &parameters,
+                        &noise.table,
+                    )
+                }
                 Operation::Tile => self.graph_pass(
                     [a; 2],
                     12,
@@ -465,6 +504,28 @@ mod tests {
                 .render(&[graph(nodes, items)], &[], &[], &[])
                 .unwrap()
         };
+        // Zero frequency has known RGBA values in either noise mode, including an empty source.
+        for fractal in [true, false] {
+            let n = node(
+                Operation::Turbulence(crate::svg::filter::turbulence::Noise {
+                    frequency: [0.; 2],
+                    octaves: 3,
+                    fractal,
+                    stitch: false,
+                    table: crate::svg::filter::turbulence::table(7.),
+                }),
+                &[],
+            );
+            let pixels = draw(&mut renderer, vec![n], vec![]);
+            close(
+                &pixels[..4],
+                if fractal {
+                    [188, 188, 188, 128]
+                } else {
+                    [0; 4]
+                },
+            );
+        }
         // Flood has no input dependency. The graph must execute even with no drawing runs.
         let mut red = node(Operation::Flood, &[]);
         red.flood = [1., 0., 0., 0.5];

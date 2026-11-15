@@ -1,5 +1,7 @@
 //! SVG filter primitives retain their named inputs until the complete definition is known.
 //! The resolved graph is a DAG: inputs can only name a standard source or an earlier result.
+pub mod turbulence;
+
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -28,6 +30,7 @@ pub enum Operation {
     Offset([f64; 2]),
     Flood,
     Tile,
+    Turbulence(turbulence::Noise),
     Matrix([f64; 20]),
     Blend(u32),
     Composite { operator: u32, k: [f64; 4] },
@@ -109,6 +112,19 @@ pub fn primitive(tag: Tag, attributes: &[(&str, &V)]) -> Result<Primitive, Strin
         Tag::FeOffset => Operation::Offset([a.number("dx", 0.0)?, a.number("dy", 0.0)?]),
         Tag::FeFlood => Operation::Flood,
         Tag::FeTile => Operation::Tile,
+        Tag::FeTurbulence => {
+            let octaves = a.number("numOctaves", 1.)?;
+            if octaves.fract() != 0. || !(0. ..=f64::from(u32::MAX)).contains(&octaves) {
+                return Err("numOctaves: expected a nonnegative integer".into());
+            }
+            Operation::Turbulence(turbulence::Noise {
+                frequency: pair("baseFrequency", 0.)?,
+                octaves: octaves as u32,
+                fractal: a.choice("type", &["turbulence", "fractalNoise"], 0)? == 1,
+                stitch: a.choice("stitchTiles", &["noStitch", "stitch"], 0)? == 1,
+                table: turbulence::table(a.number("seed", 0.)?),
+            })
+        }
         Tag::FeBlend => Operation::Blend(a.choice(
             "mode",
             &[
@@ -358,7 +374,7 @@ pub(crate) fn prepare(styles: &mut [Style], parents: &[Option<u32>]) -> Result<(
                 }
             };
             let mut inputs = match p.op {
-                Operation::Flood => Vec::new(),
+                Operation::Flood | Operation::Turbulence(_) => Vec::new(),
                 Operation::Merge => Vec::new(),
                 Operation::Blend(_)
                 | Operation::Composite { .. }
@@ -593,6 +609,21 @@ mod tests {
                 Tag::FeGaussianBlur,
                 vec![("stdDeviation", "-1")],
                 "must not be negative",
+            ),
+            (
+                Tag::FeTurbulence,
+                vec![("numOctaves", "1.5")],
+                "nonnegative integer",
+            ),
+            (
+                Tag::FeTurbulence,
+                vec![("baseFrequency", "-1")],
+                "must not be negative",
+            ),
+            (
+                Tag::FeTurbulence,
+                vec![("stitchTiles", "repeat")],
+                "not one of",
             ),
             (Tag::FeMorphology, vec![("radius", "1 2 3")], "one or two"),
             (Tag::FeColorMatrix, vec![("values", "1 2")], "20 values"),

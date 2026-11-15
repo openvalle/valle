@@ -1,0 +1,10 @@
+{
+  "size": [330, 130],
+  "sources": {
+    "tests/baselines/browser/svg/filter-turbulence/inline/scene.html": "467df7bcc76cd3edbbded3bb25f1ec0a814ae35822a232ec3caf2a002f954e34"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

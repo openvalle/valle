@@ -23,6 +23,7 @@ const CASES: {
   pixels?: { maxDifference: number; maxPixels: number };
 }[] = [
   { entry: "tests/cases/svg/filter-tile/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
+  { entry: "tests/cases/svg/filter-turbulence/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/css/cascade/wide-keywords/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/text/inline-box/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/text/inline-directions/scene.motion.tsx", frames: [0] },

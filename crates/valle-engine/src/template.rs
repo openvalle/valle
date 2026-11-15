@@ -674,9 +674,10 @@ pub enum Tag {
     FeFuncB,
     FeFuncA,
     FeTile,
+    FeTurbulence,
 }
 
-const TAGS: [(&str, Tag); 42] = [
+const TAGS: [(&str, Tag); 43] = [
     ("svg", Tag::Svg),
     ("g", Tag::G),
     ("path", Tag::Path),
@@ -719,6 +720,7 @@ const TAGS: [(&str, Tag); 42] = [
     ("feFuncB", Tag::FeFuncB),
     ("feFuncA", Tag::FeFuncA),
     ("feTile", Tag::FeTile),
+    ("feTurbulence", Tag::FeTurbulence),
 ];
 
 impl Tag {

@@ -76,6 +76,59 @@ fn transfer(index: u32, c: vec4f) -> vec4f {
   }
   return clamp(result, vec4f(0.0), vec4f(1.0));
 }
+// Permutation and four independent gradient tables use SVG 1.1's Park-Miller seed.
+fn lattice(index: u32, n: i32) -> i32 { return i32(data(index, u32(n & 255))); }
+fn gradient(index: u32, n: i32, p: vec2f) -> vec4f {
+  var g = vec4f(0.0);
+  for (var c = 0u; c < 4u; c++) {
+    let at = 256u + (c * 256u + u32(n)) * 2u;
+    g[c] = dot(vec2f(data(index, at), data(index, at + 1u)), p);
+  }
+  return g;
+}
+fn noise(index: u32, p: vec2f, stitch: vec4f) -> vec4f {
+  let q = p + 4096.0;
+  let f = floor(q);
+  let r = q - f;
+  var lo = vec2i(f);
+  var hi = lo + 1;
+  if (stitch.x > 0.0) {
+    if (f32(lo.x) >= stitch.z) { lo.x -= i32(stitch.x); }
+    if (f32(hi.x) >= stitch.z) { hi.x -= i32(stitch.x); }
+  }
+  if (stitch.y > 0.0) {
+    if (f32(lo.y) >= stitch.w) { lo.y -= i32(stitch.y); }
+    if (f32(hi.y) >= stitch.w) { hi.y -= i32(stitch.y); }
+  }
+  let i = lattice(index, lo.x);
+  let j = lattice(index, hi.x);
+  let s = r * r * (3.0 - 2.0 * r);
+  let a = mix(gradient(index, lattice(index, i + lo.y), r),
+    gradient(index, lattice(index, j + lo.y), r - vec2f(1.0, 0.0)), s.x);
+  let b = mix(gradient(index, lattice(index, i + hi.y), r - vec2f(0.0, 1.0)),
+    gradient(index, lattice(index, j + hi.y), r - vec2f(1.0)), s.x);
+  return mix(a, b, s.y);
+}
+fn turbulence(index: u32, at: vec2f) -> vec4f {
+  let h = graph[index].m;
+  var p = (at - h[3].xy) / h[3].zw * h[2].xy;
+  var stitch = h[4];
+  var sum = vec4f(0.0);
+  var amplitude = 1.0;
+  let fractal = h[2].w != 0.0;
+  for (var octave = 0u; octave < u32(h[2].z); octave++) {
+    let value = noise(index, p, stitch);
+    sum += select(abs(value), value, fractal) * amplitude;
+    amplitude *= 0.5;
+    // Further octaves are below f32 precision, well below the RGBA16F target.
+    if (amplitude < 0.00000006) { break; }
+    p *= 2.0;
+    stitch = vec4f(stitch.xy * 2.0, stitch.zw * 2.0 - 4096.0);
+  }
+  let value = clamp(select(sum, sum * 0.5 + 0.5, fractal), vec4f(0.0), vec4f(1.0));
+  return vec4f(value.rgb * value.a, value.a);
+}
+
 fn filtered(v: Out) -> vec4f {
   let h = graph[v.index].m;
   let op = u32(h[0].x);
@@ -162,6 +215,8 @@ fn filtered(v: Out) -> vec4f {
       let alpha = a.a * h[2].a;
       return vec4f(h[2].rgb * alpha, alpha);
     }
+    // Match the noise raster sampling phase used by Chrome and WebKit.
+    case 13u: { result = turbulence(v.index, local(v.pos.xy + 0.5, t)); }
     case 12u: {
       let tile = h[2];
       if (any(tile.zw <= vec2f(0.0))) { return vec4f(0.0); }

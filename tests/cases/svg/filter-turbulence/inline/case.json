@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/filters.html#feTurbulenceElement",
+  "assertion": "Seeded SVG noise supports fractal and turbulence modes, independent axes, octaves, color spaces and seamless stitched tiles.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "SVG seeded tables and stitching match Chrome/WebKit. Use their pixel sampling phase; Firefox samples one pixel earlier. Float16 intermediates differ from browser noise quantization mostly by 1 channel level (389 pixels exceed 1, only 2 reach 6), most visibly when low alpha is converted to linear RGB.",
+    "pixels": {
+      "maxDifference": 6,
+      "maxPixels": 20000
+    }
+  }
+}
