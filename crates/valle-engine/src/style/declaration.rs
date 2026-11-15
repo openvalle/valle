@@ -1440,7 +1440,7 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         // `currentcolor` is the color the element would otherwise inherit.
         F::Color if inherits(v) || is_current_color(v) => d.color = None,
         F::Color => d.color = Some(color_of(v)?),
-        F::FontSize => d.font_size = Some(length(v, PADDING)?),
+        F::FontSize => d.font_size = Some(super::font::size(v)?),
         F::FontWeight => d.font_weight = Some(weight(v)?),
         F::FontStretch => d.stretch = Some(stretch(v)?),
         F::FontStyle => d.font_style = Some(font_style(v)?),

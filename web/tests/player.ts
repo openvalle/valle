@@ -175,6 +175,7 @@ const CASES: {
     frames: [0, 5, 2, 7, 0],
     nativeResources: { CJK: "tests/resources/NotoSansSC.ttf" },
   },
+  { entry: "tests/cases/css/text/font-size-keywords/scene.motion.tsx", frames: [0, 0] },
   { entry: "examples/hello.motion.tsx", frames: [0, 60] },
   { entry: "tests/cases/svg/css-transforms/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/css-transforms/file/scene.motion.tsx", frames: [0] },

@@ -5,7 +5,7 @@ use std::rc::Rc;
 use super::color::{self, Rgba};
 use super::declaration::{Declared, factor, number, shown, text};
 use super::math::Calc;
-use super::units::{Len, PADDING, length_text};
+use super::units::{Len, PADDING, length, length_text};
 use super::{css, math};
 
 use crate::template::V;
@@ -398,6 +398,26 @@ pub(super) fn weight(v: &V) -> Result<Weight, String> {
     Ok(Weight::Absolute(w))
 }
 
+/// CSS size keywords use the fixed 16px medium table. Relative keywords scale the
+/// parent's computed size, just like em, independently of font-size-adjust.
+pub(super) fn size(v: &V) -> Result<Len, String> {
+    if let V::Str(s) = v {
+        return Ok(match s.trim().to_ascii_lowercase().as_str() {
+            "xx-small" => Len::Px(9.0),
+            "x-small" => Len::Px(10.0),
+            "small" => Len::Px(13.0),
+            "medium" => Len::Px(16.0),
+            "large" => Len::Px(18.0),
+            "x-large" => Len::Px(24.0),
+            "xx-large" => Len::Px(32.0),
+            "larger" => Len::Em(1.2),
+            "smaller" => Len::Em(1.0 / 1.2),
+            _ => return length(v, PADDING),
+        });
+    }
+    length(v, PADDING)
+}
+
 /// The CSS font shorthand. The family keeps its case and quoted whitespace;
 /// omitted longhands reset, instead of inheriting an earlier declaration.
 pub(super) fn shorthand(v: &V, d: &mut Declared) -> Result<(), String> {
@@ -415,7 +435,7 @@ pub(super) fn shorthand(v: &V, d: &mut Declared) -> Result<(), String> {
     let mut normals = 0;
     let mut size = None;
     for (i, word) in words.iter().enumerate() {
-        if let Ok(length) = length_text(word, PADDING) {
+        if let Ok(length) = self::size(&V::Str((*word).into())) {
             size = Some((i, length));
             break;
         }
@@ -922,6 +942,44 @@ mod tests {
 
     use super::*;
     use crate::testing::styles::{error, num, one, styles, text, view};
+
+    #[test]
+    fn size_keywords_resolve_before_relative_units_and_shorthand() {
+        for (name, px) in [
+            ("xx-small", 9.0),
+            ("x-small", 10.0),
+            ("small", 13.0),
+            ("medium", 16.0),
+            ("large", 18.0),
+            ("x-large", 24.0),
+            ("xx-large", 32.0),
+        ] {
+            let s = one(&[("fontSize", text(name)), ("width", text("2em"))]);
+            assert_eq!(s.font.size, px);
+            assert_eq!(
+                one(&[("font", text(&format!("bold {name}/2 sans-serif")))])
+                    .font
+                    .size,
+                px
+            );
+        }
+        let s = styles(
+            vec![
+                view(&[("fontSize", num(30.0))], &[1, 3]),
+                view(&[("fontSize", text("smaller"))], &[2]),
+                view(&[("fontSize", text("larger"))], &[]),
+                view(&[("fontSize", text("inherit"))], &[]),
+            ],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            s.iter().map(|s| s.font.size).collect::<Vec<_>>(),
+            [30.0, 25.0, 30.0, 30.0]
+        );
+        assert!(size(&V::Str("huge".into())).is_err());
+        assert!(size(&V::Str("-2px".into())).is_err());
+    }
 
     #[test]
     fn caps_keywords_select_standard_opentype_features() {

@@ -266,6 +266,11 @@ Animate `offsetDistance` to move along it; `offsetRotate: "auto"` follows the ta
 and `offsetAnchor` chooses the point on the moving element. Unlike clipping, an
 open path stays open: distances clamp at its ends; a closed path wraps.
 
+Font sizes accept `xx-small`, `x-small`, `small`, `medium`, `large`, `x-large`,
+and `xx-large`, mapped to 9, 10, 13, 16, 18, 24, and 32px. `larger` multiplies
+the parent computed size by 1.2; `smaller` divides it by 1.2. These keywords also
+work in the `font` shorthand and resolve before `em`, `ex`, and line heights.
+
 ### Inline text boxes
 
 `Span` accepts CSS background, padding and border properties, including gradients

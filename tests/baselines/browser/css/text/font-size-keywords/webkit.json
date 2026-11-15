@@ -1,0 +1,182 @@
+{
+  "size": [
+    440,
+    260
+  ],
+  "sources": {
+    "tests/baselines/browser/css/text/font-size-keywords/scene.html": "bbbaf04c305c8bf1f86b4194e200525ed2c1bd6aa560c465285d160ffb74778c"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "s0",
+        "border": {
+          "x": 12,
+          "y": 12,
+          "width": 36,
+          "height": 16
+        },
+        "padding": {
+          "x": 12,
+          "y": 12,
+          "width": 36,
+          "height": 16
+        },
+        "content": {
+          "x": 12,
+          "y": 12,
+          "width": 36,
+          "height": 16
+        }
+      },
+      {
+        "key": "s1",
+        "border": {
+          "x": 12,
+          "y": 42,
+          "width": 40,
+          "height": 16
+        },
+        "padding": {
+          "x": 12,
+          "y": 42,
+          "width": 40,
+          "height": 16
+        },
+        "content": {
+          "x": 12,
+          "y": 42,
+          "width": 40,
+          "height": 16
+        }
+      },
+      {
+        "key": "s2",
+        "border": {
+          "x": 12,
+          "y": 72,
+          "width": 52,
+          "height": 16
+        },
+        "padding": {
+          "x": 12,
+          "y": 72,
+          "width": 52,
+          "height": 16
+        },
+        "content": {
+          "x": 12,
+          "y": 72,
+          "width": 52,
+          "height": 16
+        }
+      },
+      {
+        "key": "s3",
+        "border": {
+          "x": 12,
+          "y": 102,
+          "width": 64,
+          "height": 16
+        },
+        "padding": {
+          "x": 12,
+          "y": 102,
+          "width": 64,
+          "height": 16
+        },
+        "content": {
+          "x": 12,
+          "y": 102,
+          "width": 64,
+          "height": 16
+        }
+      },
+      {
+        "key": "s4",
+        "border": {
+          "x": 12,
+          "y": 132,
+          "width": 72,
+          "height": 16
+        },
+        "padding": {
+          "x": 12,
+          "y": 132,
+          "width": 72,
+          "height": 16
+        },
+        "content": {
+          "x": 12,
+          "y": 132,
+          "width": 72,
+          "height": 16
+        }
+      },
+      {
+        "key": "s5",
+        "border": {
+          "x": 12,
+          "y": 162,
+          "width": 96,
+          "height": 16
+        },
+        "padding": {
+          "x": 12,
+          "y": 162,
+          "width": 96,
+          "height": 16
+        },
+        "content": {
+          "x": 12,
+          "y": 162,
+          "width": 96,
+          "height": 16
+        }
+      },
+      {
+        "key": "s6",
+        "border": {
+          "x": 12,
+          "y": 192,
+          "width": 128,
+          "height": 16
+        },
+        "padding": {
+          "x": 12,
+          "y": 192,
+          "width": 128,
+          "height": 16
+        },
+        "content": {
+          "x": 12,
+          "y": 192,
+          "width": 128,
+          "height": 16
+        }
+      },
+      {
+        "key": "relative",
+        "border": {
+          "x": 12,
+          "y": 226,
+          "width": 99.984375,
+          "height": 16
+        },
+        "padding": {
+          "x": 12,
+          "y": 226,
+          "width": 99.984375,
+          "height": 16
+        },
+        "content": {
+          "x": 12,
+          "y": 226,
+          "width": 99.984375,
+          "height": 16
+        }
+      }
+    ],
+    "lines": []
+  }
+}
