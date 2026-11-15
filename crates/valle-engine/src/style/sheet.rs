@@ -872,10 +872,12 @@ fn bind(
                  transforms and filter"
             ));
         }
-        if matches!(node.kind, Kind::Span { unit: false, .. }) && !field.textual() {
+        if matches!(node.kind, Kind::Span { unit: false, .. })
+            && !field.textual()
+            && !field.inline_box()
+        {
             return Err(format!(
-                "{place}: {what}: a <Span> is part of a text, not a box, so it takes only text \
-                 properties"
+                "{place}: {what}: a <Span> is part of a text, not a box, so it takes text properties, background, padding and border"
             ));
         }
         if tag.is_some_and(|t| t != Tag::Svg) && !field.drawn_in_svg() {
@@ -1303,7 +1305,7 @@ mod tests {
     }
 
     #[test]
-    fn a_span_takes_only_text_properties() {
+    fn a_span_takes_text_and_inline_box_properties() {
         let mut tree = vec![view(&[("fontSize", num(20.0))], &[1]), view(&[], &[])];
         let span = |style: &[(&str, Prop)]| Node {
             kind: Kind::Span {
@@ -1316,10 +1318,22 @@ mod tests {
         let s = styles(tree.clone(), &[]).unwrap();
         assert_eq!((s[1].font.size, s[1].font.spacing), (20.0, 1.0));
         tree[1] = span(&[("padding", num(1.0))]);
+        assert!(styles(tree.clone(), &[]).is_ok());
+        // perUnit's effect style retains its existing property set. Ordinary Spans
+        // decorate text; split units additionally own opacity, filters and transforms.
+        if let Kind::Span { unit, .. } = &mut tree[1].kind {
+            *unit = true;
+        }
+        assert!(
+            styles(tree.clone(), &[])
+                .unwrap_err()
+                .contains("a unit of a split text")
+        );
+        tree[1] = span(&[("width", num(1.0))]);
         let e = styles(tree, &[]).unwrap_err();
         assert!(
             e.ends_with(
-                "style padding: a <Span> is part of a text, not a box, so it takes only text properties"
+                "style width: a <Span> is part of a text, not a box, so it takes text properties, background, padding and border"
             ),
             "{e}"
         );

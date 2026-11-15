@@ -995,6 +995,26 @@ impl Field {
         }
     }
 
+    /// Inline boxes decorate their text without acquiring block layout properties.
+    pub(super) fn inline_box(self) -> bool {
+        matches!(
+            self,
+            Field::Background
+                | Field::BackgroundColor
+                | Field::BackgroundImage
+                | Field::BackgroundPosition
+                | Field::BackgroundSize
+                | Field::BackgroundRepeat
+                | Field::BackgroundOrigin
+                | Field::BackgroundClip
+                | Field::BackgroundBlendMode
+                | Field::Padding(_)
+                | Field::Border(..)
+                | Field::BorderRadius
+                | Field::CornerRadius(_)
+        )
+    }
+
     /// Whether it styles text, as a Span takes it.
     pub(super) fn textual(self) -> bool {
         matches!(

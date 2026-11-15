@@ -77,11 +77,51 @@ pub struct Content<'a> {
     pub clamp: Option<usize>,
 }
 
+impl Content<'_> {
+    /// Vertical inline padding percentages use the physical containing width, not its height.
+    pub(crate) fn with_inline_basis(&self, width: f32) -> Option<Content<'_>> {
+        if self.font.writing == WritingMode::Horizontal
+            || !self.pieces.iter().any(|p| {
+                p.edge
+                    .as_ref()
+                    .is_some_and(|e| e.width.any(&|v| v[1] != 0.0))
+            })
+        {
+            return None;
+        }
+        Some(Content {
+            font: self.font,
+            clamp: self.clamp,
+            pieces: self
+                .pieces
+                .iter()
+                .map(|p| {
+                    let mut p = p.clone();
+                    if let Some(edge) = &mut p.edge {
+                        edge.width =
+                            crate::style::math::Math::Sum([edge.width.resolve(width) as f64, 0.0]);
+                    }
+                    p
+                })
+                .collect(),
+        })
+    }
+}
+
 /// Text in the font of the node it is in, which its glyphs name.
+#[derive(Clone)]
 pub struct Piece<'a> {
     pub text: Cow<'a, str>,
     pub node: u32,
     pub font: &'a Font,
+    /// An inline box edge occupies space but is not part of the authored text.
+    pub edge: Option<Edge>,
+}
+
+#[derive(Clone)]
+pub struct Edge {
+    pub width: crate::style::math::Calc,
+    pub start: bool,
 }
 
 /// A glyph of `Text::faces()[face]` in the text of `node`, in px from the text box's top left,
@@ -105,6 +145,8 @@ pub struct Glyph {
 /// that hangs at the end of the line, and the range of its glyphs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Run {
+    /// An inserted inline edge and its authored byte position.
+    pub edge: Option<(bool, u32)>,
     pub node: u32,
     pub line: u32,
     pub x: [f32; 2],
@@ -210,6 +252,7 @@ pub struct Lines {
     /// Its text decorations, which layout gives it.
     pub decorations: Vec<Stripe>,
     pub marks: Vec<emphasis::Mark>,
+    pub fragments: Vec<crate::layout::inline::Fragment>,
 }
 
 /// What shaping a piece and breaking it into lines depend on.
@@ -280,7 +323,12 @@ struct Ellipsis {
 type ParagraphKey = (
     bool,
     crate::style::bidi::Bidi,
-    Vec<(Box<str>, Shaping, Rc<[crate::style::bidi::Scope]>)>,
+    Vec<(
+        Box<str>,
+        Shaping,
+        Rc<[crate::style::bidi::Scope]>,
+        Option<(u32, bool)>,
+    )>,
 );
 
 /// A paragraph shaped: its glyph runs' brushes are the pieces they are in.
@@ -590,6 +638,7 @@ impl Text {
                     .pieces
                     .iter()
                     .map(|p| Piece {
+                        edge: p.edge.clone(),
                         text: p.text.clone(),
                         node: p.node,
                         font: p.font,
@@ -608,11 +657,12 @@ impl Text {
         }
         let marks = emphasis::shapes(self, content)?;
         let strut = self.strut(content.font)?;
+        let edges = self.edge_struts(content)?;
         let p = self.paragraph(content, width, min)?;
         if p.empty {
             return Ok([0.0, 0.0]);
         }
-        let boxes = stack(&p.layout, content, strut, &marks, &p.string);
+        let boxes = stack(&p.layout, content, strut, &edges, &marks, &p.string);
         let shown = &boxes[..content.clamp.unwrap_or(usize::MAX).min(boxes.len())];
         let height = shown.last().map_or(0.0, |[top, h]| top + h);
         let widest = (p.layout.width() * 64.0).ceil() / 64.0;
@@ -629,6 +679,7 @@ impl Text {
             return Ok(None);
         }
         let strut = self.strut(content.font)?;
+        let edges = self.edge_struts(content)?;
         let p = self.paragraph(content, Some(width), false)?;
         if p.empty {
             return Ok(None);
@@ -636,7 +687,7 @@ impl Text {
         Ok(p.layout
             .lines()
             .next()
-            .map(|line| extent(&line, content, strut)[0]))
+            .map(|line| extent(&line, content, strut, &edges, &p.string)[0]))
     }
 
     /// `content` broken to fit `width` px and aligned in it.
@@ -654,6 +705,7 @@ impl Text {
         };
         let marks = emphasis::shapes(self, content)?;
         let strut = self.strut(content.font)?;
+        let edges = self.edge_struts(content)?;
         let p = self.paragraph(content, Some(width), false)?;
         let string = p.source.clone();
         if p.empty {
@@ -666,6 +718,7 @@ impl Text {
                 text: Vec::new(),
                 decorations: Vec::new(),
                 marks: Vec::new(),
+                fragments: Vec::new(),
             });
         }
         p.layout.align(
@@ -675,7 +728,7 @@ impl Text {
                 ..AlignmentOptions::default()
             },
         );
-        let boxes = stack(&p.layout, content, strut, &marks, &p.string);
+        let boxes = stack(&p.layout, content, strut, &edges, &marks, &p.string);
         let text = p
             .layout
             .lines()
@@ -688,7 +741,7 @@ impl Text {
         let mut runs = Vec::new();
         let mut shaped = Vec::new();
         for (i, (line, [top, _])) in p.layout.lines().zip(&boxes).enumerate() {
-            let baseline = top + extent(&line, content, strut)[0];
+            let baseline = top + extent(&line, content, strut, &edges, &p.string)[0];
             baselines.push(baseline);
             let shift = bidi::shift(content.font, &line, &p.string);
             // Where each glyph's characters start: the clusters of a shaping run in visual
@@ -721,6 +774,10 @@ impl Text {
                     x += g.advance;
                 }
                 runs.push(Run {
+                    edge: piece
+                        .edge
+                        .as_ref()
+                        .map(|e| (e.start, p.map.at(run.run().text_range().start) as u32)),
                     node,
                     line: i as u32,
                     x: [run.offset() + shift, x],
@@ -772,6 +829,7 @@ impl Text {
             text,
             decorations: Vec::new(),
             marks: Vec::new(),
+            fragments: Vec::new(),
         };
         emphasis::horizontal(&mut lines, content, &marks);
         Ok(lines)
@@ -935,6 +993,7 @@ impl Text {
                 scale_x: 1.0,
             }));
             lines.runs.push(Run {
+                edge: None,
                 node,
                 line: l as u32,
                 x: [c, c + advance],
@@ -1025,8 +1084,18 @@ impl Text {
         Ok(placed(self.metrics(font)?, font))
     }
 
-    /// The paragraph of `content`, shaped if it is new, its lines broken at `width`, and as at
-    /// its min-content width when `min`.
+    /// Empty inline edges retain their font's line height even without a visible glyph.
+    fn edge_struts(&mut self, content: &Content) -> Result<HashMap<u32, [f32; 2]>, Error> {
+        let mut out = HashMap::new();
+        for p in &content.pieces {
+            if p.edge.is_some() && !out.contains_key(&p.node) {
+                out.insert(p.node, self.strut(p.font)?);
+            }
+        }
+        Ok(out)
+    }
+
+    /// The paragraph shaped once and broken at `width`, or at its minimum content width.
     fn paragraph(
         &mut self,
         content: &Content,
@@ -1044,6 +1113,12 @@ impl Text {
                         p.text.as_ref().into(),
                         Shaping::of(p.font, min),
                         p.font.bidi_scopes.clone(),
+                        p.edge.as_ref().map(|e| {
+                            (
+                                e.width.resolve(width.unwrap_or(0.0)).max(0.0).to_bits(),
+                                e.start,
+                            )
+                        }),
                     )
                 })
                 .collect(),
@@ -1148,6 +1223,20 @@ impl Text {
                     let at = range.start + emoji.start..range.start + emoji.end;
                     builder.push(StyleProperty::FontFamily(family), at);
                 }
+                if let Some((advance, _)) = key.2[k].3 {
+                    builder.push(StyleProperty::FontSize(0.0), range.clone());
+                    builder.push(StyleProperty::WordSpacing(0.0), range.clone());
+                    builder.push(StyleProperty::LetterSpacing(0.0), range.clone());
+                    for (offset, c) in string[range.clone()].char_indices() {
+                        if c == '\u{a0}' {
+                            let at = range.start + offset;
+                            builder.push(
+                                StyleProperty::LetterSpacing(f32::from_bits(advance)),
+                                at..at + c.len_utf8(),
+                            );
+                        }
+                    }
+                }
                 builder.push(StyleProperty::Brush(k as u32), range);
             }
             let mut layout = builder.build(&string);
@@ -1155,7 +1244,7 @@ impl Text {
             covered(&layout, &string)?;
             let paragraph = Paragraph {
                 layout,
-                empty: source.is_empty(),
+                empty: string.is_empty(),
                 source,
                 map,
                 string,
@@ -1558,12 +1647,31 @@ fn placed(m: [f32; 3], font: &Font) -> [f32; 2] {
 
 /// What the line takes above and below its baseline: its strut, and each run of glyphs in the
 /// font of its piece.
-fn extent(line: &parley::Line<'_, u32>, content: &Content, strut: [f32; 2]) -> [f32; 2] {
+fn extent(
+    line: &parley::Line<'_, u32>,
+    content: &Content,
+    strut: [f32; 2],
+    edges: &HashMap<u32, [f32; 2]>,
+    string: &str,
+) -> [f32; 2] {
     let mut out = strut;
     for item in line.items() {
         if let PositionedLayoutItem::GlyphRun(run) = item {
+            let piece = &content.pieces[run.style().brush as usize];
+            if piece.edge.is_some() {
+                if let Some([a, b]) = edges.get(&piece.node) {
+                    out = [out[0].max(*a), out[1].max(*b)];
+                }
+                continue;
+            }
+            if string[run.run().text_range()]
+                .chars()
+                .all(|c| matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+            {
+                continue;
+            }
             let m = run.run().font_metrics();
-            let font = content.pieces[run.style().brush as usize].font;
+            let font = piece.font;
             let [a, b] = placed([m.ascent, m.descent, m.leading], font);
             out = [out[0].max(a), out[1].max(b)];
         }
@@ -1576,6 +1684,7 @@ fn stack(
     layout: &parley::Layout<u32>,
     content: &Content,
     strut: [f32; 2],
+    edges: &HashMap<u32, [f32; 2]>,
     marks: &HashMap<u32, emphasis::Shape>,
     string: &str,
 ) -> Vec<[f32; 2]> {
@@ -1584,7 +1693,7 @@ fn stack(
         .lines()
         .enumerate()
         .map(|(index, line)| {
-            let [a, b] = extent(&line, content, strut);
+            let [a, b] = extent(&line, content, strut, edges, string);
             let mut extra = [0.0_f32; 2];
             for item in line.items() {
                 if let PositionedLayoutItem::GlyphRun(run) = item {
@@ -1651,6 +1760,7 @@ mod tests {
         Content {
             font,
             pieces: vec![Piece {
+                edge: None,
                 text: Cow::Borrowed(text),
                 node: 0,
                 font,
@@ -2131,6 +2241,7 @@ mod tests {
         let mut t = text();
         let (normal, big) = (font(16.0), font(32.0));
         let piece = |text: &'static str, node, font| Piece {
+            edge: None,
             text: Cow::Borrowed(text),
             node,
             font,
@@ -2451,6 +2562,7 @@ mod tests {
         assert_eq!(
             lines.runs[0],
             Run {
+                edge: None,
                 glyphs: lines.runs[0].glyphs,
                 ..whole.runs[0]
             }

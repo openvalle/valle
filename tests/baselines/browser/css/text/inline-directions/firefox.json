@@ -1,0 +1,54 @@
+{
+  "size": [420, 240],
+  "sources": {
+    "tests/baselines/browser/css/text/inline-directions/scene.html": "e257c71ab9d48612a9df8ece0b5b8d95d9ff1c3b1ce8d6eb2a77493a3877bd78",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "rtl",
+        "border": {
+          "x": 12,
+          "y": 16,
+          "width": 230,
+          "height": 80
+        },
+        "padding": {
+          "x": 12,
+          "y": 16,
+          "width": 230,
+          "height": 80
+        },
+        "content": {
+          "x": 12,
+          "y": 16,
+          "width": 230,
+          "height": 80
+        }
+      },
+      {
+        "key": "vertical",
+        "border": {
+          "x": 290,
+          "y": 16,
+          "width": 100,
+          "height": 160
+        },
+        "padding": {
+          "x": 290,
+          "y": 16,
+          "width": 100,
+          "height": 160
+        },
+        "content": {
+          "x": 290,
+          "y": 16,
+          "width": 100,
+          "height": 160
+        }
+      }
+    ],
+    "lines": []
+  }
+}

@@ -8,6 +8,8 @@
 
 use std::collections::HashMap;
 
+pub mod inline;
+
 use taffy::{
     AvailableSpace, BlockContext, BoxGenerationMode, BoxSizing, Cache, CacheTree, Contain,
     ContainingBlockClaims, CoreStyle, DetailedGridInfo, DetailedLayoutInfo, Dimension, Direction,
@@ -249,6 +251,8 @@ pub fn layout(
             content,
         };
         if let Some(c) = &contents[i] {
+            let resolved = c.with_inline_basis(content.width);
+            let c = resolved.as_ref().unwrap_or(c);
             let place = |e| format!("{}: {e}", template.nodes[i].place());
             let vertical = c.font.writing != WritingMode::Horizontal;
             let inline = if vertical {
@@ -274,15 +278,7 @@ pub fn layout(
             }
             let at = [content.x, content.y];
             laid.decorations = decorations(&laid, at, i, template, styles, text).map_err(place)?;
-            spans(
-                &laid,
-                [content.x, content.y],
-                styles,
-                &parents,
-                text,
-                &mut boxes,
-            )
-            .map_err(place)?;
+            inline::spans(&mut laid, content, styles, &parents, text, &mut boxes).map_err(place)?;
             if vertical {
                 let matrix = vertical_matrix(content);
                 for j in i + 1..n {
@@ -342,9 +338,15 @@ fn pieces_of<'a>(
     let (Kind::Text { content } | Kind::Span { content, .. }) = &template.nodes[i].kind else {
         return;
     };
+    let span = matches!(template.nodes[i].kind, Kind::Span { .. });
+    let edge = |start| inline::edge(styles, i, start);
+    if span {
+        out.extend(edge(true));
+    }
     for piece in content {
         match piece {
             template::Piece::Text(prop) => out.push(Piece {
+                edge: None,
                 text: match prop {
                     Prop::Const(v) => v.text(),
                     Prop::Expr(e) => values[*e as usize].text(),
@@ -355,73 +357,9 @@ fn pieces_of<'a>(
             template::Piece::Span(s) => pieces_of(template, values, styles, *s as usize, out),
         }
     }
-}
-
-/// The boxes of the Spans in a Text laid out in `lines` from `at`, as Chrome has an inline box's:
-/// on each line, from the left of its first run of glyphs to the right of its last, and from its
-/// font's ascent above the baseline to its descent below, rounded; its lines together. A run that
-/// is only white space hanging at the end of its line has no part in a box, as in Chrome a Span
-/// that starts with the space a line breaks at starts on the next line; unless the Span has
-/// nothing else.
-fn spans(
-    lines: &Lines,
-    at: [f32; 2],
-    styles: &[Style],
-    parents: &[Option<usize>],
-    text: &mut Text,
-    boxes: &mut [Boxes],
-) -> Result<(), Error> {
-    let mut extents: Vec<(usize, [f32; 4])> = Vec::new();
-    let mut hanging: Vec<(usize, [f32; 4])> = Vec::new();
-    for (i, run) in lines.runs.iter().enumerate() {
-        let hangs = (lines.runs[i..].iter())
-            .take_while(|r| r.line == run.line)
-            .all(|r| r.x[1] <= r.x[0]);
-        let extents = if hangs { &mut hanging } else { &mut extents };
-        let baseline = at[1] + lines.baselines[run.line as usize];
-        // The run's own Span and those around it, up to the Text.
-        let mut span = Some(run.node as usize);
-        while let Some(s) = span.filter(|&s| parents[s].is_some()) {
-            let [ascent, descent, _] = text.metrics(&styles[s].font)?;
-            let r = [
-                at[0] + run.x[0],
-                baseline - ascent.round(),
-                at[0] + run.x[1],
-                baseline + descent.round(),
-            ];
-            match extents.iter_mut().find(|(e, _)| *e == s) {
-                Some((_, e)) => {
-                    *e = [
-                        e[0].min(r[0]),
-                        e[1].min(r[1]),
-                        e[2].max(r[2]),
-                        e[3].max(r[3]),
-                    ]
-                }
-                None => extents.push((s, r)),
-            }
-            span = parents[s];
-        }
+    if span {
+        out.extend(edge(false));
     }
-    for (s, e) in hanging {
-        if !extents.iter().any(|(t, _)| *t == s) {
-            extents.push((s, e));
-        }
-    }
-    for (s, [x0, y0, x1, y1]) in extents {
-        let r = Rect {
-            x: x0,
-            y: y0,
-            width: x1 - x0,
-            height: y1 - y0,
-        };
-        boxes[s] = Boxes {
-            border: r,
-            padding: r,
-            content: r,
-        };
-    }
-    Ok(())
 }
 
 /// The text decorations of Text `i` laid out in `lines` from `at`, as Chrome draws them: on each
@@ -733,6 +671,12 @@ impl Tree<'_> {
             } else {
                 (known.width, available.width)
             };
+            let basis = known.width.unwrap_or(match available.width {
+                AvailableSpace::Definite(w) => w,
+                _ => 0.0,
+            });
+            let resolved = c.with_inline_basis(basis);
+            let c = resolved.as_ref().unwrap_or(c);
             let measured = match (length, space) {
                 (Some(w), _) | (None, AvailableSpace::Definite(w)) => text.measure(c, Some(w)),
                 (None, AvailableSpace::MinContent) => text.min_content(c),

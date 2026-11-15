@@ -1,0 +1,51 @@
+<!doctype html><meta charset="utf-8" /><style>
+  @font-face {
+    font-family: TestSans;
+    src: url("/tests/resources/NotoSans.ttf");
+    font-weight: 100 900;
+  }
+  body {
+    margin: 0;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  #canvas {
+    position: relative;
+    width: 420px;
+    height: 240px;
+    background: white;
+    font: 20px/40px TestSans;
+    color: #182433;
+  }
+  .rtl {
+    position: absolute;
+    left: 12px;
+    top: 16px;
+    width: 230px;
+    direction: rtl;
+    unicode-bidi: bidi-override;
+  }
+  .rtl span {
+    padding: 3px 8px;
+    border: 2px solid #28618e;
+    background: #f5d483;
+  }
+  .vertical {
+    position: absolute;
+    left: 290px;
+    top: 16px;
+    width: 100px;
+    height: 160px;
+    writing-mode: vertical-rl;
+  }
+  .vertical span {
+    padding: 8px 3px;
+    border: 2px solid #28618e;
+    background: linear-gradient(90deg, #b2e1d3, #f5d483);
+  }
+</style>
+<div id="canvas">
+  <div class="rtl" data-key="rtl">AB <span>CD EF GH IJ KL MN OP</span> QR</div>
+  <div class="vertical" data-key="vertical">A <span>BC DE FG HI JK LM</span> N</div>
+</div>

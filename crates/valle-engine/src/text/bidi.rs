@@ -44,7 +44,7 @@ impl Input {
                 &all[start..]
             })
             .collect();
-        if scopes.iter().all(|s| s.is_empty()) {
+        if scopes.iter().all(|s| s.is_empty()) && content.pieces.iter().all(|p| p.edge.is_none()) {
             return Self {
                 text: source.clone(),
                 source,
@@ -59,7 +59,7 @@ impl Input {
             map.offsets.extend(std::iter::repeat_n(at, value.len()));
             map.inserted.extend(std::iter::repeat_n(true, value.len()));
         };
-        for (range, next) in ranges.iter().zip(&scopes) {
+        for ((range, next), piece) in ranges.iter().zip(&scopes).zip(&content.pieces) {
             let start = text.len();
             let common = active
                 .iter()
@@ -73,6 +73,14 @@ impl Input {
                 controls(&mut text, &mut map, scope.controls().0, range.start);
             }
             active = next;
+            if let Some(edge) = &piece.edge {
+                let value = if edge.start {
+                    "\u{a0}\u{2060}"
+                } else {
+                    "\u{2060}\u{a0}"
+                };
+                controls(&mut text, &mut map, value, range.start);
+            }
             for (i, c) in source[range.clone()].char_indices() {
                 let at = range.start + i;
                 if c == '\n' {
@@ -213,6 +221,7 @@ mod tests {
             font: &style.font,
             clamp: None,
             pieces: vec![crate::text::Piece {
+                edge: None,
                 text: Cow::Borrowed(value),
                 node: 0,
                 font: &style.font,

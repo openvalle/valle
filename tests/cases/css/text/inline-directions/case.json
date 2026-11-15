@@ -1,0 +1,57 @@
+{
+  "spec": "https://www.w3.org/TR/CSS2/visuren.html#inline-formatting",
+  "assertion": "Inline decorations follow RTL order and the vertical inline axis, preserving sliced edges and the physical gradient direction on wrapped spans.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All three browsers agree on RTL order, wrapping and vertical fragment placement. Reviewed native differences are glyph antialiasing, fractional border-edge coverage and one channel level in the gradient (4766 pixels, maximum channel delta 118). Box assertions guard layout independently.",
+    "pixels": {
+      "maxDifference": 120,
+      "maxPixels": 4800
+    }
+  },
+  "layout": [
+    {
+      "key": "rtl",
+      "border": {
+        "x": 12,
+        "y": 16,
+        "width": 230,
+        "height": 80
+      },
+      "padding": {
+        "x": 12,
+        "y": 16,
+        "width": 230,
+        "height": 80
+      },
+      "content": {
+        "x": 12,
+        "y": 16,
+        "width": 230,
+        "height": 80
+      }
+    },
+    {
+      "key": "vertical",
+      "border": {
+        "x": 290,
+        "y": 16,
+        "width": 100,
+        "height": 160
+      },
+      "padding": {
+        "x": 290,
+        "y": 16,
+        "width": 100,
+        "height": 160
+      },
+      "content": {
+        "x": 290,
+        "y": 16,
+        "width": 100,
+        "height": 160
+      }
+    }
+  ]
+}

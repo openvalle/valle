@@ -446,6 +446,7 @@ fn subtree(
             .iter()
             .zip(&fonts)
             .map(|(leaf, font)| Piece {
+                edge: None,
                 text: Cow::Borrowed(&leaf.text),
                 node: leaf.node as u32,
                 font,

@@ -1,0 +1,53 @@
+<!doctype html><meta charset="utf-8" /><style>
+  @font-face {
+    font-family: TestSans;
+    src: url("/tests/resources/NotoSans.ttf");
+    font-weight: 100 900;
+  }
+  body {
+    margin: 0;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  #canvas {
+    width: 420px;
+    height: 260px;
+    padding: 16px;
+    background: white;
+    font: 20px/40px TestSans;
+    color: #182433;
+  }
+  .wrap {
+    width: 230px;
+  }
+  .highlight {
+    padding: 3px 8px;
+    border: 2px solid #28618e;
+    background: linear-gradient(90deg, #f5d483, #b2e1d3);
+  }
+  .outer {
+    padding: 2px 10px;
+    border: 2px solid #28618e;
+    background: #dae9f1;
+  }
+  .inner {
+    padding: 0 6px;
+    border: 2px solid #a63a30;
+    background: #f4d37d;
+  }
+  .empty {
+    padding: 2px 8px;
+    border: 2px solid #a63a30;
+    background: #f4d37d;
+  }
+</style>
+<div id="canvas">
+  <div data-key="wrap" class="wrap">
+    One <span class="highlight">two three four five six seven</span> end
+  </div>
+  <div data-key="nested">
+    A <span class="outer">B<span class="inner">C</span>D</span> E
+  </div>
+  <div data-key="empty">A<span class="empty"></span> B</div>
+</div>

@@ -1596,14 +1596,32 @@ impl Painter<'_> {
 
     /// `i`'s outer shadows, background, inner shadows and border, each over the one before.
     fn background(&self, i: usize, out: &mut Drawn) {
-        let s = &self.styles[i];
         let rect = snap(self.layout.boxes[i].border);
+        self.background_box(
+            i,
+            rect,
+            self.radii(i, rect),
+            self.widths(i),
+            self.paddings(i),
+            out,
+        );
+    }
+
+    fn background_box(
+        &self,
+        i: usize,
+        rect: Rect,
+        radii: Radii,
+        widths: [f32; 4],
+        paddings: [f32; 4],
+        out: &mut Drawn,
+    ) {
+        let s = &self.styles[i];
+        let rect = snap(rect);
         if !s.visible || rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
-        let radii = self.radii(i, rect);
         let clip = self.clips[i].last().copied();
-        let widths = self.widths(i);
         let colors = s.border_colors.map(work);
         let (inside, inner_radii) = inner(rect, radii, widths);
         // The first shadow is on top.
@@ -1612,7 +1630,6 @@ impl Painter<'_> {
         for shadow in outer {
             out.extend(outer_shadow(shadow, rect, radii, opaque).map(|item| (clip, item)));
         }
-        let paddings = self.paddings(i);
         let content = inner(
             rect,
             radii,
@@ -1783,6 +1800,53 @@ impl Painter<'_> {
             true => Some(i),
             false => self.clips[i].last().copied(),
         };
+        for fragment in &lines.fragments {
+            if fragment.line as usize >= lines.boxes.len() {
+                continue;
+            }
+            let (rect, tape) = if vertical {
+                let matrix = crate::layout::vertical_matrix(at);
+                (matrix.bounds(fragment.rect), matrix.bounds(fragment.tape))
+            } else {
+                (fragment.rect, fragment.tape)
+            };
+            let physical = |v: [f32; 4]| {
+                if vertical {
+                    [v[3], v[0], v[1], v[2]]
+                } else {
+                    v
+                }
+            };
+            let radii = fit(
+                self.styles[fragment.node]
+                    .radii
+                    .each_ref()
+                    .map(|[x, y]| corner([x.resolve(tape.width), y.resolve(tape.height)])),
+                snap(tape),
+            );
+            let mut drawn = Vec::new();
+            self.background_box(
+                fragment.node,
+                tape,
+                radii,
+                physical(fragment.border),
+                physical(fragment.padding),
+                &mut drawn,
+            );
+            let items = drawn.into_iter().map(|(_, item)| item).collect::<Vec<_>>();
+            if !items.is_empty() {
+                let items = vec![Item::Clip {
+                    rect,
+                    radii: SQUARE,
+                    items,
+                }];
+                out.extend(
+                    self.unit(fragment.node, items)
+                        .into_iter()
+                        .map(|item| (clip, item)),
+                );
+            }
+        }
         for (k, run) in lines.runs.iter().enumerate() {
             let s = &self.styles[run.node as usize];
             if !s.visible {
@@ -2040,12 +2104,31 @@ impl Painter<'_> {
     fn text_mask(&self, i: usize) -> Vec<Item> {
         const OPAQUE: [f32; 4] = [1.0; 4];
         let mut items = Vec::new();
-        let mut nodes = vec![i];
+        let inline = matches!(self.template.nodes[i].kind, Kind::Span { .. });
+        let belongs = |mut node: usize| {
+            while node != i {
+                let Some(parent) = self.parents[node] else {
+                    return false;
+                };
+                node = parent;
+            }
+            true
+        };
+        let mut root = i;
+        while inline && self.layout.lines[root].is_none() {
+            let Some(parent) = self.parents[root] else {
+                return items;
+            };
+            root = parent;
+        }
+        let mut nodes = vec![root];
         while let Some(n) = nodes.pop() {
             if n != i && self.styles[n].transformed() {
                 continue;
             }
-            nodes.extend(self.children(Some(n)));
+            if !inline {
+                nodes.extend(self.children(Some(n)));
+            }
             let Some(lines) = &self.layout.lines[n] else {
                 continue;
             };
@@ -2053,7 +2136,7 @@ impl Painter<'_> {
             let first = items.len();
             for (k, run) in lines.runs.iter().enumerate() {
                 let s = &self.styles[run.node as usize];
-                if !s.visible {
+                if !s.visible || (inline && !belongs(run.node as usize)) {
                     continue;
                 }
                 let glyphs = &lines.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize];
@@ -2066,7 +2149,10 @@ impl Painter<'_> {
                 lines
                     .marks
                     .iter()
-                    .filter(|m| self.styles[m.node as usize].visible)
+                    .filter(|m| {
+                        self.styles[m.node as usize].visible
+                            && (!inline || belongs(m.node as usize))
+                    })
                     .map(|m| Item::Path {
                         path: m.path.moved([at.x, at.y]),
                         even_odd: false,

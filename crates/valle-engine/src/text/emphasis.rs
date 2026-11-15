@@ -61,6 +61,7 @@ pub(super) fn shapes(text: &mut Text, content: &Content) -> Result<HashMap<u32, 
             font: &font,
             clamp: None,
             pieces: vec![Piece {
+                edge: None,
                 text: Cow::Borrowed(mark),
                 node: 0,
                 font: &font,

@@ -243,6 +243,27 @@ Animate `offsetDistance` to move along it; `offsetRotate: "auto"` follows the ta
 and `offsetAnchor` chooses the point on the moving element. Unlike clipping, an
 open path stays open: distances clamp at its ends; a closed path wraps.
 
+### Inline text boxes
+
+`Span` accepts CSS background, padding and border properties, including gradients
+and rounded borders. Inline padding and border widths participate in line breaking;
+block-axis padding and borders paint outside the font box without enlarging line
+height. Nested and empty spans work too. Decorations use CSS's default `slice`
+behavior: a wrapped span's background continues across lines, with start/end edges
+only at its first/last fragment. `boxDecorationBreak: "clone"` is not supported.
+
+```tsx
+<Text style={{ width: 360, fontSize: 24, lineHeight: "48px" }}>
+  Highlight <Span style={{ background: "#ffe496", padding: "3px 8px", border: "2px solid #b58300" }}>
+    a phrase that can wrap
+  </Span> inside a paragraph.
+</Text>
+```
+
+The same inline edges follow `direction` and `writingMode`. A Span remains part
+of the paragraph: width, height, margins and block layout do not apply. Animate
+its style with time expressions; no browser layout or previous-frame state is used.
+
 ### Vertical text
 
 On `Text`, set `writingMode: "vertical-rl"` (columns run right to left) or

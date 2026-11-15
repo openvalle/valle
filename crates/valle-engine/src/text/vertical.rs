@@ -16,6 +16,7 @@ use crate::style::{
 
 struct Cluster {
     range: std::ops::Range<usize>,
+    edge: Option<(bool, u32)>,
     node: u32,
     glyphs: Vec<Glyph>,
     advance: f32,
@@ -134,6 +135,13 @@ fn layout(
             .iter()
             .zip(&plain)
             .map(|(p, font)| super::Piece {
+                edge: p.edge.as_ref().map(|e| super::Edge {
+                    width: crate::style::math::Math::Sum([
+                        e.width.resolve(width.unwrap_or(0.0)) as f64,
+                        0.0,
+                    ]),
+                    start: e.start,
+                }),
                 text: p.text.clone(),
                 node: p.node,
                 font,
@@ -157,6 +165,7 @@ fn layout(
         text: Vec::new(),
         decorations: Vec::new(),
         marks: Vec::new(),
+        fragments: Vec::new(),
     };
     let strut = text.strut(content.font)?;
     let metrics = text.metrics(content.font)?;
@@ -164,7 +173,7 @@ fn layout(
     let mut top = 0.0;
     let mut previous_extra = 0.0;
     for (line, range) in base.text.iter().enumerate() {
-        let mut clusters = Vec::new();
+        let mut clusters: Vec<Cluster> = Vec::new();
         for run in base.runs.iter().filter(|r| r.line as usize == line) {
             let font = content
                 .pieces
@@ -172,6 +181,27 @@ fn layout(
                 .find(|p| p.node == run.node)
                 .map_or(content.font, |p| p.font);
             let glyphs = &base.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize];
+            if let Some((start, at)) = run.edge {
+                if !start && let Some(c) = clusters.last_mut() {
+                    c.break_after = false;
+                }
+                clusters.push(Cluster {
+                    range: at as usize..at as usize,
+                    edge: run.edge,
+                    node: run.node,
+                    glyphs: Vec::new(),
+                    advance: run.x[1] - run.x[0],
+                    upright: false,
+                    combined: false,
+                    space: false,
+                    collapse: false,
+                    wrap: font.wrap,
+                    emergency: false,
+                    break_after: !start && breaks.contains(&(at as usize)),
+                    extent: text.strut(font)?,
+                });
+                continue;
+            }
             let groups: Vec<_> = glyphs.chunk_by(|a, b| a.cluster == b.cluster).collect();
             for (k, group) in groups.iter().enumerate() {
                 let start = group[0].cluster as usize;
@@ -235,6 +265,7 @@ fn layout(
                     _ => breaks.contains(&end),
                 };
                 clusters.push(Cluster {
+                    edge: None,
                     range: start..end,
                     node: run.node,
                     glyphs,
@@ -269,12 +300,15 @@ fn layout(
         let mut from = 0;
         while from < clusters.len() {
             let font = font_of(clusters[from].node);
-            if !combines(font) {
+            if !combines(font) || clusters[from].edge.is_some() {
                 from += 1;
                 continue;
             }
             let mut to = from + 1;
-            while to < clusters.len() && clusters[to].node == clusters[from].node {
+            while to < clusters.len()
+                && clusters[to].node == clusters[from].node
+                && clusters[to].edge.is_none()
+            {
                 to += 1;
             }
             let em = font.size as f32;
@@ -474,15 +508,14 @@ fn layout(
                     }
                 }));
                 let next = cursor + c.advance + if c.space { justify } else { 0.0 };
-                if let Some(run) = out
-                    .runs
-                    .last_mut()
-                    .filter(|r| r.line == index && r.node == c.node)
-                {
+                if let Some(run) = out.runs.last_mut().filter(|r| {
+                    r.line == index && r.node == c.node && r.edge.is_none() && c.edge.is_none()
+                }) {
                     run.x[1] = next;
                     run.glyphs[1] = out.glyphs.len() as u32;
                 } else {
                     out.runs.push(Run {
+                        edge: c.edge,
                         node: c.node,
                         line: index,
                         x: [cursor, next],

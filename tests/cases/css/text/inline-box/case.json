@@ -1,0 +1,78 @@
+{
+  "spec": "https://www.w3.org/TR/CSS2/visuren.html#inline-formatting",
+  "assertion": "Inline padding and borders participate in line breaking; backgrounds and borders slice continuously across wrapped fragments, including nested and empty spans.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Chrome and WebKit agree on wrapping, nesting and empty inline borders; Firefox wraps one word earlier. Reviewed native differences are glyph antialiasing (maximum 109) and one channel level in the continuous gradient. Solid fills and border positions match. Numeric box assertions and inline layout unit tests independently guard layout.",
+    "pixels": {
+      "maxDifference": 110,
+      "maxPixels": 6400
+    }
+  },
+  "layout": [
+    {
+      "key": "wrap",
+      "border": {
+        "x": 16,
+        "y": 16,
+        "width": 230,
+        "height": 80
+      },
+      "padding": {
+        "x": 16,
+        "y": 16,
+        "width": 230,
+        "height": 80
+      },
+      "content": {
+        "x": 16,
+        "y": 16,
+        "width": 230,
+        "height": 80
+      }
+    },
+    {
+      "key": "nested",
+      "border": {
+        "x": 16,
+        "y": 96,
+        "width": 388,
+        "height": 40
+      },
+      "padding": {
+        "x": 16,
+        "y": 96,
+        "width": 388,
+        "height": 40
+      },
+      "content": {
+        "x": 16,
+        "y": 96,
+        "width": 388,
+        "height": 40
+      }
+    },
+    {
+      "key": "empty",
+      "border": {
+        "x": 16,
+        "y": 136,
+        "width": 388,
+        "height": 40
+      },
+      "padding": {
+        "x": 16,
+        "y": 136,
+        "width": 388,
+        "height": 40
+      },
+      "content": {
+        "x": 16,
+        "y": 136,
+        "width": 388,
+        "height": 40
+      }
+    }
+  ]
+}
