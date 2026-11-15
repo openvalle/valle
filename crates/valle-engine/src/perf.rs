@@ -144,11 +144,10 @@ pub fn rss() -> Option<u64> {
         }
         // SAFETY: the call succeeded, so the structure is filled.
         let usage = unsafe { usage.assume_init() };
+        let bytes = u64::try_from(usage.ru_maxrss).ok()?;
         // Linux counts KiB, macOS bytes.
         #[cfg(target_os = "linux")]
-        let bytes = u64::from(usage.ru_maxrss) * 1024;
-        #[cfg(not(target_os = "linux"))]
-        let bytes = usage.ru_maxrss as u64;
+        let bytes = bytes.checked_mul(1024)?;
         Some(bytes)
     }
     #[cfg(not(unix))]
