@@ -163,6 +163,17 @@ impl Plan {
             let b = n.inputs.get(1).map_or(a, |i| layers[*i]);
             let linear = n.linear;
             let layer = match &n.op {
+                Operation::Tile => self.graph_pass(
+                    [a; 2],
+                    12,
+                    Pass {
+                        linear: false,
+                        region,
+                        matrix,
+                    },
+                    &regions[n.inputs[0]].map(|v| v as f32),
+                    &[],
+                ),
                 Operation::Flood => self.graph_pass(
                     [blank; 2],
                     2,
@@ -518,12 +529,21 @@ mod tests {
                 percent: 0.,
             }),
         ];
-        let pixels = draw(&mut renderer, vec![red], vec![]);
+        let pixels = draw(&mut renderer, vec![red.clone()], vec![]);
         assert_eq!(&pixels[0..4], &[0; 4]);
         close(
             &pixels[(5 * 16 + 5) * 4..(5 * 16 + 5) * 4 + 4],
             [255, 0, 0, 128],
         );
+        // Tile defaults to the whole filter, not its smaller input subregion.
+        let tile = node(Operation::Tile, &[2]);
+        let pixels = draw(&mut renderer, vec![red.clone(), tile.clone()], vec![]);
+        for pixel in pixels.as_chunks::<4>().0 {
+            close(pixel, [255, 0, 0, 128]);
+        }
+        red.region[2].as_mut().unwrap().units = 0.;
+        let pixels = draw(&mut renderer, vec![red, tile], vec![]);
+        assert!(pixels.iter().all(|v| *v == 0), "an empty tile stays empty");
         let source = Item::Rect {
             rect: rect([2., 2., 8., 8.]),
             radii: [[0.; 2]; 4],

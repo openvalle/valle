@@ -364,6 +364,7 @@ fn own(tag: Tag) -> &'static [&'static str] {
             "in", "in2", "result", "x", "y", "width", "height", "dx", "dy",
         ],
         Tag::FeFlood => &["in", "in2", "result", "x", "y", "width", "height"],
+        Tag::FeTile => &["in", "result", "x", "y", "width", "height"],
         Tag::FeColorMatrix => &[
             "in", "in2", "result", "x", "y", "width", "height", "type", "values",
         ],
@@ -591,6 +592,7 @@ pub fn holds(tag: Tag) -> Holds {
                 Tag::FeDisplacementMap,
                 Tag::FeDropShadow,
                 Tag::FeComponentTransfer,
+                Tag::FeTile,
             ],
             "filter primitives",
         ),
@@ -711,6 +713,7 @@ pub fn computed(
         | Tag::FeFuncR
         | Tag::FeFuncG
         | Tag::FeFuncB
+        | Tag::FeTile
         | Tag::FeFuncA => Element::Primitive(filter::primitive(tag, attributes)?),
         Tag::Svg => {
             let (view_box, fit) = fitting()?;

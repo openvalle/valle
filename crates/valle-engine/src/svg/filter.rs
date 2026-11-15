@@ -27,6 +27,7 @@ pub enum Operation {
     Blur([f64; 2]),
     Offset([f64; 2]),
     Flood,
+    Tile,
     Matrix([f64; 20]),
     Blend(u32),
     Composite { operator: u32, k: [f64; 4] },
@@ -107,6 +108,7 @@ pub fn primitive(tag: Tag, attributes: &[(&str, &V)]) -> Result<Primitive, Strin
         }
         Tag::FeOffset => Operation::Offset([a.number("dx", 0.0)?, a.number("dy", 0.0)?]),
         Tag::FeFlood => Operation::Flood,
+        Tag::FeTile => Operation::Tile,
         Tag::FeBlend => Operation::Blend(a.choice(
             "mode",
             &[
@@ -421,7 +423,10 @@ impl Graph {
         let region = self.region(bbox, viewport);
         let mut regions = vec![region; 2];
         for n in &self.nodes {
-            let default = if n.inputs.is_empty() || n.inputs.iter().any(|i| *i < 2) {
+            let default = if matches!(n.op, Operation::Tile)
+                || n.inputs.is_empty()
+                || n.inputs.iter().any(|i| *i < 2)
+            {
                 region
             } else {
                 n.inputs

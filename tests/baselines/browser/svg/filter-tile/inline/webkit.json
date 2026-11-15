@@ -1,0 +1,10 @@
+{
+  "size": [360, 180],
+  "sources": {
+    "tests/baselines/browser/svg/filter-tile/inline/scene.html": "67995b21e042cd0af7f4f151567d46d1cda8d49f97dc7021f25bed575ce985f9"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

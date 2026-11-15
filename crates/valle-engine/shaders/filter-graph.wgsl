@@ -162,6 +162,14 @@ fn filtered(v: Out) -> vec4f {
       let alpha = a.a * h[2].a;
       return vec4f(h[2].rgb * alpha, alpha);
     }
+    case 12u: {
+      let tile = h[2];
+      if (any(tile.zw <= vec2f(0.0))) { return vec4f(0.0); }
+      let q = local(v.pos.xy, t);
+      let wrapped = tile.xy + fract((q - tile.xy) / tile.zw) * tile.zw;
+      let at = transforms[t].forward * vec3f(wrapped, 1.0);
+      return sample_at(first, at.xy / at.z);
+    }
     default: {}
   }
   return output(result, linear);

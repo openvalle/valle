@@ -1,0 +1,43 @@
+export const composition = { width: 360, height: 180, fps: 4, duration: 2 };
+export default function Scene() {
+  const { seconds } = useCurrentTime();
+  return (
+    <View style={{ width: 360, height: 180, background: "white" }}>
+      <svg width="360" height="180" viewBox="0 0 360 180">
+        <defs>
+          <filter id="tile" filterUnits="userSpaceOnUse" x="0" y="0" width="110" height="160">
+            <feOffset dx={seconds * 2} x="4" y="6" width="20" height="18" />
+            <feTile />
+          </filter>
+          <filter id="clip" filterUnits="userSpaceOnUse" x="0" y="0" width="110" height="160">
+            <feOffset x="4" y="6" width="20" height="18" result="cell" />
+            <feTile in="cell" x="12" y="15" width="88" height="130" />
+          </filter>
+          <filter
+            id="bbox"
+            x="0"
+            y="0"
+            width="100%"
+            height="100%"
+            primitiveUnits="objectBoundingBox"
+          >
+            <feOffset x="0" y="0" width="0.25" height="0.25" />
+            <feTile />
+          </filter>
+        </defs>
+        <g transform="translate(5 8)" filter="url(#tile)">
+          <rect x="4" y="6" width="8" height="18" fill="#2563eb" />
+          <rect x="14" y="11" width="8" height="8" fill="#f97316" />
+        </g>
+        <g transform="translate(125 8)" filter="url(#clip)">
+          <rect x="4" y="6" width="8" height="18" fill="#2563eb" />
+          <rect x="14" y="11" width="8" height="8" fill="#f97316" />
+        </g>
+        <g transform="translate(240 8)" filter="url(#bbox)">
+          <rect x="10" y="12" width="96" height="144" fill="#e0f2fe" />
+          <rect x="10" y="12" width="12" height="18" fill="#0f766e" />
+        </g>
+      </svg>
+    </View>
+  );
+}

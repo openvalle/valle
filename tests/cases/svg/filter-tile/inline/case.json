@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/filters.html#feTileElement",
+  "assertion": "Tile repeats the input primitive subregion with its authored origin, defaults to the full filter region, honors explicit output clipping and objectBoundingBox units.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All three browsers agree on tile origin, repetition and output clipping. Chrome is selected for its filter color rounding; the straight-edged fixture has no antialiasing ambiguity."
+  }
+}

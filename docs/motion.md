@@ -517,6 +517,7 @@ shape or group. Both inline SVG and SVG files support these primitives:
 | `feDisplacementMap` | `in`, `in2`, `scale`, `xChannelSelector`, `yChannelSelector` (`R`, `G`, `B`, `A`) |
 | `feComponentTransfer` | `<feFuncR/G/B/A>` children: `identity`, `table`, `discrete`, `linear`, `gamma` |
 | `feDropShadow` | `dx`, `dy`, `stdDeviation`, `floodColor`, `floodOpacity` |
+| `feTile` | `in`; repeats its input primitive's subregion to fill the output subregion |
 
 Transfer functions use `tableValues` for table/discrete, `slope` and `intercept`
 for linear, and `amplitude`, `exponent`, `offset` for gamma. Omitted channels stay
@@ -553,7 +554,9 @@ Motion expressions and remain deterministic when seeking backwards.
 `userSpaceOnUse`. Both also accept the other coordinate system. Each primitive
 accepts `x`, `y`, `width`, `height` to restrict its output. Without explicit bounds,
 its subregion is the union of its input subregions, or the full filter region for
-standard inputs and input-free primitives. Regions clip; enlarge them for shadows.
+standard inputs and input-free primitives. `feTile` also defaults to the full filter
+region; its tile origin and size come from its input's subregion. Empty tiles draw
+nothing. Regions clip; enlarge them for shadows.
 
 `colorInterpolationFilters` is inherited and defaults to `linearRGB`; `sRGB`
 selects encoded color operations and `auto` uses linear RGB. This does not change
@@ -563,7 +566,7 @@ stay on the GPU, with textures released after their last reader.
 
 Not supported: external filter references, filter URLs on CSS boxes/the outer SVG,
 URL/function lists, `BackgroundImage`/`BackgroundAlpha`/`FillPaint`/`StrokePaint`,
-`feImage`, `feTile`, `feTurbulence`, convolution or lighting primitives, and blur
+`feImage`, `feTurbulence`, convolution or lighting primitives, and blur
 edge modes other than `none`. These produce errors rather than a partial effect.
 
 ## Valle filters
