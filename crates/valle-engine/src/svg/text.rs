@@ -20,6 +20,7 @@ use crate::text::{Content, Piece, Text};
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Baseline {
     #[default]
+    Auto,
     Alphabetic,
     Middle,
     Central,
@@ -32,7 +33,8 @@ pub enum Baseline {
 impl Baseline {
     pub fn parse(value: &str) -> Result<Self, String> {
         Ok(match value.trim() {
-            "auto" | "alphabetic" => Self::Alphabetic,
+            "auto" => Self::Auto,
+            "alphabetic" => Self::Alphabetic,
             "middle" => Self::Middle,
             "central" => Self::Central,
             "hanging" => Self::Hanging,
@@ -447,6 +449,7 @@ fn subtree(
         f
     };
     let base = font(&styles[root].font);
+    let vertical = base.writing != crate::style::WritingMode::Horizontal;
     let fonts: Vec<_> = leaves
         .iter()
         .map(|leaf| font(&styles[leaf.node].font))
@@ -535,6 +538,10 @@ fn subtree(
                     address.track = Some(ancestor);
                 }
             }
+            if vertical {
+                address.absolute = [address.absolute[1], address.absolute[0].map(|v| -v)];
+                address.delta = [address.delta[1], -address.delta[0]];
+            }
             addresses.push(address);
         }
     }
@@ -552,7 +559,10 @@ fn subtree(
         for (k, glyph) in row.iter().enumerate() {
             let character = char_at[glyph.cluster as usize];
             let chunk = starts.partition_point(|s| *s <= character) - 1;
-            let advance = f64::from(row.get(k + 1).map_or(run.x[1], |g| g.x) - glyph.x);
+            let advance = f64::from(glyph.vertical_cell.map_or_else(
+                || row.get(k + 1).map_or(run.x[1], |g| g.x) - glyph.x,
+                |c| c[1],
+            ));
             glyphs.push((chunk, glyph, character, advance));
         }
     }
@@ -577,11 +587,11 @@ fn subtree(
         let sign = if rtl { -1.0 } else { 1.0 };
         let min = row
             .iter()
-            .map(|g| f64::from(g.1.x))
+            .map(|g| f64::from(g.1.vertical_cell.map_or(g.1.x, |c| c[0])))
             .fold(f64::INFINITY, f64::min);
         let max = row
             .iter()
-            .map(|g| f64::from(g.1.x) + g.3)
+            .map(|g| f64::from(g.1.vertical_cell.map_or(g.1.x, |c| c[0])) + g.3)
             .fold(f64::NEG_INFINITY, f64::max);
         let width = max - min;
         if track != previous_track
@@ -657,7 +667,16 @@ fn subtree(
             let (em, contours) = slug::contours(&text.faces()[glyph.face as usize], glyph.id)?;
             let scale = font.size as f32 / em;
             let mut path = Path::default();
-            let point = |[x, y]: [f32; 2]| [x * scale, -y * scale];
+            let origin = glyph.vertical_cell.map_or(glyph.x, |c| c[0]);
+            let point = |[x, y]: [f32; 2]| {
+                let p = [x * scale, -y * scale];
+                let p = if glyph.upright {
+                    [p[1], -p[0] * glyph.scale_x]
+                } else {
+                    p
+                };
+                [p[0] + glyph.x - origin, p[1]]
+            };
             for contour in contours {
                 if let Some(curve) = contour.first() {
                     path.0.push(Segment::Move(point(curve[0])));
@@ -673,7 +692,7 @@ fn subtree(
                 character,
                 path,
                 at: [
-                    f64::from(glyph.x) + offset[0] + shift[0],
+                    f64::from(origin) + offset[0] + shift[0],
                     f64::from(glyph.y - first) + offset[1] + shift[1] + baseline,
                 ],
                 advance,
@@ -709,7 +728,7 @@ fn subtree(
         if natural <= 0.0 {
             continue;
         }
-        let width = length.resolve(size[0]);
+        let width = length.resolve(size[usize::from(vertical)]);
         let factor = width / natural;
         let gap = (width - natural) / indices.len().saturating_sub(1).max(1) as f64;
         for (k, &i) in indices.iter().enumerate() {
@@ -756,6 +775,16 @@ fn subtree(
         .collect();
     let mut cells: HashMap<usize, Vec<[f64; 4]>> = HashMap::new();
     let mut decorations = decoration::outlines(&placed, styles, text, &tracks)?;
+    if vertical {
+        for (node, decorations) in &mut decorations {
+            if placed.iter().any(|g| g.node == *node && g.track.is_some()) {
+                continue;
+            }
+            for decoration in decorations {
+                decoration.path = decoration.path.mapped(|[x, y]| [-y, x]);
+            }
+        }
+    }
     for g in placed {
         let matrix = if let Some(n) = g.track {
             let Some((point, tangent)) = tracks[&n].point(g.at[0] + g.advance / 2.0) else {
@@ -769,6 +798,11 @@ fn subtree(
             Matrix::translate(g.at[0], g.at[1]).times(Matrix::rotate(g.angle))
         };
         let matrix = matrix.times(Matrix::affine([g.scale, 0.0, 0.0, 1.0, 0.0, 0.0]));
+        let matrix = if vertical && g.track.is_none() {
+            Matrix::rotate(90.0).times(matrix)
+        } else {
+            matrix
+        };
         let b = matrix.bounds(crate::layout::Rect {
             x: 0.0,
             y: -g.cell[0] as f32,
@@ -818,6 +852,16 @@ fn baseline_offset(
     font: &crate::style::Font,
     baseline: Baseline,
 ) -> Result<f64, String> {
+    let baseline = match baseline {
+        Baseline::Auto
+            if font.writing != crate::style::WritingMode::Horizontal
+                && font.orientation != crate::style::Orientation::Sideways =>
+        {
+            Baseline::Central
+        }
+        Baseline::Auto => Baseline::Alphabetic,
+        other => other,
+    };
     Ok(match baseline {
         Baseline::Alphabetic => 0.0,
         Baseline::Middle => f64::from(text.x_height(font)?) / 2.0,
@@ -841,6 +885,56 @@ mod tests {
     use crate::front::Inputs;
     use crate::scene::Scene;
     use crate::time::Tick;
+
+    #[test]
+    fn vertical_svg_positions_cells_and_preserves_seek_results() {
+        let source = indoc::indoc! {r#"
+            export const composition = {width:320,height:240,fps:4,duration:2};
+            export default function Scene() {
+              const {seconds} = useCurrentTime();
+              return <svg width="320" height="240" fontFamily="monospace" fontSize="20">
+                <text x="80" y="20" writingMode="vertical-rl" style={{textOrientation:"upright"}}>ABC</text>
+                <text x="140" y="20 70 120" writingMode="vertical-lr" style={{textOrientation:"upright"}}>ABC</text>
+                <text x={200 + seconds * 10} y="120" writingMode="vertical-rl" textAnchor="middle" textLength="100" lengthAdjust="spacingAndGlyphs">ABC</text>
+              </svg>;
+            }
+        "#};
+        let load = || {
+            Scene::load(
+                "vertical.motion.tsx",
+                &|_| Some(source.as_bytes().to_vec()),
+                &Inputs::default(),
+                crate::testing::fonts(),
+            )
+            .unwrap()
+        };
+        let mut scene = load();
+        let frame = scene.frame(Tick::ZERO).unwrap();
+        let cells: Vec<_> = frame
+            .styles
+            .iter()
+            .filter_map(|s| match &s.svg.as_deref()?.element {
+                Element::Shape(Shape::Text { bounds, .. }) => Some(*bounds),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(cells.len(), 3);
+        // The pinned Latin font uses a 1.362em fallback vertical advance.
+        // Explicit y positions remain physical coordinates.
+        assert!((cells[0][1] - 20.).abs() < 0.01, "{cells:?}");
+        assert!((cells[0][3] - 81.72).abs() < 0.01, "{cells:?}");
+        assert!((cells[1][1] - 20.).abs() < 0.01, "{cells:?}");
+        assert!((cells[1][3] - 127.24).abs() < 0.01, "{cells:?}");
+        assert!((cells[2][1] - 70.).abs() < 0.01, "{cells:?}");
+        assert!((cells[2][3] - 100.).abs() < 0.01, "{cells:?}");
+        for seconds in [1., 0.25, 1.75, 0.] {
+            let at = Tick::from_seconds(seconds).unwrap();
+            assert_eq!(
+                scene.frame(at).unwrap().items,
+                load().frame(at).unwrap().items
+            );
+        }
+    }
 
     #[test]
     fn changing_svg_text_direction_keeps_seek_results_independent() {

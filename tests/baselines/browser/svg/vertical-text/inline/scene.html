@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>vertical-text</title
+  ><style>
+    @font-face {
+      font-family: Latin;
+      src: url(/tests/resources/NotoSans.ttf);
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: CJK;
+      src: url(/tests/resources/NotoSansSC.ttf);
+      font-weight: 100 900;
+    }
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      width: 480px;
+      height: 300px;
+      background: white;
+    }
+    svg,
+    img {
+      display: block;
+    }
+  </style>
+  <div id="canvas">
+    <!-- prettier-ignore -->
+    <svg xmlns="http://www.w3.org/2000/svg" width="480" height="300" font-family="Latin, CJK" font-size="28" fill="#17365d">
+<path d="M50 10V280 M120 10V280 M190 10V280 M260 10V280 M330 10V280 M400 10V280" stroke="#ddd"/>
+<text x="50" y="20" writing-mode="vertical-rl">山水ABC</text>
+<text x="120" y="20" writing-mode="vertical-lr">山水ABC</text>
+<text x="190" y="20" writing-mode="vertical-rl" style="text-orientation:upright">ABC山水</text>
+<text x="260" y="20" writing-mode="vertical-rl" style="text-orientation:sideways">ABC山水</text>
+<text x="330" y="150" writing-mode="vertical-rl" text-anchor="middle">山水ABC</text>
+<text x="400" y="20 70 120" writing-mode="vertical-rl" style="text-orientation:upright">ABC</text>
+</svg>
+  </div>
+</html>

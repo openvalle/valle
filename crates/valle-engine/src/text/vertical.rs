@@ -494,6 +494,7 @@ fn layout(
                 out.glyphs.extend(c.glyphs.iter().map(|g| {
                     if c.upright {
                         Glyph {
+                            vertical_cell: Some([cursor, c.advance]),
                             x: cursor + g.y,
                             y: center - g.x,
                             upright: true,
@@ -501,6 +502,7 @@ fn layout(
                         }
                     } else {
                         Glyph {
+                            vertical_cell: Some([cursor, c.advance]),
                             x: cursor + g.x,
                             y: baseline + g.y,
                             ..*g
@@ -845,6 +847,6 @@ mod tests {
             Err(e) => e,
             Ok(mut s) => s.frame(Tick::ZERO).unwrap_err(),
         };
-        assert!(error.contains("Text and Span"), "{error}");
+        assert!(error.contains("not container layout"), "{error}");
     }
 }

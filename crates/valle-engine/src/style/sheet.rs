@@ -483,9 +483,9 @@ impl Sheet {
                 style
             }
         };
-        if style.font.writing != super::WritingMode::Horizontal && (!b.textual || b.svg.is_some()) {
+        if style.font.writing != super::WritingMode::Horizontal && !b.textual && b.svg.is_none() {
             return Err(format!(
-                "{}: vertical writing-mode is supported on Text and Span, not container or SVG layout",
+                "{}: vertical writing-mode is supported on Text, Span and SVG text, not container layout",
                 b.place
             ));
         }

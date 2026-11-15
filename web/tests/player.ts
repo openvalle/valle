@@ -52,6 +52,22 @@ const CASES: {
       Hebrew: "tests/resources/NotoSansHebrew.ttf",
     },
   },
+  {
+    entry: "tests/cases/svg/vertical-text/inline/scene.motion.tsx",
+    frames: [0],
+    nativeResources: {
+      Latin: "tests/resources/NotoSans.ttf",
+      CJK: "tests/resources/NotoSansSC.ttf",
+    },
+  },
+  {
+    entry: "tests/cases/svg/vertical-text/file/scene.motion.tsx",
+    frames: [0],
+    nativeResources: {
+      Latin: "tests/resources/NotoSans.ttf",
+      CJK: "tests/resources/NotoSansSC.ttf",
+    },
+  },
   { entry: "tests/cases/svg/filter-tile/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/filter-image/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/filter-specular/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },

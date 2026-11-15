@@ -137,6 +137,8 @@ pub struct Glyph {
     pub cluster: u32,
     /// Counter-rotate a vertical upright glyph before the paragraph turns clockwise.
     pub upright: bool,
+    /// Logical inline cell before vertical-origin offsets, for SVG character positioning.
+    pub vertical_cell: Option<[f32; 2]>,
     /// Horizontal glyph compression for combined upright text; advances are already scaled.
     pub scale_x: f32,
 }
@@ -817,6 +819,7 @@ impl Text {
                 node,
                 cluster,
                 upright: false,
+                vertical_cell: None,
                 scale_x: 1.0,
             }));
         }
@@ -990,6 +993,7 @@ impl Text {
                 node,
                 cluster: lines.string.len() as u32,
                 upright: false,
+                vertical_cell: None,
                 scale_x: 1.0,
             }));
             lines.runs.push(Run {

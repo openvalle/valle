@@ -763,6 +763,8 @@ impl Field {
         matches!(
             self,
             Field::Font
+                | Field::WritingMode
+                | Field::TextOrientation
                 | Field::XmlSpace
                 | Field::Direction
                 | Field::UnicodeBidi

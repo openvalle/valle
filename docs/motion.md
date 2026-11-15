@@ -284,9 +284,9 @@ horizontal text. These values can change over time, including on backward seeks.
 </Text>
 ```
 
-This is vertical **Text/Span** layout; vertical container layout and vertical SVG
-text are not implemented and report an error. Use flex or grid to position separate
-text blocks. `sideways-rl` and `sideways-lr` are not supported.
+Vertical container layout is not implemented and reports an error. SVG text
+also supports vertical writing with explicit positions. Use flex or grid to position
+separate Text blocks. `sideways-rl` and `sideways-lr` are not supported.
 
 Use `textCombineUpright: "all"` on a `Span` to compose its text horizontally inside
 one upright 1em cell, for example `第<Span style={{ textCombineUpright: "all" }}>12</Span>回`.
@@ -454,6 +454,13 @@ the marker's `viewBox`, reference point, orientation or scaling with stroke widt
 CSS style overrides the presentation attribute.
 
 ### SVG text
+
+SVG text accepts `writingMode="vertical-rl"` / `"vertical-lr"` and
+`style={{ textOrientation: "mixed" }}` / `"upright"` / `"sideways"`.
+The default central baseline keeps CJK glyphs upright and Latin glyphs sideways;
+font vertical forms are used when available. `x`/`y` remain physical coordinates,
+while `textAnchor` and `textLength` apply along the vertical advance. SVG does not
+wrap into columns: position subsequent columns explicitly with `tspan`.
 
 SVG text accepts `direction="ltr"` / `"rtl"` and `unicodeBidi`, including
 `normal`, `embed` and `bidi-override`. Text and spans use the same Unicode shaping

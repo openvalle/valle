@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/css-writing-modes-3/#svg-writing-mode",
+  "assertion": "Vertical SVG text uses the central baseline and vertical advances. CJK stays upright, mixed Latin rotates, explicit orientation overrides it, and text anchors and y lists address the vertical inline axis.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Chrome and Firefox agree on central baselines, mixed and explicit glyph orientation, vertical anchoring and physical y lists. WebKit uses different fallback vertical metrics. Chrome is selected after checking font origins and character positioning. Reviewed native differences follow glyph edges and subpixel font-origin rounding (4571 pixels); vertical advances, y lists and textLength are checked numerically.",
+    "pixels": {
+      "maxDifference": 232,
+      "maxPixels": 4700
+    }
+  }
+}
