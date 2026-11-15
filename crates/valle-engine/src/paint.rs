@@ -301,6 +301,10 @@ fn tiles(layer: &Layer, area: Rect, pictures: &[Picture]) -> Option<Tiles> {
     let natural = match layer.image {
         Image::Url(r) => match pictures[r as usize].natural() {
             Natural::Size(size) => Some(size),
+            Natural::Ratio(Some(ratio)) if ratio > 0.0 => {
+                let h = room[1].min(room[0] / ratio);
+                Some([h * ratio, h])
+            }
             Natural::Ratio(_) => None,
         },
         _ => None,
@@ -369,7 +373,7 @@ fn tiles(layer: &Layer, area: Rect, pictures: &[Picture]) -> Option<Tiles> {
 }
 
 /// A layer's image in `rect`, its corners rounded by `radii`, in `tiles`; nothing for `none`.
-/// An SVG file is no background yet: a frame with one fails before it paints.
+/// SVG tiles retain vector content until the renderer chooses the output pixel density.
 fn filled(
     image: &Image,
     rect: Rect,
@@ -377,6 +381,7 @@ fn filled(
     tiles: Tiles,
     pictures: &[Picture],
     pixelated: bool,
+    cache: &Cache,
 ) -> Option<Item> {
     Some(match image {
         Image::None => return None,
@@ -386,15 +391,62 @@ fn filled(
             tiles,
             ramp: gradient::ramp(g, [tiles.first.width, tiles.first.height]),
         },
-        Image::Url(r) => match pictures[*r as usize] {
+        Image::Url(r) => match &pictures[*r as usize] {
             Picture::Image { image, .. } => Item::Image {
                 rect,
                 radii,
                 tiles,
-                image,
+                image: *image,
                 pixelated,
             },
-            Picture::Svg(_) | Picture::None => return None,
+            Picture::Svg(document) => {
+                let first = tiles.first;
+                let item = if tiles.step == [None; 2] {
+                    svg::document(document, first, cache)?
+                } else {
+                    let mut cover = rect;
+                    // Patterns repeat both axes. Clip any non-repeating axis to its only tile.
+                    for k in 0..2 {
+                        if tiles.step[k].is_none() {
+                            let (start, length, at, size) = if k == 0 {
+                                (&mut cover.x, &mut cover.width, first.x, first.width)
+                            } else {
+                                (&mut cover.y, &mut cover.height, first.y, first.height)
+                            };
+                            let end = (*start + *length).min(at + size);
+                            *start = start.max(at);
+                            *length = (end - *start).max(0.0);
+                        }
+                    }
+                    let tile = Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        ..first
+                    };
+                    Item::Clip {
+                        rect: cover,
+                        radii: SQUARE,
+                        items: vec![Item::Pattern {
+                            rect: cover,
+                            matrix: Matrix::translate(first.x.into(), first.y.into()),
+                            region: [
+                                0.0,
+                                0.0,
+                                tiles.step[0].unwrap_or(first.width).into(),
+                                tiles.step[1].unwrap_or(first.height).into(),
+                            ],
+                            opacity: 1.0,
+                            items: vec![svg::document(document, tile, cache)?],
+                        }],
+                    }
+                };
+                Item::Clip {
+                    rect,
+                    radii,
+                    items: vec![item],
+                }
+            }
+            Picture::None => return None,
         },
     })
 }
@@ -1291,7 +1343,15 @@ impl Painter<'_> {
             if rect.width <= 0.0 || rect.height <= 0.0 {
                 return None;
             }
-            let image = filled(&layer.image, rect, radii, tiles, self.pictures, s.pixelated)?;
+            let image = filled(
+                &layer.image,
+                rect,
+                radii,
+                tiles,
+                self.pictures,
+                s.pixelated,
+                self.cache,
+            )?;
             Some(match layer.luminance {
                 true => Item::Filter {
                     filters: vec![Filter::Luminance],
@@ -1610,8 +1670,15 @@ impl Painter<'_> {
             else {
                 continue;
             };
-            let Some(image) = filled(&layer.image, rect, radii, tiles, pictures, s.pixelated)
-            else {
+            let Some(image) = filled(
+                &layer.image,
+                rect,
+                radii,
+                tiles,
+                pictures,
+                s.pixelated,
+                self.cache,
+            ) else {
                 continue;
             };
             let image = through(layer.clip, image);

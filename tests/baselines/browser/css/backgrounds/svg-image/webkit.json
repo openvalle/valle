@@ -1,0 +1,138 @@
+{
+  "size": [360, 200],
+  "sources": {
+    "tests/baselines/browser/css/backgrounds/svg-image/scene.html": "99debdc57ca00f86903531ebad18926a5f1fc6ecd095f2f02a52c4e755abe0f4",
+    "tests/cases/css/backgrounds/svg-image/source.svg": "0d3b36b78f715ed32d689579904dea940befe14a596a29d215559cf43e23dc60"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "tile-0",
+        "border": {
+          "x": 10,
+          "y": 10,
+          "width": 100,
+          "height": 80
+        },
+        "padding": {
+          "x": 10,
+          "y": 10,
+          "width": 100,
+          "height": 80
+        },
+        "content": {
+          "x": 10,
+          "y": 10,
+          "width": 100,
+          "height": 80
+        }
+      },
+      {
+        "key": "tile-1",
+        "border": {
+          "x": 130,
+          "y": 10,
+          "width": 100,
+          "height": 80
+        },
+        "padding": {
+          "x": 130,
+          "y": 10,
+          "width": 100,
+          "height": 80
+        },
+        "content": {
+          "x": 130,
+          "y": 10,
+          "width": 100,
+          "height": 80
+        }
+      },
+      {
+        "key": "tile-2",
+        "border": {
+          "x": 250,
+          "y": 10,
+          "width": 100,
+          "height": 80
+        },
+        "padding": {
+          "x": 250,
+          "y": 10,
+          "width": 100,
+          "height": 80
+        },
+        "content": {
+          "x": 250,
+          "y": 10,
+          "width": 100,
+          "height": 80
+        }
+      },
+      {
+        "key": "tile-3",
+        "border": {
+          "x": 10,
+          "y": 105,
+          "width": 100,
+          "height": 80
+        },
+        "padding": {
+          "x": 10,
+          "y": 105,
+          "width": 100,
+          "height": 80
+        },
+        "content": {
+          "x": 10,
+          "y": 105,
+          "width": 100,
+          "height": 80
+        }
+      },
+      {
+        "key": "tile-4",
+        "border": {
+          "x": 130,
+          "y": 105,
+          "width": 100,
+          "height": 80
+        },
+        "padding": {
+          "x": 130,
+          "y": 105,
+          "width": 100,
+          "height": 80
+        },
+        "content": {
+          "x": 130,
+          "y": 105,
+          "width": 100,
+          "height": 80
+        }
+      },
+      {
+        "key": "tile-5",
+        "border": {
+          "x": 250,
+          "y": 105,
+          "width": 100,
+          "height": 80
+        },
+        "padding": {
+          "x": 250,
+          "y": 105,
+          "width": 100,
+          "height": 80
+        },
+        "content": {
+          "x": 250,
+          "y": 105,
+          "width": 100,
+          "height": 80
+        }
+      }
+    ],
+    "lines": []
+  }
+}

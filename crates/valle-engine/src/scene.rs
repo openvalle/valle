@@ -812,20 +812,17 @@ fn contained(
     Ok(())
 }
 
-/// Stops a frame that shows an SVG file as a background or mask image, which only an Image does
-/// yet.
+/// SVG backgrounds draw as vectors; SVG mask images are not supported yet.
 fn backgrounds(template: &Template, styles: &[Style], pictures: &[Picture]) -> Result<(), Error> {
     for (i, s) in styles.iter().enumerate() {
-        for (layers, what) in [(&s.layers, "backgroundImage"), (&s.masks, "maskImage")] {
-            let svg = (layers.iter()).any(|l| {
-                matches!(l.image, gradient::Image::Url(r) if matches!(pictures[r as usize], Picture::Svg(_)))
-            });
-            if svg {
-                let at = template.nodes[i].place();
-                return Err(format!(
-                    "{at}: {what}: an SVG file shows in an <Image> only, not as an image of a box yet"
-                ));
-            }
+        let svg = s.masks.iter().any(|l| {
+            matches!(l.image, gradient::Image::Url(r) if matches!(pictures[r as usize], Picture::Svg(_)))
+        });
+        if svg {
+            let at = template.nodes[i].place();
+            return Err(format!(
+                "{at}: maskImage: an SVG file is not supported as a mask image yet"
+            ));
         }
     }
     Ok(())
@@ -1238,7 +1235,7 @@ mod tests {
     }
 
     #[test]
-    fn svg_files_show_in_images_only() {
+    fn svg_files_show_in_images_and_backgrounds() {
         big_stack(|| {
             let source = indoc! {"
             export const composition = { width: 200, height: 40, fps: 1, duration: 1 };
@@ -1296,18 +1293,27 @@ mod tests {
             ));
 
             let source = source.replace("url(resource://dot)", "url(resource://icon)");
-            let e = Scene::load(
+            let mut background = Scene::load(
                 "scenes/s.motion.tsx",
                 &files(source.clone()),
                 &Inputs::default(),
                 fonts(),
             )
-            .and_then(|mut s| s.frame(Tick(0)).map(drop))
+            .unwrap();
+            let frame = background.frame(Tick(0)).unwrap();
+            assert!(matches!(frame.items.last(), Some(Item::Clip { .. })));
+            let mask = source.replace("backgroundImage:", "maskImage:");
+            let error = Scene::load(
+                "scenes/s.motion.tsx",
+                &files(mask),
+                &Inputs::default(),
+                fonts(),
+            )
+            .and_then(|mut scene| scene.frame(Tick(0)).map(drop))
             .unwrap_err();
-            assert!(e.starts_with("scenes/s.motion.tsx:13:"), "{e}");
             assert!(
-                e.contains("backgroundImage: an SVG file shows in an <Image> only"),
-                "{e}"
+                error.contains("maskImage: an SVG file is not supported"),
+                "{error}"
             );
 
             let broken = |path: &str| match path {

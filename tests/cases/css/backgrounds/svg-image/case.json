@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/css-backgrounds-3/#the-background-size",
+  "assertion": "SVG background images preserve their intrinsic aspect ratio, scale to the requested size and use the same positioning, clipping and tiling rules as raster images.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three browsers and the native difference image. Tile positions and solid regions agree with Chrome. Remaining differences are rounded-corner and fractional tile rasterization edges (928 pixels, maximum channel delta 6).",
+    "pixels": {
+      "maxDifference": 6,
+      "maxPixels": 950
+    }
+  }
+}

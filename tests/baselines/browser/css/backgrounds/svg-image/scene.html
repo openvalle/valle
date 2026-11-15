@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+  <meta charset="utf-8" /><style>
+    body {
+      margin: 0;
+    }
+    #canvas {
+      position: relative;
+      width: 360px;
+      height: 200px;
+      background: white;
+    }
+    .tile {
+      position: absolute;
+      width: 100px;
+      height: 80px;
+      background-color: #e8edf2;
+      background-image: url(/tests/cases/css/backgrounds/svg-image/source.svg);
+      background-position: center;
+    }
+  </style>
+  <div id="canvas">
+    <div
+      class="tile"
+      data-key="tile-0"
+      style="
+        left: 10px;
+        top: 10px;
+        background-size: auto;
+        background-repeat: no-repeat;
+        border-radius: 0px;
+      "
+    ></div>
+    <div
+      class="tile"
+      data-key="tile-1"
+      style="
+        left: 130px;
+        top: 10px;
+        background-size: cover;
+        background-repeat: no-repeat;
+        border-radius: 0px;
+      "
+    ></div>
+    <div
+      class="tile"
+      data-key="tile-2"
+      style="
+        left: 250px;
+        top: 10px;
+        background-size: 40px auto;
+        background-repeat: repeat;
+        border-radius: 12px;
+      "
+    ></div>
+    <div
+      class="tile"
+      data-key="tile-3"
+      style="
+        left: 10px;
+        top: 105px;
+        background-size: 40px 20px;
+        background-repeat: space;
+        border-radius: 0px;
+      "
+    ></div>
+    <div
+      class="tile"
+      data-key="tile-4"
+      style="
+        left: 130px;
+        top: 105px;
+        background-size: 40px 20px;
+        background-repeat: repeat-x;
+        border-radius: 0px;
+      "
+    ></div>
+    <div
+      class="tile"
+      data-key="tile-5"
+      style="
+        left: 250px;
+        top: 105px;
+        background-size: 40px 20px;
+        background-repeat: round;
+        border-radius: 0px;
+      "
+    ></div>
+  </div>
+</html>

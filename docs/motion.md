@@ -351,6 +351,13 @@ content by default; `style={{ overflow: "visible" }}` shows it outside the viewp
 Nested SVG accepts transforms and can contain further nested viewports. The same
 rules apply when loading an SVG file.
 
+SVG image resources also work in `backgroundImage: "url(resource://icon)"`.
+`backgroundSize`, positioning, repeat, origin, clip, rounded corners and blending
+follow the same rules as raster backgrounds. A viewBox-only SVG supplies an
+intrinsic aspect ratio; `auto` fits that ratio inside the positioning area.
+SVG content stays vector until rendering at the output resolution. SVG files as
+`maskImage` are not supported.
+
 ### SVG patterns
 
 Use `<pattern id="dots" width={20} height={20} patternUnits="userSpaceOnUse">`
