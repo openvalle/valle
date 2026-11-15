@@ -79,6 +79,7 @@ const CASES: {
     nativeResources: { Latin: "tests/resources/NotoSans.ttf" },
   },
   { entry: "tests/cases/svg/attribute-selectors/file/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/svg/structural-selectors/file/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/filter-tile/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/filter-image/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },
   { entry: "tests/cases/svg/filter-specular/inline/scene.motion.tsx", frames: [0, 5, 2, 7, 0] },

@@ -425,7 +425,13 @@ SVG file stylesheets accept attribute selectors: `[fill]`, `[data-kind="hero"]`,
 `[id*="title"]`. Names and values are case-sensitive in SVG. Matching happens
 against the authored XML attributes, before style declarations are computed.
 
-Pseudo-classes, escaped selector identifiers, at-rules and conditional media are
+Static structural pseudo-classes are supported: `:root`, `:empty`,
+`:first-child`, `:last-child`, `:only-child`, their `-of-type` forms, and
+`:nth-child(An+B)`, `:nth-last-child(An+B)`, `:nth-of-type(An+B)` and
+`:nth-last-of-type(An+B)` (including `odd` and `even`). They count element
+siblings; `:empty` still treats whitespace text as content.
+
+Interactive pseudo-classes, escaped selector identifiers, at-rules and conditional media are
 not supported and report errors. Stylesheets are resolved when the SVG is loaded;
 there is no DOM or selector matching on every animation frame.
 

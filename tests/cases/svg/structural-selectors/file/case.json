@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/selectors-3/",
+  "assertion": "Structural selectors count only element siblings and distinguish type-specific positions. First/last, even, reverse nth, only-child/type, root and empty matching use static XML structure.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All three browser captures agree on structural selection. Circle edges have browser rasterization differences; selector unit tests independently check every supported pseudo-class and An+B parsing. The 88 differing native pixels (maximum delta 17) are confined to the circle edge.",
+    "pixels": {
+      "maxDifference": 20,
+      "maxPixels": 100
+    }
+  }
+}

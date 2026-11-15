@@ -31,6 +31,7 @@ struct Compound {
     ids: Vec<String>,
     classes: Vec<String>,
     attributes: Vec<Attribute>,
+    pseudo: Vec<Pseudo>,
 }
 
 #[derive(Clone, Copy)]
@@ -139,10 +140,17 @@ impl Selector {
                 ids: Vec::new(),
                 classes: Vec::new(),
                 attributes: Vec::new(),
+                pseudo: Vec::new(),
             };
             let mut at = 0;
             while at < token.len() {
                 let marker = token.as_bytes()[at];
+                if marker == b':' {
+                    let (pseudo, count) = Pseudo::parse(&token[at + 1..])?;
+                    compound.pseudo.push(pseudo);
+                    at += count + 1;
+                    continue;
+                }
                 if marker == b'[' {
                     let end = boundary(&token[at + 1..], ']')?
                         .ok_or("unclosed SVG attribute selector")?
@@ -201,7 +209,7 @@ impl Selector {
         self.0.iter().fold([0; 3], |[ids, classes, tags], (p, _)| {
             [
                 ids + p.ids.len(),
-                classes + p.classes.len() + p.attributes.len(),
+                classes + p.classes.len() + p.attributes.len() + p.pseudo.len(),
                 tags + usize::from(p.tag.is_some()),
             ]
         })
@@ -231,6 +239,7 @@ impl Selector {
                     .any(|c| c == class)
             })
             || compound.attributes.iter().any(|a| !a.matches(node))
+            || compound.pseudo.iter().any(|p| !p.matches(node))
         {
             return false;
         }
@@ -287,6 +296,130 @@ fn compound_end(text: &str) -> Result<usize, String> {
         return Err("unclosed SVG selector".into());
     }
     Ok(text.len())
+}
+
+enum Pseudo {
+    Root,
+    Empty,
+    Only {
+        of_type: bool,
+    },
+    Nth {
+        of_type: bool,
+        last: bool,
+        a: i64,
+        b: i64,
+    },
+}
+
+impl Pseudo {
+    fn parse(text: &str) -> Result<(Self, usize), String> {
+        let end = text
+            .find(|c: char| !(c.is_ascii_alphabetic() || c == '-'))
+            .unwrap_or(text.len());
+        let name = text[..end].to_ascii_lowercase();
+        let of_type = name.ends_with("of-type");
+        let last = name.contains("last");
+        let simple = match name.as_str() {
+            "root" => Some(Self::Root),
+            "empty" => Some(Self::Empty),
+            "only-child" | "only-of-type" => Some(Self::Only { of_type }),
+            "first-child" | "last-child" | "first-of-type" | "last-of-type" => Some(Self::Nth {
+                of_type,
+                last,
+                a: 0,
+                b: 1,
+            }),
+            _ => None,
+        };
+        if let Some(p) = simple {
+            return Ok((p, end));
+        }
+        if !matches!(
+            name.as_str(),
+            "nth-child" | "nth-last-child" | "nth-of-type" | "nth-last-of-type"
+        ) {
+            return Err(format!(
+                "SVG selector :{name} is not a static structural pseudo-class"
+            ));
+        }
+        let args = text[end..]
+            .strip_prefix('(')
+            .ok_or("nth selector needs (An+B)")?;
+        let close = args.find(')').ok_or("unclosed nth selector")?;
+        let (a, b) = nth(&args[..close])?;
+        Ok((
+            Self::Nth {
+                of_type,
+                last,
+                a,
+                b,
+            },
+            end + close + 2,
+        ))
+    }
+
+    fn matches(&self, node: Node) -> bool {
+        let (of_type, last) = match self {
+            Self::Root => return node.parent_element().is_none(),
+            Self::Empty => {
+                return !node.children().any(|n| {
+                    n.is_element() || n.is_text() && !n.text().unwrap_or_default().is_empty()
+                });
+            }
+            Self::Only { of_type } => (*of_type, false),
+            Self::Nth { of_type, last, .. } => (*of_type, *last),
+        };
+        let eligible = |n: &Node| n.is_element() && (!of_type || n.tag_name() == node.tag_name());
+        let before = node.prev_siblings().skip(1).filter(eligible).count();
+        let after = node.next_siblings().skip(1).filter(eligible).count();
+        if matches!(self, Self::Only { .. }) {
+            return before == 0 && after == 0;
+        }
+        let index = (if last { after } else { before }) as i128 + 1;
+        let Self::Nth { a, b, .. } = self else {
+            unreachable!()
+        };
+        let delta = index - i128::from(*b);
+        *a == 0 && delta == 0
+            || *a != 0 && delta % i128::from(*a) == 0 && delta / i128::from(*a) >= 0
+    }
+}
+
+fn nth(text: &str) -> Result<(i64, i64), String> {
+    let text = text.trim().to_ascii_lowercase();
+    match text.as_str() {
+        "odd" => return Ok((2, 1)),
+        "even" => return Ok((2, 0)),
+        _ => {}
+    }
+    let error = || format!("invalid An+B selector {text:?}");
+    let Some((a, b)) = text.split_once('n') else {
+        return text.parse().map(|b| (0, b)).map_err(|_| error());
+    };
+    let a = match a {
+        "" | "+" => 1,
+        "-" => -1,
+        _ => a.parse().map_err(|_| error())?,
+    };
+    let b = b.trim();
+    let b = if b.is_empty() {
+        0
+    } else {
+        let (sign, digits) = if let Some(v) = b.strip_prefix('+') {
+            ("+", v)
+        } else if let Some(v) = b.strip_prefix('-') {
+            ("-", v)
+        } else {
+            return Err(error());
+        };
+        let digits = digits.trim();
+        if digits.is_empty() || !digits.bytes().all(|c| c.is_ascii_digit()) {
+            return Err(error());
+        }
+        format!("{sign}{digits}").parse().map_err(|_| error())?
+    };
+    Ok((a, b))
 }
 
 struct Attribute {
@@ -475,6 +608,64 @@ fn comments(text: &str) -> Result<String, String> {
 mod tests {
     use super::*;
     use indoc::indoc;
+
+    #[test]
+    fn structural_selectors_count_elements_and_types_in_both_directions() {
+        let xml = roxmltree::Document::parse(r#"<svg xmlns="http://www.w3.org/2000/svg"><g id="many">text<!--comment--><rect id="a"/><circle id="b"/><rect id="c"/><rect id="d"/></g><g id="one"><rect id="e"/></g><g id="space"> </g><g id="empty"><!--comment--></g></svg>"#).unwrap();
+        for (selector, expected) in [
+            (":root", vec![""]),
+            ("#many > :first-child", vec!["a"]),
+            ("#many > :last-child", vec!["d"]),
+            ("#many > :nth-child(2n + 1)", vec!["a", "c"]),
+            ("#many > :nth-last-child(-n+2)", vec!["c", "d"]),
+            ("#many > rect:nth-of-type(2)", vec!["c"]),
+            ("#many > rect:nth-last-of-type(2)", vec!["c"]),
+            ("#many > rect:first-of-type", vec!["a"]),
+            ("#many > rect:last-of-type", vec!["d"]),
+            (":only-child", vec!["", "e"]),
+            ("#many > :only-of-type", vec!["b"]),
+            ("g:empty", vec!["empty"]),
+            ("#many > :nth-child(0n+2)", vec!["b"]),
+        ] {
+            let selector = Selector::parse(selector).unwrap();
+            let found: Vec<_> = xml
+                .descendants()
+                .filter(|n| selector.matches(*n))
+                .map(|n| n.attribute("id").unwrap_or(""))
+                .collect();
+            assert_eq!(found, expected);
+        }
+        for (value, expected) in [
+            ("odd", (2, 1)),
+            ("EVEN", (2, 0)),
+            ("-n + 3", (-1, 3)),
+            ("+2", (0, 2)),
+            ("2n-1", (2, -1)),
+        ] {
+            assert_eq!(nth(value).unwrap(), expected);
+        }
+        for value in [
+            "n中文",
+            "2 n+1",
+            "n1",
+            "n++1",
+            "n+1 2",
+            "2n of rect",
+            "1.5",
+            "999999999999999999999999",
+        ] {
+            assert!(nth(value).is_err(), "{value}");
+        }
+        for selector in [
+            ":hover",
+            ":not(rect)",
+            ":nth-child()",
+            ":nth-child(2n",
+            ":first-child(2)",
+        ] {
+            assert!(Selector::parse(selector).is_err(), "{selector}");
+        }
+    }
 
     #[test]
     fn attributes_match_exact_words_languages_and_substrings() {
