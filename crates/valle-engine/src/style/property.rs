@@ -1120,8 +1120,8 @@ mod tests {
             ("width", text("10"), "style width: 10 needs a unit: 10px"),
             (
                 "width",
-                text("1in"),
-                "style width: 1in: in is not supported; use px, em, rem, %, vw, vh, vmin or vmax",
+                text("1vq"),
+                "style width: 1vq: vq is not supported; use px, cm, mm, in, pt, pc, em, rem, %, vw, vh, vmin or vmax",
             ),
             ("padding", num(-1.0), "style padding: -1 is negative"),
             (

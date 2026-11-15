@@ -382,6 +382,11 @@ pub(super) fn sizing(s: &str, a: Accept) -> Result<Option<Sizing>, String> {
 pub(super) fn unit(n: css::Num, a: Accept) -> Result<Len, String> {
     Ok(match n.unit {
         "px" => Len::Px(n.value),
+        "in" => Len::Px(n.value * 96.0),
+        "cm" => Len::Px(n.value * (96.0 / 2.54)),
+        "mm" => Len::Px(n.value * (96.0 / 25.4)),
+        "pt" => Len::Px(n.value * (96.0 / 72.0)),
+        "pc" => Len::Px(n.value * 16.0),
         "em" => Len::Em(n.value),
         "rem" => Len::Px(n.value * REM),
         "%" if a.percent => Len::Percent(n.value),
@@ -393,7 +398,7 @@ pub(super) fn unit(n: css::Num, a: Accept) -> Result<Len, String> {
     })
 }
 
-const UNITS: &str = "px, em, rem, %, vw, vh, vmin or vmax";
+const UNITS: &str = "px, cm, mm, in, pt, pc, em, rem, %, vw, vh, vmin or vmax";
 
 /// A viewport unit. The canvas is the viewport, small, large and dynamic alike, and the inline
 /// and block axes are horizontal and vertical.
@@ -434,6 +439,25 @@ mod tests {
     use crate::testing::styles::{auto_px, error, one, px, text};
 
     #[test]
+    fn absolute_units_use_css_reference_pixels_in_lengths_and_math() {
+        for unit in ["1in", "2.54cm", "25.4mm", "72pt", "6pc"] {
+            let width = one(&[("width", text(unit))]).layout.size.width;
+            assert_eq!(width, Dimension::length(96.0), "{unit}");
+        }
+        let s = one(&[
+            ("width", text("calc(1in - 36pt)")),
+            ("padding", text("3pt")),
+            ("marginLeft", text("-0.5pc")),
+            ("fontSize", text("12pt")),
+        ]);
+        assert_eq!(s.layout.size.width, Dimension::length(48.0));
+        assert_eq!(s.layout.padding.left, px(4.0));
+        assert_eq!(s.layout.margin.left, auto_px(-8.0));
+        assert_eq!(s.font.size, 16.0);
+        assert!(error(&[("padding", text("-1pt"))]).contains("is negative"));
+    }
+
+    #[test]
     fn viewport_units_take_the_canvas() {
         let l = one(&[
             ("width", text("10vw")),
@@ -456,10 +480,9 @@ mod tests {
         assert_eq!(l.padding, padding);
         assert_eq!(l.margin.left, auto_px(-5.0));
         assert_eq!(one(&[("fontSize", text("10vw"))]).font.size, 20.0);
-        assert!(
-            error(&[("width", text("1vq"))])
-                .ends_with("1vq: vq is not supported; use px, em, rem, %, vw, vh, vmin or vmax")
-        );
+        assert!(error(&[("width", text("1vq"))]).ends_with(
+            "1vq: vq is not supported; use px, cm, mm, in, pt, pc, em, rem, %, vw, vh, vmin or vmax"
+        ));
     }
 
     #[test]
@@ -517,8 +540,8 @@ mod tests {
             ("calc((1px)", "it ends too soon"),
             ("calc(1px) 2px", "calc(1px) 2px is not a length"),
             (
-                "calc(1in)",
-                "in is not supported; use px, em, rem, %, vw, vh, vmin or vmax",
+                "calc(1vq)",
+                "vq is not supported; use px, cm, mm, in, pt, pc, em, rem, %, vw, vh, vmin or vmax",
             ),
         ] {
             let got = error(&[("width", text(bad))]);

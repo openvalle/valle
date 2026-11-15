@@ -147,6 +147,10 @@ HTML tags (`div`, `span`, `img`, `h1`…) are errors that name the tag to use in
 `borderRadius`. Numbers are pixels. `className` takes Tailwind classes (v4), including
 arbitrary values such as `w-[340px]`; both can be used together, `style` winning.
 
+Lengths also accept `cm`, `mm`, `in`, `pt` and `pc`, including inside `calc()`.
+They use CSS reference pixels: `1in = 96px = 2.54cm = 25.4mm = 72pt = 6pc`.
+Output resolution scales the result; these units do not read screen DPI.
+
 Supported, among others:
 
 - Layout: `display` `flex`, `grid`, `block`, `none`; flexbox and grid properties, `gap`,
@@ -176,7 +180,7 @@ requires a flex/grid parent or an out-of-flow box. `boxSizing: initial` means
 `content-box`, although Valle's default element style is `border-box`.
 
 Not supported: CSS variables (use JavaScript constants), `@keyframes` and CSS transitions
-(animate with values over time), `position: fixed`/`sticky`, hover and other states. An
+(animate with values over time), `position: sticky`, hover and other states. An
 unsupported property or class is an error that says so.
 
 `vectorEffect="non-scaling-stroke"` keeps stroke widths and dash lengths in the outer

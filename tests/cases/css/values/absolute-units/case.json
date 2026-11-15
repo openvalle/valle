@@ -1,0 +1,137 @@
+{
+  "spec": "https://www.w3.org/TR/CSS2/syndata.html#length-units",
+  "assertion": "Absolute units resolve to CSS reference pixels, including mixed-unit calc; each left bar equals its independently sized pixel control.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All three reviewed browser captures agree exactly. The six independently calculated widths are 96, 96, 96, 96, 96 and 48 CSS pixels; the right-hand bars are pixel-sized controls."
+  },
+  "layout": [
+    {
+      "key": "bar0",
+      "border": {
+        "x": 12,
+        "y": 12,
+        "width": 96,
+        "height": 12
+      },
+      "padding": {
+        "x": 12,
+        "y": 12,
+        "width": 96,
+        "height": 12
+      },
+      "content": {
+        "x": 12,
+        "y": 12,
+        "width": 96,
+        "height": 12
+      }
+    },
+    {
+      "key": "bar1",
+      "border": {
+        "x": 12,
+        "y": 36,
+        "width": 96,
+        "height": 12
+      },
+      "padding": {
+        "x": 12,
+        "y": 36,
+        "width": 96,
+        "height": 12
+      },
+      "content": {
+        "x": 12,
+        "y": 36,
+        "width": 96,
+        "height": 12
+      }
+    },
+    {
+      "key": "bar2",
+      "border": {
+        "x": 12,
+        "y": 60,
+        "width": 96,
+        "height": 12
+      },
+      "padding": {
+        "x": 12,
+        "y": 60,
+        "width": 96,
+        "height": 12
+      },
+      "content": {
+        "x": 12,
+        "y": 60,
+        "width": 96,
+        "height": 12
+      }
+    },
+    {
+      "key": "bar3",
+      "border": {
+        "x": 12,
+        "y": 84,
+        "width": 96,
+        "height": 12
+      },
+      "padding": {
+        "x": 12,
+        "y": 84,
+        "width": 96,
+        "height": 12
+      },
+      "content": {
+        "x": 12,
+        "y": 84,
+        "width": 96,
+        "height": 12
+      }
+    },
+    {
+      "key": "bar4",
+      "border": {
+        "x": 12,
+        "y": 108,
+        "width": 96,
+        "height": 12
+      },
+      "padding": {
+        "x": 12,
+        "y": 108,
+        "width": 96,
+        "height": 12
+      },
+      "content": {
+        "x": 12,
+        "y": 108,
+        "width": 96,
+        "height": 12
+      }
+    },
+    {
+      "key": "bar5",
+      "border": {
+        "x": 12,
+        "y": 132,
+        "width": 48,
+        "height": 12
+      },
+      "padding": {
+        "x": 12,
+        "y": 132,
+        "width": 48,
+        "height": 12
+      },
+      "content": {
+        "x": 12,
+        "y": 132,
+        "width": 48,
+        "height": 12
+      }
+    }
+  ]
+}

@@ -1,0 +1,146 @@
+<!doctype html>
+<html>
+  <meta charset="utf-8" /><title>Absolute CSS units</title
+  ><style>
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 240px;
+      height: 160px;
+      background: white;
+    }
+  </style>
+  <div id="canvas">
+    <div
+      data-key="bar0"
+      style="
+        position: absolute;
+        left: 12px;
+        top: 12px;
+        width: 1in;
+        height: 9pt;
+        background: #17365d;
+      "
+    ></div>
+    <div
+      style="
+        position: absolute;
+        left: 132px;
+        top: 12px;
+        width: 96px;
+        height: 12px;
+        background: #17365d;
+      "
+    ></div>
+    <div
+      data-key="bar1"
+      style="
+        position: absolute;
+        left: 12px;
+        top: 36px;
+        width: 2.54cm;
+        height: 9pt;
+        background: #2878b8;
+      "
+    ></div>
+    <div
+      style="
+        position: absolute;
+        left: 132px;
+        top: 36px;
+        width: 96px;
+        height: 12px;
+        background: #2878b8;
+      "
+    ></div>
+    <div
+      data-key="bar2"
+      style="
+        position: absolute;
+        left: 12px;
+        top: 60px;
+        width: 25.4mm;
+        height: 9pt;
+        background: #d06030;
+      "
+    ></div>
+    <div
+      style="
+        position: absolute;
+        left: 132px;
+        top: 60px;
+        width: 96px;
+        height: 12px;
+        background: #d06030;
+      "
+    ></div>
+    <div
+      data-key="bar3"
+      style="
+        position: absolute;
+        left: 12px;
+        top: 84px;
+        width: 72pt;
+        height: 9pt;
+        background: #31906b;
+      "
+    ></div>
+    <div
+      style="
+        position: absolute;
+        left: 132px;
+        top: 84px;
+        width: 96px;
+        height: 12px;
+        background: #31906b;
+      "
+    ></div>
+    <div
+      data-key="bar4"
+      style="
+        position: absolute;
+        left: 12px;
+        top: 108px;
+        width: 6pc;
+        height: 9pt;
+        background: #8050a0;
+      "
+    ></div>
+    <div
+      style="
+        position: absolute;
+        left: 132px;
+        top: 108px;
+        width: 96px;
+        height: 12px;
+        background: #8050a0;
+      "
+    ></div>
+    <div
+      data-key="bar5"
+      style="
+        position: absolute;
+        left: 12px;
+        top: 132px;
+        width: calc(1in - 36pt);
+        height: 9pt;
+        background: #17365d;
+      "
+    ></div>
+    <div
+      style="
+        position: absolute;
+        left: 132px;
+        top: 132px;
+        width: 48px;
+        height: 12px;
+        background: #17365d;
+      "
+    ></div>
+  </div>
+</html>
