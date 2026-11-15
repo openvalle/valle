@@ -1,0 +1,431 @@
+{
+  "spec": "https://www.w3.org/TR/css-writing-modes-3/#block-flow",
+  "assertion": "Grid columns follow the inline axis and rows the block axis, with spanning, fractions, gaps, RTL and an orthogonal aspect-ratio item.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Chrome, Firefox and WebKit agree on the visible box geometry. Reviewed native images and differences; rectangles require exact pixels and box measurements."
+  },
+  "layout": [
+    {
+      "key": "canvas/g0",
+      "border": {
+        "x": 12,
+        "y": 12,
+        "width": 280,
+        "height": 148
+      },
+      "padding": {
+        "x": 14,
+        "y": 14,
+        "width": 276,
+        "height": 144
+      },
+      "content": {
+        "x": 24,
+        "y": 24,
+        "width": 256,
+        "height": 124
+      }
+    },
+    {
+      "key": "canvas/g0/g0-0",
+      "border": {
+        "x": 238,
+        "y": 24,
+        "width": 42,
+        "height": 125
+      },
+      "padding": {
+        "x": 238,
+        "y": 24,
+        "width": 42,
+        "height": 125
+      },
+      "content": {
+        "x": 238,
+        "y": 24,
+        "width": 42,
+        "height": 125
+      }
+    },
+    {
+      "key": "canvas/g0/g0-1",
+      "border": {
+        "x": 68,
+        "y": 24,
+        "width": 162,
+        "height": 36
+      },
+      "padding": {
+        "x": 68,
+        "y": 24,
+        "width": 162,
+        "height": 36
+      },
+      "content": {
+        "x": 68,
+        "y": 24,
+        "width": 162,
+        "height": 36
+      }
+    },
+    {
+      "key": "canvas/g0/g0-2",
+      "border": {
+        "x": 68,
+        "y": 68,
+        "width": 162,
+        "height": 81
+      },
+      "padding": {
+        "x": 68,
+        "y": 68,
+        "width": 162,
+        "height": 81
+      },
+      "content": {
+        "x": 68,
+        "y": 68,
+        "width": 162,
+        "height": 81
+      }
+    },
+    {
+      "key": "canvas/g0/g0-3",
+      "border": {
+        "x": 24,
+        "y": 24,
+        "width": 36,
+        "height": 36
+      },
+      "padding": {
+        "x": 24,
+        "y": 24,
+        "width": 36,
+        "height": 36
+      },
+      "content": {
+        "x": 24,
+        "y": 24,
+        "width": 36,
+        "height": 36
+      }
+    },
+    {
+      "key": "canvas/g1",
+      "border": {
+        "x": 312,
+        "y": 12,
+        "width": 280,
+        "height": 148
+      },
+      "padding": {
+        "x": 314,
+        "y": 14,
+        "width": 276,
+        "height": 144
+      },
+      "content": {
+        "x": 324,
+        "y": 24,
+        "width": 256,
+        "height": 124
+      }
+    },
+    {
+      "key": "canvas/g1/g1-0",
+      "border": {
+        "x": 324,
+        "y": 24,
+        "width": 42,
+        "height": 125
+      },
+      "padding": {
+        "x": 324,
+        "y": 24,
+        "width": 42,
+        "height": 125
+      },
+      "content": {
+        "x": 324,
+        "y": 24,
+        "width": 42,
+        "height": 125
+      }
+    },
+    {
+      "key": "canvas/g1/g1-1",
+      "border": {
+        "x": 374,
+        "y": 24,
+        "width": 162,
+        "height": 36
+      },
+      "padding": {
+        "x": 374,
+        "y": 24,
+        "width": 162,
+        "height": 36
+      },
+      "content": {
+        "x": 374,
+        "y": 24,
+        "width": 162,
+        "height": 36
+      }
+    },
+    {
+      "key": "canvas/g1/g1-2",
+      "border": {
+        "x": 374,
+        "y": 68,
+        "width": 162,
+        "height": 81
+      },
+      "padding": {
+        "x": 374,
+        "y": 68,
+        "width": 162,
+        "height": 81
+      },
+      "content": {
+        "x": 374,
+        "y": 68,
+        "width": 162,
+        "height": 81
+      }
+    },
+    {
+      "key": "canvas/g1/g1-3",
+      "border": {
+        "x": 544,
+        "y": 24,
+        "width": 36,
+        "height": 36
+      },
+      "padding": {
+        "x": 544,
+        "y": 24,
+        "width": 36,
+        "height": 36
+      },
+      "content": {
+        "x": 544,
+        "y": 24,
+        "width": 36,
+        "height": 36
+      }
+    },
+    {
+      "key": "canvas/g2",
+      "border": {
+        "x": 12,
+        "y": 180,
+        "width": 280,
+        "height": 148
+      },
+      "padding": {
+        "x": 14,
+        "y": 182,
+        "width": 276,
+        "height": 144
+      },
+      "content": {
+        "x": 24,
+        "y": 192,
+        "width": 256,
+        "height": 124
+      }
+    },
+    {
+      "key": "canvas/g2/g2-0",
+      "border": {
+        "x": 238,
+        "y": 191,
+        "width": 42,
+        "height": 125
+      },
+      "padding": {
+        "x": 238,
+        "y": 191,
+        "width": 42,
+        "height": 125
+      },
+      "content": {
+        "x": 238,
+        "y": 191,
+        "width": 42,
+        "height": 125
+      }
+    },
+    {
+      "key": "canvas/g2/g2-1",
+      "border": {
+        "x": 68,
+        "y": 280,
+        "width": 162,
+        "height": 36
+      },
+      "padding": {
+        "x": 68,
+        "y": 280,
+        "width": 162,
+        "height": 36
+      },
+      "content": {
+        "x": 68,
+        "y": 280,
+        "width": 162,
+        "height": 36
+      }
+    },
+    {
+      "key": "canvas/g2/g2-2",
+      "border": {
+        "x": 68,
+        "y": 191,
+        "width": 162,
+        "height": 81
+      },
+      "padding": {
+        "x": 68,
+        "y": 191,
+        "width": 162,
+        "height": 81
+      },
+      "content": {
+        "x": 68,
+        "y": 191,
+        "width": 162,
+        "height": 81
+      }
+    },
+    {
+      "key": "canvas/g2/g2-3",
+      "border": {
+        "x": 24,
+        "y": 280,
+        "width": 36,
+        "height": 36
+      },
+      "padding": {
+        "x": 24,
+        "y": 280,
+        "width": 36,
+        "height": 36
+      },
+      "content": {
+        "x": 24,
+        "y": 280,
+        "width": 36,
+        "height": 36
+      }
+    },
+    {
+      "key": "canvas/g3",
+      "border": {
+        "x": 312,
+        "y": 180,
+        "width": 280,
+        "height": 148
+      },
+      "padding": {
+        "x": 314,
+        "y": 182,
+        "width": 276,
+        "height": 144
+      },
+      "content": {
+        "x": 324,
+        "y": 192,
+        "width": 256,
+        "height": 124
+      }
+    },
+    {
+      "key": "canvas/g3/g3-0",
+      "border": {
+        "x": 324,
+        "y": 191,
+        "width": 42,
+        "height": 125
+      },
+      "padding": {
+        "x": 324,
+        "y": 191,
+        "width": 42,
+        "height": 125
+      },
+      "content": {
+        "x": 324,
+        "y": 191,
+        "width": 42,
+        "height": 125
+      }
+    },
+    {
+      "key": "canvas/g3/g3-1",
+      "border": {
+        "x": 374,
+        "y": 280,
+        "width": 162,
+        "height": 36
+      },
+      "padding": {
+        "x": 374,
+        "y": 280,
+        "width": 162,
+        "height": 36
+      },
+      "content": {
+        "x": 374,
+        "y": 280,
+        "width": 162,
+        "height": 36
+      }
+    },
+    {
+      "key": "canvas/g3/g3-2",
+      "border": {
+        "x": 374,
+        "y": 191,
+        "width": 162,
+        "height": 81
+      },
+      "padding": {
+        "x": 374,
+        "y": 191,
+        "width": 162,
+        "height": 81
+      },
+      "content": {
+        "x": 374,
+        "y": 191,
+        "width": 162,
+        "height": 81
+      }
+    },
+    {
+      "key": "canvas/g3/g3-3",
+      "border": {
+        "x": 544,
+        "y": 280,
+        "width": 36,
+        "height": 36
+      },
+      "padding": {
+        "x": 544,
+        "y": 280,
+        "width": 36,
+        "height": 36
+      },
+      "content": {
+        "x": 544,
+        "y": 280,
+        "width": 36,
+        "height": 36
+      }
+    }
+  ]
+}

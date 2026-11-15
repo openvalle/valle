@@ -1,0 +1,129 @@
+<!doctype html><meta charset="utf-8" /><title>Vertical containers and text</title
+><style>
+  @font-face {
+    font-family: CJK;
+    src: url("/tests/resources/NotoSansSC.ttf");
+  }
+  body {
+    margin: 0;
+  }
+  * {
+    box-sizing: border-box;
+  }
+</style>
+<div id="canvas" style="position: relative; width: 604px; height: 268px; background: white">
+  <div
+    data-key="p0"
+    style="
+      position: absolute;
+      left: 12px;
+      top: 12px;
+      width: 280px;
+      height: 244px;
+      padding: 10px;
+      border: 2px solid #17365d;
+      background-color: #eef3f8;
+      writing-mode: vertical-rl;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: start;
+      font-family: CJK;
+      font-size: 20px;
+      line-height: 28px;
+    "
+  >
+    <div
+      data-key="p0/vertical"
+      style="
+        width: 60px;
+        height: 200px;
+        padding: 4px;
+        background-color: #c6d6e6;
+        color: #17365d;
+        flex-shrink: 0;
+      "
+    >
+      春风<span style="padding: 2%; border: 1px solid #da803d; color: #245b9d">山水</span>长天
+    </div>
+    <div
+      data-key="p0/horizontal"
+      style="
+        writing-mode: horizontal-tb;
+        width: 100px;
+        height: 60px;
+        background-color: #e6d9c6;
+        font-size: 18px;
+        line-height: 24px;
+        flex-shrink: 0;
+      "
+    >
+      横排 ABC
+    </div>
+    <svg
+      data-key="p0/svg"
+      viewBox="0 0 20 10"
+      style="height: 30px; align-self: center; flex-shrink: 0"
+    >
+      <rect width="20" height="10" fill="#3b856c" />
+      <circle cx="5" cy="5" r="3" fill="white" />
+    </svg>
+  </div>
+  <div
+    data-key="p1"
+    style="
+      position: absolute;
+      left: 312px;
+      top: 12px;
+      width: 280px;
+      height: 244px;
+      padding: 10px;
+      border: 2px solid #17365d;
+      background-color: #eef3f8;
+      writing-mode: vertical-lr;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: start;
+      font-family: CJK;
+      font-size: 20px;
+      line-height: 28px;
+    "
+  >
+    <div
+      data-key="p1/vertical"
+      style="
+        width: 60px;
+        height: 200px;
+        padding: 4px;
+        background-color: #c6d6e6;
+        color: #17365d;
+        flex-shrink: 0;
+      "
+    >
+      春风<span style="padding: 2%; border: 1px solid #da803d; color: #245b9d">山水</span>长天
+    </div>
+    <div
+      data-key="p1/horizontal"
+      style="
+        writing-mode: horizontal-tb;
+        width: 100px;
+        height: 60px;
+        background-color: #e6d9c6;
+        font-size: 18px;
+        line-height: 24px;
+        flex-shrink: 0;
+      "
+    >
+      横排 ABC
+    </div>
+    <svg
+      data-key="p1/svg"
+      viewBox="0 0 20 10"
+      style="height: 30px; align-self: center; flex-shrink: 0"
+    >
+      <rect width="20" height="10" fill="#3b856c" />
+      <circle cx="5" cy="5" r="3" fill="white" />
+    </svg>
+  </div>
+</div>

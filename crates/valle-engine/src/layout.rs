@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 pub mod inline;
+mod writing;
 
 use taffy::{
     AvailableSpace, BlockContext, BoxGenerationMode, BoxSizing, Cache, CacheTree, Contain,
@@ -155,11 +156,31 @@ pub fn layout(
             });
         }
     }
+    // Horizontal scenes keep borrowing their original styles. Only a vertical scene needs
+    // projected styles; every node may be read in the axes of its containing block.
+    let vertical = styles.iter().any(|s| writing::vertical(s.font.writing));
+    let projected = vertical.then(|| {
+        (0..=n)
+            .map(|i| {
+                let s = roots[i].as_ref().unwrap_or_else(|| &styles[i].layout);
+                [
+                    writing::style(s, WritingMode::VerticalRl),
+                    writing::style(s, WritingMode::VerticalLr),
+                ]
+            })
+            .collect()
+    });
     let mut tree = Tree {
         template,
         styles,
         calcs: styles.iter().flat_map(|s| &s.calcs).collect(),
         roots,
+        projected,
+        axis: WritingMode::Horizontal,
+        current: NodeId::from(n),
+        local: None,
+        canvas,
+        placements: vec![WritingMode::Horizontal; n + 1],
         replaced,
         children,
         contents: &contents,
@@ -180,13 +201,21 @@ pub fn layout(
         if let Some(source) = style.source {
             let size = tree.layouts[m].size;
             let size = [size.width, size.height];
-            tree.roots[source.root] = Some(root(size));
+            let style = root(size);
+            if let Some(projected) = &mut tree.projected {
+                projected[source.root] = [
+                    writing::style(&style, WritingMode::VerticalRl),
+                    writing::style(&style, WritingMode::VerticalLr),
+                ];
+            }
+            tree.roots[source.root] = Some(style);
             compute_root_layout(&mut tree, NodeId::from(source.root), available(size));
         }
     }
     let Tree {
         children,
         layouts,
+        placements,
         hoisted,
         failed,
         ..
@@ -224,7 +253,7 @@ pub fn layout(
         let flow = children[id].iter().map(|&c| usize::from(c)).filter(in_flow);
         for c in flow.chain(hoisted[id].iter().map(|&h| usize::from(h))) {
             if shown(c) {
-                let l = layouts[c].location;
+                let l = writing::location(&layouts[c], layouts[id].size, placements[c]);
                 origins[c] = Some([at[0] + l.x, at[1] + l.y]);
             }
         }
@@ -251,15 +280,15 @@ pub fn layout(
             content,
         };
         if let Some(c) = &contents[i] {
-            let resolved = c.with_inline_basis(content.width);
-            let c = resolved.as_ref().unwrap_or(c);
-            let place = |e| format!("{}: {e}", template.nodes[i].place());
             let vertical = c.font.writing != WritingMode::Horizontal;
             let inline = if vertical {
                 content.height
             } else {
                 content.width
             };
+            let resolved = c.with_inline_basis(inline);
+            let c = resolved.as_ref().unwrap_or(c);
+            let place = |e| format!("{}: {e}", template.nodes[i].place());
             let mut laid = text.lines(c, inline).map_err(place)?;
             if c.font.writing == WritingMode::VerticalLr {
                 for (k, b) in laid.boxes.iter_mut().enumerate() {
@@ -579,6 +608,14 @@ struct Tree<'a> {
     /// The style that takes the place of a node's own: each root's, the canvas's and the masks'
     /// sources', and each image's, as replaced content.
     roots: Vec<Option<taffy::Style>>,
+    projected: Option<Vec<[taffy::Style; 2]>>,
+    axis: WritingMode,
+    current: NodeId,
+    /// Percentage padding/margins retain the containing block's inline basis across orthogonal
+    /// flow boundaries. Only the currently computing node needs this resolved override.
+    local: Option<(NodeId, taffy::Style)>,
+    canvas: [f32; 2],
+    placements: Vec<WritingMode>,
     /// What each image or `<svg>` sizes its box by.
     replaced: Vec<Option<Natural>>,
     /// Each node's children in the order it lays them out, the canvas's last.
@@ -599,6 +636,18 @@ struct Tree<'a> {
 impl Tree<'_> {
     fn style(&self, id: NodeId) -> &taffy::Style {
         let i = usize::from(id);
+        if let Some((node, style)) = &self.local
+            && *node == id
+        {
+            return style;
+        }
+        if let Some(projected) = &self.projected {
+            match self.axis {
+                WritingMode::VerticalRl => return &projected[i][0],
+                WritingMode::VerticalLr => return &projected[i][1],
+                WritingMode::Horizontal => {}
+            }
+        }
         match &self.roots[i] {
             Some(root) => root,
             None => &self.styles[i].layout,
@@ -619,7 +668,50 @@ impl Tree<'_> {
         if inputs.run_mode == RunMode::PerformHiddenLayout {
             return compute_hidden_layout(self, id);
         }
-        compute_cached_layout(self, id, inputs, |tree, id, inputs| {
+        let previous_node = self.current;
+        self.current = id;
+        let parent = self.axis;
+        let own = self
+            .styles
+            .get(usize::from(id))
+            .map_or(WritingMode::Horizontal, |s| s.font.writing);
+        let orthogonal = writing::vertical(parent) != writing::vertical(own);
+        let previous = self.local.take();
+        self.axis = own;
+        if orthogonal {
+            let mut style = self.style(id).clone();
+            let basis = inputs.parent_size.width;
+            let calc = |h, basis| self.calc(h, basis);
+            style.padding = style
+                .padding
+                .map(|p| LengthPercentage::length(p.resolve_or_zero(basis, calc)));
+            style.margin = style.margin.map(|p| {
+                p.maybe_resolve(basis, calc)
+                    .map_or(LengthPercentageAuto::auto(), LengthPercentageAuto::length)
+            });
+            self.local = Some((id, style));
+        }
+        let mut inputs = if orthogonal {
+            inputs.transpose()
+        } else {
+            inputs
+        };
+        if own != parent {
+            inputs.vertical_margins_are_collapsible = taffy::Line::FALSE;
+        }
+        // An orthogonal flow with no definite inline available space uses its containing block's
+        // size, or the canvas as the initial containing block (Writing Modes 3, section 7.3).
+        if orthogonal && inputs.available_space.width == AvailableSpace::MaxContent {
+            let fallback = if writing::vertical(own) {
+                self.canvas[1]
+            } else {
+                self.canvas[0]
+            };
+            inputs.available_space.width =
+                AvailableSpace::Definite(inputs.parent_size.width.unwrap_or(fallback));
+        }
+        let block = if own == parent { block } else { None };
+        let out = compute_cached_layout(self, id, inputs, |tree, id, inputs| {
             let i = usize::from(id);
             let parent = !tree.children[i].is_empty();
             let text = tree.contents.get(i).is_some_and(Option::is_some);
@@ -637,7 +729,11 @@ impl Tree<'_> {
                 compute_oof_layout(tree, id, &mut out);
             }
             out
-        })
+        });
+        self.axis = parent;
+        self.current = previous_node;
+        self.local = previous;
+        writing::output(out, own, parent)
     }
 
     /// A box without children: text measured as Taffy asks and aligned on its first baseline, an
@@ -652,7 +748,9 @@ impl Tree<'_> {
             let calc = |h, basis| self.calc(h, basis);
             return compute_leaf_layout(inputs, style, calc, |_, _| Size::ZERO);
         };
-        let layout = &style.layout;
+        let projected = (writing::vertical(self.axis) || self.local.is_some())
+            .then(|| self.style(NodeId::from(i)).clone());
+        let layout = projected.as_ref().unwrap_or(&style.layout);
         let Tree {
             template,
             calcs,
@@ -665,12 +763,7 @@ impl Tree<'_> {
             failed.get_or_insert_with(|| format!("{}: {e}", template.nodes[i].place()));
         };
         let mut out = compute_leaf_layout(inputs, layout, calc, |known, available| {
-            let vertical = c.font.writing != WritingMode::Horizontal;
-            let (length, space) = if vertical {
-                (known.height, available.height)
-            } else {
-                (known.width, available.width)
-            };
+            let (length, space) = (known.width, available.width);
             let basis = known.width.unwrap_or(match available.width {
                 AvailableSpace::Definite(w) => w,
                 _ => 0.0,
@@ -683,13 +776,10 @@ impl Tree<'_> {
                 (None, AvailableSpace::MaxContent) => text.measure(c, None),
             };
             match measured {
-                Ok([w, h]) => {
-                    let [w, h] = if vertical { [h, w] } else { [w, h] };
-                    Size {
-                        width: known.width.unwrap_or(w),
-                        height: known.height.unwrap_or(h),
-                    }
-                }
+                Ok([w, h]) => Size {
+                    width: known.width.unwrap_or(w),
+                    height: known.height.unwrap_or(h),
+                },
                 Err(e) => {
                     fail(e);
                     Size::ZERO
@@ -719,6 +809,13 @@ impl Tree<'_> {
     /// container or its style, and on the other as its natural ratio has it, or its natural size.
     /// One with a ratio but no size takes the width there is, and without a ratio 300 × 150 px.
     fn replaced(&self, i: usize, inputs: LayoutInput, r: Natural) -> LayoutOutput {
+        let r = match r {
+            Natural::Size([w, h]) if writing::vertical(self.axis) => Natural::Size([h, w]),
+            Natural::Ratio(Some(r)) if writing::vertical(self.axis) => {
+                Natural::Ratio(Some(r.recip()))
+            }
+            _ => r,
+        };
         let style = self.style(NodeId::from(i));
         let calc = |handle, basis| self.calc(handle, basis);
         let width = inputs.parent_size.width;
@@ -751,6 +848,7 @@ impl Tree<'_> {
                     };
                     [w, w / ratio]
                 }
+                Natural::Ratio(None) if writing::vertical(self.axis) => [150.0, 300.0],
                 Natural::Ratio(None) => [300.0, 150.0],
             };
             let ratio = match r {
@@ -807,11 +905,14 @@ impl LayoutPartialTree for Tree<'_> {
         Container {
             style: self.style(id),
             all,
+            orthogonal: false,
+            alignment: [None, None],
         }
     }
 
     fn set_unrounded_layout(&mut self, id: NodeId, layout: &taffy::Layout) {
-        self.layouts[usize::from(id)] = *layout;
+        self.layouts[usize::from(id)] = writing::layout(layout, self.axis);
+        self.placements[usize::from(id)] = self.axis;
     }
 
     fn resolve_calc_value(&self, handle: *const (), basis: f32) -> f32 {
@@ -828,6 +929,8 @@ impl LayoutPartialTree for Tree<'_> {
 struct Container<'a> {
     style: &'a taffy::Style,
     all: bool,
+    orthogonal: bool,
+    alignment: [Option<taffy::AlignSelf>; 2],
 }
 
 impl CoreStyle for Container<'_> {
@@ -845,7 +948,7 @@ impl CoreStyle for Container<'_> {
     }
 
     fn is_block(&self) -> bool {
-        self.style.is_block()
+        !self.orthogonal && self.style.is_block()
     }
 
     fn is_compressible_replaced(&self) -> bool {
@@ -881,7 +984,13 @@ impl CoreStyle for Container<'_> {
     }
 
     fn size(&self) -> Size<Dimension> {
-        self.style.size()
+        let mut size = self.style.size();
+        // The automatic block size of an orthogonal flow is content-sized, rather than
+        // stretched along the containing block's inline axis.
+        if self.orthogonal && size.width.is_auto() {
+            size.width = Dimension::fit_content();
+        }
+        size
     }
 
     fn min_size(&self) -> Size<LengthPercentageAuto> {
@@ -910,6 +1019,36 @@ impl CoreStyle for Container<'_> {
 
     fn contain(&self) -> Contain {
         self.style.contain()
+    }
+}
+
+impl taffy::BlockItemStyle for Container<'_> {
+    fn is_table(&self) -> bool {
+        self.style.item_is_table
+    }
+    fn align_self(&self) -> Option<taffy::AlignSelf> {
+        self.style.align_self
+    }
+    fn justify_self(&self) -> Option<taffy::AlignSelf> {
+        self.style.justify_self
+    }
+    fn align_content(&self) -> taffy::AlignContent {
+        self.style.align_content
+    }
+}
+
+impl taffy::GridItemStyle for Container<'_> {
+    fn grid_row(&self) -> taffy::Line<taffy::GridPlacement<String>> {
+        self.style.grid_row.clone()
+    }
+    fn grid_column(&self) -> taffy::Line<taffy::GridPlacement<String>> {
+        self.style.grid_column.clone()
+    }
+    fn align_self(&self) -> Option<taffy::AlignSelf> {
+        self.alignment[0].or(self.style.align_self)
+    }
+    fn justify_self(&self) -> Option<taffy::AlignSelf> {
+        self.alignment[1].or(self.style.justify_self)
     }
 }
 
@@ -956,7 +1095,7 @@ impl LayoutBlockContainer for Tree<'_> {
     where
         Self: 'a;
     type BlockItemStyle<'a>
-        = &'a taffy::Style
+        = Container<'a>
     where
         Self: 'a;
 
@@ -964,8 +1103,14 @@ impl LayoutBlockContainer for Tree<'_> {
         self.style(id)
     }
 
-    fn get_block_child_style(&self, id: NodeId) -> &taffy::Style {
-        self.style(id)
+    fn get_block_child_style(&self, id: NodeId) -> Container<'_> {
+        let own = self.styles[usize::from(id)].font.writing;
+        Container {
+            style: self.style(id),
+            all: false,
+            orthogonal: writing::vertical(own) != writing::vertical(self.axis),
+            alignment: [None, None],
+        }
     }
 
     fn compute_block_child_layout(
@@ -984,7 +1129,7 @@ impl LayoutGridContainer for Tree<'_> {
     where
         Self: 'a;
     type GridItemStyle<'a>
-        = &'a taffy::Style
+        = Container<'a>
     where
         Self: 'a;
 
@@ -992,8 +1137,34 @@ impl LayoutGridContainer for Tree<'_> {
         self.style(id)
     }
 
-    fn get_grid_child_style(&self, id: NodeId) -> &taffy::Style {
-        self.style(id)
+    fn get_grid_child_style(&self, id: NodeId) -> Container<'_> {
+        let style = self.style(id);
+        let own = self.styles[usize::from(id)].font.writing;
+        let orthogonal = writing::vertical(own) != writing::vertical(self.axis);
+        let mut alignment = [None, None];
+        if orthogonal && style.aspect_ratio.is_some() && !style.item_is_replaced {
+            let parent = self.style(self.current);
+            let align = style.align_self.unwrap_or(parent.align_items);
+            let justify = style.justify_self.unwrap_or(parent.justify_items);
+            // With a preferred ratio, normal stretches the item's own inline axis and derives
+            // its block size. Taffy's default assumes that inline axis is the grid's x axis.
+            if align.keyword == taffy::AlignItemsKeyword::Normal {
+                alignment[0] = Some(if style.size.height.is_auto() {
+                    taffy::AlignSelf::STRETCH
+                } else {
+                    taffy::AlignSelf::START
+                });
+            }
+            if justify.keyword == taffy::AlignItemsKeyword::Normal {
+                alignment[1] = Some(taffy::AlignSelf::START);
+            }
+        }
+        Container {
+            style,
+            all: false,
+            orthogonal: false,
+            alignment,
+        }
     }
 
     fn set_detailed_grid_info(&mut self, id: NodeId, info: DetailedGridInfo<String>) {
@@ -1045,6 +1216,139 @@ mod tests {
             width,
             height,
         }
+    }
+
+    #[test]
+    fn vertical_blocks_use_inline_height_and_block_side_margins() {
+        for (mode, first, second) in [("vertical-rl", 90.0, 65.0), ("vertical-lr", 10.0, 35.0)] {
+            let l = lay(
+                vec![
+                    view(
+                        &[
+                            ("writingMode", mode),
+                            ("width", "120px"),
+                            ("height", "80px"),
+                            ("padding", "8px"),
+                            ("border", "2px solid black"),
+                        ],
+                        &[1, 2],
+                    ),
+                    view(&[("width", "20px"), ("marginBlockEnd", "5px")], &[]),
+                    view(&[("width", "20px")], &[]),
+                ],
+                &[0],
+            )
+            .unwrap();
+            assert_eq!(l.boxes[1].border, rect(first, 10.0, 20.0, 60.0));
+            assert_eq!(l.boxes[2].border, rect(second, 10.0, 20.0, 60.0));
+        }
+    }
+
+    #[test]
+    fn vertical_orthogonal_child_is_intrinsic_and_retains_physical_dimensions() {
+        let l = lay(
+            vec![
+                view(
+                    &[
+                        ("writingMode", "vertical-rl"),
+                        ("width", "180px"),
+                        ("height", "120px"),
+                        ("padding", "10px"),
+                    ],
+                    &[1],
+                ),
+                view(
+                    &[("writingMode", "horizontal-tb"), ("padding", "5px")],
+                    &[2],
+                ),
+                view(&[("width", "50px"), ("height", "20px")], &[]),
+            ],
+            &[0],
+        )
+        .unwrap();
+        assert_eq!(l.boxes[1].border, rect(110.0, 10.0, 60.0, 30.0));
+        assert_eq!(l.boxes[2].border, rect(115.0, 15.0, 50.0, 20.0));
+    }
+
+    #[test]
+    fn vertical_percent_padding_uses_containing_inline_size_across_axes() {
+        let l = lay(
+            vec![
+                view(
+                    &[
+                        ("writingMode", "vertical-rl"),
+                        ("width", "200px"),
+                        ("height", "100px"),
+                    ],
+                    &[1],
+                ),
+                view(
+                    &[
+                        ("writingMode", "horizontal-tb"),
+                        ("width", "80px"),
+                        ("height", "60px"),
+                        ("padding", "10%"),
+                    ],
+                    &[],
+                ),
+            ],
+            &[0],
+        )
+        .unwrap();
+        assert_eq!(l.boxes[1].border, rect(120.0, 0.0, 80.0, 60.0));
+        assert_eq!(l.boxes[1].content, rect(130.0, 10.0, 60.0, 40.0));
+    }
+
+    #[test]
+    fn vertical_containing_block_keeps_fixed_and_absolute_insets_physical() {
+        let l = lay(
+            vec![
+                view(
+                    &[
+                        ("writingMode", "vertical-rl"),
+                        ("position", "absolute"),
+                        ("left", "40px"),
+                        ("top", "20px"),
+                        ("width", "120px"),
+                        ("height", "80px"),
+                        ("transform", "translate(0px, 0px)"),
+                    ],
+                    &[1],
+                ),
+                view(
+                    &[
+                        ("writingMode", "horizontal-tb"),
+                        ("width", "40px"),
+                        ("height", "50px"),
+                    ],
+                    &[2, 3],
+                ),
+                view(
+                    &[
+                        ("position", "fixed"),
+                        ("left", "5px"),
+                        ("top", "7px"),
+                        ("width", "10px"),
+                        ("height", "12px"),
+                    ],
+                    &[],
+                ),
+                view(
+                    &[
+                        ("position", "absolute"),
+                        ("right", "3px"),
+                        ("bottom", "4px"),
+                        ("width", "10px"),
+                        ("height", "12px"),
+                    ],
+                    &[],
+                ),
+            ],
+            &[0],
+        )
+        .unwrap();
+        assert_eq!(l.boxes[2].border, rect(45.0, 27.0, 10.0, 12.0));
+        assert_eq!(l.boxes[3].border, rect(147.0, 84.0, 10.0, 12.0));
     }
 
     #[test]

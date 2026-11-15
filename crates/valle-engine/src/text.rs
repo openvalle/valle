@@ -689,7 +689,11 @@ impl Text {
     /// `width` px; empty text has no lines, and no baseline.
     pub fn baseline(&mut self, content: &Content, width: f32) -> Result<Option<f32>, Error> {
         if content.font.writing != WritingMode::Horizontal {
-            return Ok(None);
+            return Ok(self
+                .lines(content, width)?
+                .boxes
+                .first()
+                .map(|[top, height]| top + height * 0.5));
         }
         let strut = self.strut(content.font)?;
         let edges = self.edge_struts(content)?;

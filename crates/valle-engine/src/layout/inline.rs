@@ -139,9 +139,10 @@ pub(super) fn spans(
         let s = &styles[i];
         let vertical = s.font.writing != WritingMode::Horizontal;
         let border = logical(s.border.map(|v| v as f32), vertical);
-        // CSS percentages in padding always use the containing block's width.
+        // CSS percentages in padding use the containing block's inline size.
+        let basis = if vertical { at.height } else { at.width };
         let padding = logical(
-            padding(styles, i).map(|p| p.resolve(at.width).max(0.0)),
+            padding(styles, i).map(|p| p.resolve(basis).max(0.0)),
             vertical,
         );
         let width: f32 = group.iter().map(|(_, _, e)| e[2] - e[0]).sum();
@@ -301,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn vertical_percentage_padding_uses_containing_width() {
+    fn vertical_percentage_padding_uses_containing_inline_size() {
         let frame = load(r#"return <Text style={{width:100,height:160,fontSize:20,writingMode:"vertical-rl"}}><Span style={{padding:"10%",border:"2px solid red"}}>AB</Span></Text>"#).frame(Tick::ZERO).unwrap();
         let lines = frame.layout.lines.iter().flatten().next().unwrap();
         for edge in lines
@@ -309,7 +310,7 @@ mod tests {
             .iter()
             .filter(|r| r.edge.is_some() && r.x[1] > r.x[0])
         {
-            assert!((edge.x[1] - edge.x[0] - 12.0).abs() < 0.01, "{edge:?}");
+            assert!((edge.x[1] - edge.x[0] - 18.0).abs() < 0.01, "{edge:?}");
         }
     }
 

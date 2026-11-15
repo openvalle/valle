@@ -106,7 +106,6 @@ pub(super) struct Bound {
     pub(super) updates: Option<cache::Updates>,
     /// Whether it is a Text.
     pub(super) text: bool,
-    pub(super) textual: bool,
     /// Full declaration order only when a Text has flow-relative box properties.
     logical: Vec<([Field; 6], Prop, Rc<str>, bool)>,
     /// Each with what errors call it, and whether it is a presentation attribute.
@@ -513,12 +512,6 @@ impl Sheet {
                 style
             }
         };
-        if style.font.writing != super::WritingMode::Horizontal && !b.textual && b.svg.is_none() {
-            return Err(format!(
-                "{}: vertical writing-mode is supported on Text, Span and SVG text, not container layout",
-                b.place
-            ));
-        }
         style.source = b.source;
         let nested = self.parents[i].is_some_and(|p| self.nodes[p as usize].svg.is_some());
         let boxed = (b.svg.as_ref()).is_none_or(|g| g.tag == Tag::Svg && !nested);
@@ -1095,7 +1088,6 @@ fn bind(
             node.kind,
             Kind::Text { .. } | Kind::Svg { tag: Tag::Text, .. }
         ),
-        textual: matches!(node.kind, Kind::Text { .. } | Kind::Span { .. }),
         rest,
         place,
         source,

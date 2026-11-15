@@ -307,9 +307,22 @@ horizontal text. These values can change over time, including on backward seeks.
 </Text>
 ```
 
-Vertical container layout is not implemented and reports an error. SVG text
-also supports vertical writing with explicit positions. Use flex or grid to position
-separate Text blocks. `sideways-rl` and `sideways-lr` are not supported.
+`writingMode` also applies to `View` containers: block flow, flex axes and grid
+tracks follow `"vertical-rl"` or `"vertical-lr"`. It is inherited, so nested text
+needs no repeated declaration; set `"horizontal-tb"` on a child for horizontal
+content. Width, height and physical insets keep their physical meaning. Logical
+sizes, margins and padding follow the writing mode; percentage padding and margins
+use the containing block's inline size. SVG and images retain their aspect ratio.
+
+```tsx
+<View style={{ writingMode: "vertical-rl", width: 640, height: 360, display: "flex", gap: 24 }}>
+  <Text style={{ fontSize: 32 }}>春风山水</Text>
+  <Text style={{ writingMode: "horizontal-tb", width: 200 }}>Horizontal caption</Text>
+</View>
+```
+
+SVG text also supports vertical writing with explicit positions. `sideways-rl`
+and `sideways-lr` are not supported.
 
 Use `textCombineUpright: "all"` on a `Span` to compose its text horizontally inside
 one upright 1em cell, for example `第<Span style={{ textCombineUpright: "all" }}>12</Span>回`.

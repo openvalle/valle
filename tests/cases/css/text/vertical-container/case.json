@@ -1,0 +1,183 @@
+{
+  "spec": "https://www.w3.org/TR/css-writing-modes-3/#abstract-box",
+  "assertion": "Inherited vertical text and percentage inline padding coexist with a horizontal paragraph and an aspect-ratio SVG in vertical flex containers.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed Chrome, Firefox and WebKit with the same pinned font. Containers, text boxes and SVG sizes agree; differences are glyph rasterization and the one-pixel antialias fringe on inline borders and the circle.",
+    "pixels": {
+      "maxDifference": 140,
+      "maxPixels": 3700
+    }
+  },
+  "layout": [
+    {
+      "key": "p0",
+      "border": {
+        "x": 12,
+        "y": 12,
+        "width": 280,
+        "height": 244
+      },
+      "padding": {
+        "x": 14,
+        "y": 14,
+        "width": 276,
+        "height": 240
+      },
+      "content": {
+        "x": 24,
+        "y": 24,
+        "width": 256,
+        "height": 220
+      }
+    },
+    {
+      "key": "p0/vertical",
+      "border": {
+        "x": 220,
+        "y": 24,
+        "width": 60,
+        "height": 200
+      },
+      "padding": {
+        "x": 220,
+        "y": 24,
+        "width": 60,
+        "height": 200
+      },
+      "content": {
+        "x": 224,
+        "y": 28,
+        "width": 52,
+        "height": 192
+      }
+    },
+    {
+      "key": "p0/horizontal",
+      "border": {
+        "x": 112,
+        "y": 24,
+        "width": 100,
+        "height": 60
+      },
+      "padding": {
+        "x": 112,
+        "y": 24,
+        "width": 100,
+        "height": 60
+      },
+      "content": {
+        "x": 112,
+        "y": 24,
+        "width": 100,
+        "height": 60
+      }
+    },
+    {
+      "key": "p0/svg",
+      "border": {
+        "x": 44,
+        "y": 119,
+        "width": 60,
+        "height": 30
+      },
+      "padding": {
+        "x": 44,
+        "y": 119,
+        "width": 60,
+        "height": 30
+      },
+      "content": {
+        "x": 44,
+        "y": 119,
+        "width": 60,
+        "height": 30
+      }
+    },
+    {
+      "key": "p1",
+      "border": {
+        "x": 312,
+        "y": 12,
+        "width": 280,
+        "height": 244
+      },
+      "padding": {
+        "x": 314,
+        "y": 14,
+        "width": 276,
+        "height": 240
+      },
+      "content": {
+        "x": 324,
+        "y": 24,
+        "width": 256,
+        "height": 220
+      }
+    },
+    {
+      "key": "p1/vertical",
+      "border": {
+        "x": 324,
+        "y": 24,
+        "width": 60,
+        "height": 200
+      },
+      "padding": {
+        "x": 324,
+        "y": 24,
+        "width": 60,
+        "height": 200
+      },
+      "content": {
+        "x": 328,
+        "y": 28,
+        "width": 52,
+        "height": 192
+      }
+    },
+    {
+      "key": "p1/horizontal",
+      "border": {
+        "x": 392,
+        "y": 24,
+        "width": 100,
+        "height": 60
+      },
+      "padding": {
+        "x": 392,
+        "y": 24,
+        "width": 100,
+        "height": 60
+      },
+      "content": {
+        "x": 392,
+        "y": 24,
+        "width": 100,
+        "height": 60
+      }
+    },
+    {
+      "key": "p1/svg",
+      "border": {
+        "x": 500,
+        "y": 119,
+        "width": 60,
+        "height": 30
+      },
+      "padding": {
+        "x": 500,
+        "y": 119,
+        "width": 60,
+        "height": 30
+      },
+      "content": {
+        "x": 500,
+        "y": 119,
+        "width": 60,
+        "height": 30
+      }
+    }
+  ]
+}

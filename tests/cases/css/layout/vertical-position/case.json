@@ -1,0 +1,431 @@
+{
+  "spec": "https://www.w3.org/TR/css-writing-modes-3/#block-flow",
+  "assertion": "Physical and logical absolute insets, percentage padding and static-position hoisting through an orthogonal flow.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Chrome, Firefox and WebKit agree on the visible box geometry. Reviewed native images and differences; rectangles require exact pixels and box measurements."
+  },
+  "layout": [
+    {
+      "key": "canvas/p0",
+      "border": {
+        "x": 12,
+        "y": 12,
+        "width": 280,
+        "height": 148
+      },
+      "padding": {
+        "x": 14,
+        "y": 14,
+        "width": 276,
+        "height": 144
+      },
+      "content": {
+        "x": 24,
+        "y": 24,
+        "width": 256,
+        "height": 124
+      }
+    },
+    {
+      "key": "canvas/p0/p0-a",
+      "border": {
+        "x": 234,
+        "y": 28,
+        "width": 38,
+        "height": 28
+      },
+      "padding": {
+        "x": 234,
+        "y": 28,
+        "width": 38,
+        "height": 28
+      },
+      "content": {
+        "x": 234,
+        "y": 28,
+        "width": 38,
+        "height": 28
+      }
+    },
+    {
+      "key": "canvas/p0/p0-b",
+      "border": {
+        "x": 244,
+        "y": 118,
+        "width": 38,
+        "height": 28
+      },
+      "padding": {
+        "x": 244,
+        "y": 118,
+        "width": 38,
+        "height": 28
+      },
+      "content": {
+        "x": 253,
+        "y": 127,
+        "width": 20,
+        "height": 10
+      }
+    },
+    {
+      "key": "canvas/p0/p0-nested",
+      "border": {
+        "x": 200,
+        "y": 24,
+        "width": 80,
+        "height": 60
+      },
+      "padding": {
+        "x": 200,
+        "y": 24,
+        "width": 80,
+        "height": 60
+      },
+      "content": {
+        "x": 206,
+        "y": 30,
+        "width": 68,
+        "height": 48
+      }
+    },
+    {
+      "key": "canvas/p0/p0-nested/p0-c",
+      "border": {
+        "x": 206,
+        "y": 30,
+        "width": 38,
+        "height": 28
+      },
+      "padding": {
+        "x": 206,
+        "y": 30,
+        "width": 38,
+        "height": 28
+      },
+      "content": {
+        "x": 206,
+        "y": 30,
+        "width": 38,
+        "height": 28
+      }
+    },
+    {
+      "key": "canvas/p1",
+      "border": {
+        "x": 312,
+        "y": 12,
+        "width": 280,
+        "height": 148
+      },
+      "padding": {
+        "x": 314,
+        "y": 14,
+        "width": 276,
+        "height": 144
+      },
+      "content": {
+        "x": 324,
+        "y": 24,
+        "width": 256,
+        "height": 124
+      }
+    },
+    {
+      "key": "canvas/p1/p1-a",
+      "border": {
+        "x": 332,
+        "y": 28,
+        "width": 38,
+        "height": 28
+      },
+      "padding": {
+        "x": 332,
+        "y": 28,
+        "width": 38,
+        "height": 28
+      },
+      "content": {
+        "x": 332,
+        "y": 28,
+        "width": 38,
+        "height": 28
+      }
+    },
+    {
+      "key": "canvas/p1/p1-b",
+      "border": {
+        "x": 544,
+        "y": 118,
+        "width": 38,
+        "height": 28
+      },
+      "padding": {
+        "x": 544,
+        "y": 118,
+        "width": 38,
+        "height": 28
+      },
+      "content": {
+        "x": 553,
+        "y": 127,
+        "width": 20,
+        "height": 10
+      }
+    },
+    {
+      "key": "canvas/p1/p1-nested",
+      "border": {
+        "x": 324,
+        "y": 24,
+        "width": 80,
+        "height": 60
+      },
+      "padding": {
+        "x": 324,
+        "y": 24,
+        "width": 80,
+        "height": 60
+      },
+      "content": {
+        "x": 330,
+        "y": 30,
+        "width": 68,
+        "height": 48
+      }
+    },
+    {
+      "key": "canvas/p1/p1-nested/p1-c",
+      "border": {
+        "x": 330,
+        "y": 30,
+        "width": 38,
+        "height": 28
+      },
+      "padding": {
+        "x": 330,
+        "y": 30,
+        "width": 38,
+        "height": 28
+      },
+      "content": {
+        "x": 330,
+        "y": 30,
+        "width": 38,
+        "height": 28
+      }
+    },
+    {
+      "key": "canvas/p2",
+      "border": {
+        "x": 12,
+        "y": 180,
+        "width": 280,
+        "height": 148
+      },
+      "padding": {
+        "x": 14,
+        "y": 182,
+        "width": 276,
+        "height": 144
+      },
+      "content": {
+        "x": 24,
+        "y": 192,
+        "width": 256,
+        "height": 124
+      }
+    },
+    {
+      "key": "canvas/p2/p2-a",
+      "border": {
+        "x": 234,
+        "y": 284,
+        "width": 38,
+        "height": 28
+      },
+      "padding": {
+        "x": 234,
+        "y": 284,
+        "width": 38,
+        "height": 28
+      },
+      "content": {
+        "x": 234,
+        "y": 284,
+        "width": 38,
+        "height": 28
+      }
+    },
+    {
+      "key": "canvas/p2/p2-b",
+      "border": {
+        "x": 244,
+        "y": 286,
+        "width": 38,
+        "height": 28
+      },
+      "padding": {
+        "x": 244,
+        "y": 286,
+        "width": 38,
+        "height": 28
+      },
+      "content": {
+        "x": 253,
+        "y": 295,
+        "width": 20,
+        "height": 10
+      }
+    },
+    {
+      "key": "canvas/p2/p2-nested",
+      "border": {
+        "x": 200,
+        "y": 256,
+        "width": 80,
+        "height": 60
+      },
+      "padding": {
+        "x": 200,
+        "y": 256,
+        "width": 80,
+        "height": 60
+      },
+      "content": {
+        "x": 206,
+        "y": 262,
+        "width": 68,
+        "height": 48
+      }
+    },
+    {
+      "key": "canvas/p2/p2-nested/p2-c",
+      "border": {
+        "x": 236,
+        "y": 262,
+        "width": 38,
+        "height": 28
+      },
+      "padding": {
+        "x": 236,
+        "y": 262,
+        "width": 38,
+        "height": 28
+      },
+      "content": {
+        "x": 236,
+        "y": 262,
+        "width": 38,
+        "height": 28
+      }
+    },
+    {
+      "key": "canvas/p3",
+      "border": {
+        "x": 312,
+        "y": 180,
+        "width": 280,
+        "height": 148
+      },
+      "padding": {
+        "x": 314,
+        "y": 182,
+        "width": 276,
+        "height": 144
+      },
+      "content": {
+        "x": 324,
+        "y": 192,
+        "width": 256,
+        "height": 124
+      }
+    },
+    {
+      "key": "canvas/p3/p3-a",
+      "border": {
+        "x": 332,
+        "y": 284,
+        "width": 38,
+        "height": 28
+      },
+      "padding": {
+        "x": 332,
+        "y": 284,
+        "width": 38,
+        "height": 28
+      },
+      "content": {
+        "x": 332,
+        "y": 284,
+        "width": 38,
+        "height": 28
+      }
+    },
+    {
+      "key": "canvas/p3/p3-b",
+      "border": {
+        "x": 544,
+        "y": 286,
+        "width": 38,
+        "height": 28
+      },
+      "padding": {
+        "x": 544,
+        "y": 286,
+        "width": 38,
+        "height": 28
+      },
+      "content": {
+        "x": 553,
+        "y": 295,
+        "width": 20,
+        "height": 10
+      }
+    },
+    {
+      "key": "canvas/p3/p3-nested",
+      "border": {
+        "x": 324,
+        "y": 256,
+        "width": 80,
+        "height": 60
+      },
+      "padding": {
+        "x": 324,
+        "y": 256,
+        "width": 80,
+        "height": 60
+      },
+      "content": {
+        "x": 330,
+        "y": 262,
+        "width": 68,
+        "height": 48
+      }
+    },
+    {
+      "key": "canvas/p3/p3-nested/p3-c",
+      "border": {
+        "x": 360,
+        "y": 262,
+        "width": 38,
+        "height": 28
+      },
+      "padding": {
+        "x": 360,
+        "y": 262,
+        "width": 38,
+        "height": 28
+      },
+      "content": {
+        "x": 360,
+        "y": 262,
+        "width": 38,
+        "height": 28
+      }
+    }
+  ]
+}

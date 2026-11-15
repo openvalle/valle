@@ -724,6 +724,33 @@ mod tests {
     }
 
     #[test]
+    fn container_axes_and_inherited_text_are_restored_on_backward_seeks() {
+        let source = indoc::indoc! {r#"
+            export const composition = {width:320,height:260,fps:4,duration:3};
+            export default function Scene() {
+                const {seconds} = useCurrentTime();
+                const writingMode = seconds < 1 ? "vertical-rl" : seconds < 2 ? "vertical-lr" : "horizontal-tb";
+                return <View style={{writingMode,width:300,height:240,padding:10,display:"flex",gap:8}}>
+                    <Text style={{width:80,height:120,fontSize:20,lineHeight:"28px"}}>春风<Span style={{padding:"2%"}}>山水</Span></Text>
+                    <View style={{writingMode:"horizontal-tb",width:40,height:30}}/>
+                    <svg viewBox="0 0 20 10" style={{height:30,flexShrink:0,alignSelf:"start"}}><rect width="20" height="10" fill="green"/></svg>
+                </View>;
+            }
+        "#};
+        let mut scene = load(source);
+        for number in [0, 5, 9, 2, 11, 0] {
+            let at = Tick::from_seconds(number as f64 / 4.0).unwrap();
+            let frame = scene.frame(at).unwrap();
+            let expected = load(source).frame(at).unwrap();
+            assert_eq!(frame.layout.boxes, expected.layout.boxes, "frame {number}");
+            assert_eq!(frame.items, expected.items, "frame {number}");
+            let svg = frame.styles.iter().position(|s| s.svg.is_some()).unwrap();
+            assert_eq!(frame.layout.boxes[svg].border.width, 60.0);
+            assert_eq!(frame.layout.boxes[svg].border.height, 30.0);
+        }
+    }
+
+    #[test]
     fn combined_text_occupies_one_cell_and_seeks_restore_glyphs() {
         let source = indoc::indoc! {r#"
             export const composition = {width:160,height:200,fps:4,duration:2};
@@ -845,21 +872,5 @@ mod tests {
             lines.runs
         );
         assert_eq!(super::punctuation_trims("，（山水）。"), [3..6, 12..15]);
-    }
-
-    #[test]
-    fn vertical_container_layout_is_rejected_explicitly() {
-        let source = "export const composition={width:100,height:100,fps:1,duration:1}; export default function Scene(){return <View style={{writingMode:'vertical-rl'}}/>}";
-        let result = Scene::load(
-            "vertical.motion.tsx",
-            &|_| Some(source.as_bytes().to_vec()),
-            &Inputs::default(),
-            crate::testing::fonts(),
-        );
-        let error = match result {
-            Err(e) => e,
-            Ok(mut s) => s.frame(Tick::ZERO).unwrap_err(),
-        };
-        assert!(error.contains("not container layout"), "{error}");
     }
 }

@@ -1,0 +1,431 @@
+{
+  "spec": "https://www.w3.org/TR/css-writing-modes-3/#block-flow",
+  "assertion": "Flex main/cross axes follow writing-mode, including row/column reverse, wrapping, gaps and RTL inline progression.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Chrome, Firefox and WebKit agree on the visible box geometry. Reviewed native images and differences; rectangles require exact pixels and box measurements."
+  },
+  "layout": [
+    {
+      "key": "canvas/f0",
+      "border": {
+        "x": 12,
+        "y": 12,
+        "width": 280,
+        "height": 148
+      },
+      "padding": {
+        "x": 14,
+        "y": 14,
+        "width": 276,
+        "height": 144
+      },
+      "content": {
+        "x": 24,
+        "y": 24,
+        "width": 256,
+        "height": 124
+      }
+    },
+    {
+      "key": "canvas/f0/f0-0",
+      "border": {
+        "x": 210,
+        "y": 40,
+        "width": 70,
+        "height": 42
+      },
+      "padding": {
+        "x": 210,
+        "y": 40,
+        "width": 70,
+        "height": 42
+      },
+      "content": {
+        "x": 210,
+        "y": 40,
+        "width": 70,
+        "height": 42
+      }
+    },
+    {
+      "key": "canvas/f0/f0-1",
+      "border": {
+        "x": 210,
+        "y": 90,
+        "width": 70,
+        "height": 42
+      },
+      "padding": {
+        "x": 210,
+        "y": 90,
+        "width": 70,
+        "height": 42
+      },
+      "content": {
+        "x": 210,
+        "y": 90,
+        "width": 70,
+        "height": 42
+      }
+    },
+    {
+      "key": "canvas/f0/f0-2",
+      "border": {
+        "x": 24,
+        "y": 40,
+        "width": 70,
+        "height": 42
+      },
+      "padding": {
+        "x": 24,
+        "y": 40,
+        "width": 70,
+        "height": 42
+      },
+      "content": {
+        "x": 24,
+        "y": 40,
+        "width": 70,
+        "height": 42
+      }
+    },
+    {
+      "key": "canvas/f0/f0-3",
+      "border": {
+        "x": 24,
+        "y": 90,
+        "width": 70,
+        "height": 42
+      },
+      "padding": {
+        "x": 24,
+        "y": 90,
+        "width": 70,
+        "height": 42
+      },
+      "content": {
+        "x": 24,
+        "y": 90,
+        "width": 70,
+        "height": 42
+      }
+    },
+    {
+      "key": "canvas/f1",
+      "border": {
+        "x": 312,
+        "y": 12,
+        "width": 280,
+        "height": 148
+      },
+      "padding": {
+        "x": 314,
+        "y": 14,
+        "width": 276,
+        "height": 144
+      },
+      "content": {
+        "x": 324,
+        "y": 24,
+        "width": 256,
+        "height": 124
+      }
+    },
+    {
+      "key": "canvas/f1/f1-0",
+      "border": {
+        "x": 324,
+        "y": 40,
+        "width": 70,
+        "height": 42
+      },
+      "padding": {
+        "x": 324,
+        "y": 40,
+        "width": 70,
+        "height": 42
+      },
+      "content": {
+        "x": 324,
+        "y": 40,
+        "width": 70,
+        "height": 42
+      }
+    },
+    {
+      "key": "canvas/f1/f1-1",
+      "border": {
+        "x": 324,
+        "y": 90,
+        "width": 70,
+        "height": 42
+      },
+      "padding": {
+        "x": 324,
+        "y": 90,
+        "width": 70,
+        "height": 42
+      },
+      "content": {
+        "x": 324,
+        "y": 90,
+        "width": 70,
+        "height": 42
+      }
+    },
+    {
+      "key": "canvas/f1/f1-2",
+      "border": {
+        "x": 510,
+        "y": 40,
+        "width": 70,
+        "height": 42
+      },
+      "padding": {
+        "x": 510,
+        "y": 40,
+        "width": 70,
+        "height": 42
+      },
+      "content": {
+        "x": 510,
+        "y": 40,
+        "width": 70,
+        "height": 42
+      }
+    },
+    {
+      "key": "canvas/f1/f1-3",
+      "border": {
+        "x": 510,
+        "y": 90,
+        "width": 70,
+        "height": 42
+      },
+      "padding": {
+        "x": 510,
+        "y": 90,
+        "width": 70,
+        "height": 42
+      },
+      "content": {
+        "x": 510,
+        "y": 90,
+        "width": 70,
+        "height": 42
+      }
+    },
+    {
+      "key": "canvas/f2",
+      "border": {
+        "x": 12,
+        "y": 180,
+        "width": 280,
+        "height": 148
+      },
+      "padding": {
+        "x": 14,
+        "y": 182,
+        "width": 276,
+        "height": 144
+      },
+      "content": {
+        "x": 24,
+        "y": 192,
+        "width": 256,
+        "height": 124
+      }
+    },
+    {
+      "key": "canvas/f2/f2-0",
+      "border": {
+        "x": 195,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      },
+      "padding": {
+        "x": 195,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      },
+      "content": {
+        "x": 195,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      }
+    },
+    {
+      "key": "canvas/f2/f2-1",
+      "border": {
+        "x": 117,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      },
+      "padding": {
+        "x": 117,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      },
+      "content": {
+        "x": 117,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      }
+    },
+    {
+      "key": "canvas/f2/f2-2",
+      "border": {
+        "x": 39,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      },
+      "padding": {
+        "x": 39,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      },
+      "content": {
+        "x": 39,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      }
+    },
+    {
+      "key": "canvas/f2/f2-3",
+      "border": {
+        "x": 117,
+        "y": 274,
+        "width": 70,
+        "height": 42
+      },
+      "padding": {
+        "x": 117,
+        "y": 274,
+        "width": 70,
+        "height": 42
+      },
+      "content": {
+        "x": 117,
+        "y": 274,
+        "width": 70,
+        "height": 42
+      }
+    },
+    {
+      "key": "canvas/f3",
+      "border": {
+        "x": 312,
+        "y": 180,
+        "width": 280,
+        "height": 148
+      },
+      "padding": {
+        "x": 314,
+        "y": 182,
+        "width": 276,
+        "height": 144
+      },
+      "content": {
+        "x": 324,
+        "y": 192,
+        "width": 256,
+        "height": 124
+      }
+    },
+    {
+      "key": "canvas/f3/f3-0",
+      "border": {
+        "x": 495,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      },
+      "padding": {
+        "x": 495,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      },
+      "content": {
+        "x": 495,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      }
+    },
+    {
+      "key": "canvas/f3/f3-1",
+      "border": {
+        "x": 417,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      },
+      "padding": {
+        "x": 417,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      },
+      "content": {
+        "x": 417,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      }
+    },
+    {
+      "key": "canvas/f3/f3-2",
+      "border": {
+        "x": 339,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      },
+      "padding": {
+        "x": 339,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      },
+      "content": {
+        "x": 339,
+        "y": 192,
+        "width": 70,
+        "height": 42
+      }
+    },
+    {
+      "key": "canvas/f3/f3-3",
+      "border": {
+        "x": 417,
+        "y": 274,
+        "width": 70,
+        "height": 42
+      },
+      "padding": {
+        "x": 417,
+        "y": 274,
+        "width": 70,
+        "height": 42
+      },
+      "content": {
+        "x": 417,
+        "y": 274,
+        "width": 70,
+        "height": 42
+      }
+    }
+  ]
+}
