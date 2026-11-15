@@ -656,9 +656,26 @@ pub enum Tag {
     /// Internal character data, never an authored element.
     TextRun,
     Pattern,
+    Filter,
+    FeGaussianBlur,
+    FeOffset,
+    FeFlood,
+    FeColorMatrix,
+    FeBlend,
+    FeComposite,
+    FeMerge,
+    FeMergeNode,
+    FeMorphology,
+    FeDisplacementMap,
+    FeDropShadow,
+    FeComponentTransfer,
+    FeFuncR,
+    FeFuncG,
+    FeFuncB,
+    FeFuncA,
 }
 
-const TAGS: [(&str, Tag); 24] = [
+const TAGS: [(&str, Tag); 41] = [
     ("svg", Tag::Svg),
     ("g", Tag::G),
     ("path", Tag::Path),
@@ -683,6 +700,23 @@ const TAGS: [(&str, Tag); 24] = [
     ("textPath", Tag::TextPath),
     ("#text", Tag::TextRun),
     ("pattern", Tag::Pattern),
+    ("filter", Tag::Filter),
+    ("feGaussianBlur", Tag::FeGaussianBlur),
+    ("feOffset", Tag::FeOffset),
+    ("feFlood", Tag::FeFlood),
+    ("feColorMatrix", Tag::FeColorMatrix),
+    ("feBlend", Tag::FeBlend),
+    ("feComposite", Tag::FeComposite),
+    ("feMerge", Tag::FeMerge),
+    ("feMergeNode", Tag::FeMergeNode),
+    ("feMorphology", Tag::FeMorphology),
+    ("feDisplacementMap", Tag::FeDisplacementMap),
+    ("feDropShadow", Tag::FeDropShadow),
+    ("feComponentTransfer", Tag::FeComponentTransfer),
+    ("feFuncR", Tag::FeFuncR),
+    ("feFuncG", Tag::FeFuncG),
+    ("feFuncB", Tag::FeFuncB),
+    ("feFuncA", Tag::FeFuncA),
 ];
 
 impl Tag {

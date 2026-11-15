@@ -36,6 +36,7 @@ use crate::template::Error;
 use crate::text::{Face, color};
 use crate::transition;
 
+mod filter;
 mod mipmap;
 mod plan;
 mod video;
@@ -125,6 +126,7 @@ pub struct Gpu {
     masks: wgpu::RenderPipeline,
     blurs: wgpu::RenderPipeline,
     colors: wgpu::RenderPipeline,
+    filter_graph: wgpu::RenderPipeline,
     effects: wgpu::RenderPipeline,
     output: wgpu::RenderPipeline,
     /// The output as an encoder's luma and chroma planes.
@@ -264,7 +266,16 @@ impl Gpu {
         let picture = include_str!("../shaders/image.wgsl");
         let glyph = include_str!("../shaders/slug.wgsl");
         let layer = include_str!("../shaders/layer.wgsl");
-        let blend = include_str!("../shaders/blend.wgsl");
+        let blend = [
+            include_str!("../shaders/mixing.wgsl"),
+            include_str!("../shaders/blend.wgsl"),
+        ]
+        .concat();
+        let filter_graph = [
+            include_str!("../shaders/mixing.wgsl"),
+            include_str!("../shaders/filter-graph.wgsl"),
+        ]
+        .concat();
         let mask = include_str!("../shaders/mask.wgsl");
         let blur = include_str!("../shaders/blur.wgsl");
         let colors = include_str!("../shaders/colors.wgsl");
@@ -320,9 +331,10 @@ impl Gpu {
             glyphs: pipeline(&drawing, "slug", glyph, WORK, over),
             layers: pipeline(&imaging, "layer", layer, WORK, over),
             adds: pipeline(&imaging, "layer", layer, WORK, add),
-            blends: pipeline(&blending, "blend", blend, WORK, None),
+            blends: pipeline(&blending, "blend", &blend, WORK, None),
             masks: pipeline(&blending, "mask", mask, WORK, over),
             blurs: pipeline(&imaging, "blur", blur, WORK, None),
+            filter_graph: pipeline(&blending, "filter graph", &filter_graph, WORK, None),
             colors: pipeline(&imaging, "colors", colors, WORK, None),
             effects: pipeline(&imaging, "effects", effects, WORK, None),
             output: pipeline(&imaging, "output", output, OUTPUT, None),
@@ -500,6 +512,11 @@ enum Run {
 /// Targets: 0 is the frame, the others layers.
 #[derive(Debug, PartialEq)]
 enum Step {
+    FilterGraph {
+        target: usize,
+        inputs: [usize; 2],
+        at: u32,
+    },
     Draw {
         target: usize,
         runs: Vec<Run>,
@@ -567,6 +584,7 @@ impl Step {
     fn reads(&self) -> [Option<usize>; 2] {
         match *self {
             Step::Draw { .. } => [None; 2],
+            Step::FilterGraph { inputs: [a, b], .. } => [Some(a), (a != b).then_some(b)],
             Step::Mask { layer, mask, .. } => [Some(layer), Some(mask)],
             Step::Shader { layers, .. } => layers,
             Step::Composite { layer, .. }
@@ -1631,6 +1649,42 @@ impl<'a> Renderer<'a> {
                     plan.reach = plan.reach.union(reach);
                     plan.composite(target, layer);
                 }
+                Item::FilterGraph {
+                    graph,
+                    bbox,
+                    viewport,
+                    items,
+                } => {
+                    let region = graph.region(*bbox, *viewport);
+                    if graph.nodes.is_empty() || region[2] <= 0.0 || region[3] <= 0.0 {
+                        continue;
+                    }
+                    if !runs.is_empty() {
+                        plan.steps.push(Step::Draw {
+                            target,
+                            runs: std::mem::take(runs),
+                        });
+                    }
+                    let layer = plan.layer();
+                    let around = plan.seen.clone();
+                    plan.seen.here = Under {
+                        root: layer,
+                        open: Vec::new(),
+                    };
+                    let outer = std::mem::take(&mut plan.reach);
+                    self.plan(items, layer, at, faces, plan, atlas)?;
+                    plan.bounds[layer] = plan.reach;
+                    if plan.reach.0.is_none() {
+                        plan.steps.push(Step::Draw {
+                            target: layer,
+                            runs: Vec::new(),
+                        });
+                    }
+                    plan.seen = around;
+                    let (layer, reach) = plan.svg_filter(layer, graph, *bbox, *viewport, matrix);
+                    plan.reach = outer.union(reach);
+                    plan.composite(target, layer);
+                }
                 Item::Shader {
                     program,
                     block,
@@ -2175,7 +2229,8 @@ impl<'a> Renderer<'a> {
                 continue;
             }
             let target = match *step {
-                Step::Draw { target, .. }
+                Step::FilterGraph { target, .. }
+                | Step::Draw { target, .. }
                 | Step::Composite { target, .. }
                 | Step::Add { target, .. }
                 | Step::Blend { target, .. }
@@ -2224,6 +2279,17 @@ impl<'a> Renderer<'a> {
             pass.set_bind_group(0, draw, &[]);
             match step {
                 Step::Copy { .. } | Step::Shader { .. } => {}
+                Step::FilterGraph { at, target, .. } => {
+                    let a = layer.expect("filter source has a surface");
+                    let b = mask.unwrap_or(a);
+                    pass.set_pipeline(&gpu.filter_graph);
+                    pass.set_bind_group(1, &self.pool[a].image, &[]);
+                    pass.set_bind_group(2, &self.pool[b].image, &[]);
+                    if let Some([x, y, w, h]) = plan.bound(*target).pixels(self.size) {
+                        pass.set_scissor_rect(x, y, w, h);
+                        pass.draw(0..3, *at..*at + 1);
+                    }
+                }
                 Step::Mask { .. } => {
                     let [Some(s), Some(m)] = [layer, mask] else {
                         unreachable!("a mask step reads two layers");

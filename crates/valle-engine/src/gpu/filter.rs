@@ -1,0 +1,548 @@
+//! SVG filter graphs share intermediate GPU targets and release them after their last reader.
+use super::Step;
+use super::plan::{Plan, Reach};
+use crate::layout::Rect;
+use crate::paint::Matrix;
+use crate::svg::filter::{Graph, Operation, Transfer};
+
+#[derive(Clone, Copy)]
+struct Pass {
+    linear: bool,
+    region: [f64; 4],
+    matrix: Matrix,
+}
+
+impl Plan {
+    fn graph_pass(
+        &mut self,
+        inputs: [usize; 2],
+        op: u32,
+        pass: Pass,
+        parameters: &[f32],
+        data: &[f32],
+    ) -> usize {
+        let Pass {
+            linear,
+            region,
+            matrix,
+        } = pass;
+        let transform = self
+            .transform(matrix)
+            .expect("a planned SVG transform is invertible");
+        let mut header = [0.0; 20];
+        header[..4].copy_from_slice(&[op as f32, u8::from(linear) as f32, transform as f32, 0.0]);
+        header[4..8].copy_from_slice(&region.map(|v| v as f32));
+        header[8..8 + parameters.len()].copy_from_slice(parameters);
+        let at = self.words(header);
+        for chunk in data.chunks(20) {
+            let mut words = [0.0; 20];
+            words[..chunk.len()].copy_from_slice(chunk);
+            self.words(words);
+        }
+        let target = self.layer();
+        self.bounds[target] = Reach::of(matrix, rect(region));
+        self.steps.push(Step::FilterGraph { target, inputs, at });
+        target
+    }
+
+    /// Two separable passes, with axes transformed into target pixels. Both passes work in
+    /// the primitive's color space; only the final pass clips to the primitive subregion.
+    fn graph_kernel(
+        &mut self,
+        mut layer: usize,
+        kernel: (u32, bool),
+        amounts: [f64; 2],
+        pass: Pass,
+        filter_region: [f64; 4],
+    ) -> usize {
+        let (op, dilate) = kernel;
+        let Pass {
+            linear,
+            region,
+            matrix,
+        } = pass;
+        for (axis, amount) in amounts.into_iter().enumerate() {
+            let v = matrix.0[axis];
+            let scale = v[0].hypot(v[1]);
+            let direction = if scale > 0.0 {
+                [(v[0] / scale) as f32, (v[1] / scale) as f32]
+            } else {
+                [0.0; 2]
+            };
+            let params = [
+                direction[0],
+                direction[1],
+                (amount * scale) as f32,
+                u8::from(dilate) as f32,
+            ];
+            layer = self.graph_pass(
+                [layer; 2],
+                op,
+                Pass {
+                    linear,
+                    region: if axis == 0 { filter_region } else { region },
+                    matrix,
+                },
+                &params,
+                &[],
+            );
+        }
+        layer
+    }
+
+    pub(super) fn svg_filter(
+        &mut self,
+        source: usize,
+        graph: &Graph,
+        bbox: [f64; 4],
+        viewport: [f64; 2],
+        matrix: Matrix,
+    ) -> (usize, Reach) {
+        let regions = graph.regions(bbox, viewport);
+        let filter_region = regions[0];
+        let blank = self.layer();
+        self.bounds[blank] = Reach::default();
+        self.steps.push(Step::Draw {
+            target: blank,
+            runs: Vec::new(),
+        });
+        let mut layers = vec![blank; graph.nodes.len() + 2];
+        layers[0] = self.graph_pass(
+            [source; 2],
+            0,
+            Pass {
+                linear: false,
+                region: filter_region,
+                matrix,
+            },
+            &[],
+            &[],
+        );
+        // Only ancestors of the final result participate, even if other result names exist.
+        let mut needed = vec![false; layers.len()];
+        let mut pending = vec![layers.len() - 1];
+        while let Some(i) = pending.pop() {
+            if std::mem::replace(&mut needed[i], true) {
+                continue;
+            }
+            if i >= 2 {
+                pending.extend(graph.nodes[i - 2].inputs.iter().copied());
+            }
+        }
+        if needed[1] {
+            layers[1] = self.graph_pass(
+                [layers[0]; 2],
+                1,
+                Pass {
+                    linear: false,
+                    region: filter_region,
+                    matrix,
+                },
+                &[],
+                &[],
+            );
+        }
+        let units = if graph.definition.primitive_user_space {
+            [1.0; 2]
+        } else {
+            [bbox[2], bbox[3]]
+        };
+        let offset = |v: [f64; 2]| {
+            let [x, y] = [v[0] * units[0], v[1] * units[1]];
+            [
+                (matrix.0[0][0] * x + matrix.0[1][0] * y) as f32,
+                (matrix.0[0][1] * x + matrix.0[1][1] * y) as f32,
+            ]
+        };
+        for (i, n) in graph.nodes.iter().enumerate() {
+            if !needed[i + 2] {
+                continue;
+            }
+            let region = regions[i + 2];
+            let a = n.inputs.first().map_or(blank, |i| layers[*i]);
+            let b = n.inputs.get(1).map_or(a, |i| layers[*i]);
+            let linear = n.linear;
+            let layer = match &n.op {
+                Operation::Flood => self.graph_pass(
+                    [blank; 2],
+                    2,
+                    Pass {
+                        linear: false,
+                        region,
+                        matrix,
+                    },
+                    &n.flood.map(|v| v as f32),
+                    &[],
+                ),
+                Operation::Offset(v) => self.graph_pass(
+                    [a; 2],
+                    3,
+                    Pass {
+                        linear: false,
+                        region,
+                        matrix,
+                    },
+                    &offset(*v),
+                    &[],
+                ),
+                Operation::Matrix(m) => self.graph_pass(
+                    [a; 2],
+                    4,
+                    Pass {
+                        linear,
+                        region,
+                        matrix,
+                    },
+                    &[],
+                    &m.map(|v| v as f32),
+                ),
+                Operation::Blend(mode) => self.graph_pass(
+                    [a, b],
+                    5,
+                    Pass {
+                        linear,
+                        region,
+                        matrix,
+                    },
+                    &[*mode as f32],
+                    &[],
+                ),
+                Operation::Composite { operator, k } => self.graph_pass(
+                    [a, b],
+                    6,
+                    Pass {
+                        linear,
+                        region,
+                        matrix,
+                    },
+                    &[
+                        *operator as f32,
+                        0.,
+                        0.,
+                        0.,
+                        k[0] as f32,
+                        k[1] as f32,
+                        k[2] as f32,
+                        k[3] as f32,
+                    ],
+                    &[],
+                ),
+                Operation::Merge => {
+                    let mut layer = blank;
+                    for input in &n.inputs {
+                        layer = self.graph_pass(
+                            [layers[*input], layer],
+                            6,
+                            Pass {
+                                linear,
+                                region,
+                                matrix,
+                            },
+                            &[0.],
+                            &[],
+                        );
+                    }
+                    layer
+                }
+                Operation::Transfer => self.graph_pass(
+                    [a; 2],
+                    7,
+                    Pass {
+                        linear,
+                        region,
+                        matrix,
+                    },
+                    &[],
+                    &transfers(&n.transfer),
+                ),
+                Operation::Blur(v) => self.graph_kernel(
+                    a,
+                    (8, false),
+                    [v[0] * units[0], v[1] * units[1]],
+                    Pass {
+                        linear,
+                        region,
+                        matrix,
+                    },
+                    filter_region,
+                ),
+                Operation::Morphology { dilate, radius } => self.graph_kernel(
+                    a,
+                    (9, *dilate),
+                    [radius[0] * units[0], radius[1] * units[1]],
+                    Pass {
+                        linear,
+                        region,
+                        matrix,
+                    },
+                    filter_region,
+                ),
+                Operation::Displacement { scale, channels } => self.graph_pass(
+                    [a, b],
+                    10,
+                    Pass {
+                        linear,
+                        region,
+                        matrix,
+                    },
+                    &[
+                        (scale * units[0]) as f32,
+                        (scale * units[1]) as f32,
+                        channels[0] as f32,
+                        channels[1] as f32,
+                    ],
+                    &[],
+                ),
+                Operation::Shadow { offset: v, sigma } => {
+                    let alpha = self.graph_pass(
+                        [a; 2],
+                        1,
+                        Pass {
+                            linear: false,
+                            region: filter_region,
+                            matrix,
+                        },
+                        &[],
+                        &[],
+                    );
+                    let blurred = self.graph_kernel(
+                        alpha,
+                        (8, false),
+                        [sigma[0] * units[0], sigma[1] * units[1]],
+                        Pass {
+                            linear: false,
+                            region: filter_region,
+                            matrix,
+                        },
+                        filter_region,
+                    );
+                    let colored = self.graph_pass(
+                        [blurred; 2],
+                        11,
+                        Pass {
+                            linear: false,
+                            region: filter_region,
+                            matrix,
+                        },
+                        &n.flood.map(|v| v as f32),
+                        &[],
+                    );
+                    let moved = self.graph_pass(
+                        [colored; 2],
+                        3,
+                        Pass {
+                            linear: false,
+                            region: filter_region,
+                            matrix,
+                        },
+                        &offset(*v),
+                        &[],
+                    );
+                    self.graph_pass(
+                        [a, moved],
+                        6,
+                        Pass {
+                            linear,
+                            region,
+                            matrix,
+                        },
+                        &[0.],
+                        &[],
+                    )
+                }
+                Operation::Channel(..) | Operation::MergeNode => {
+                    unreachable!("validated primitive child")
+                }
+            };
+            layers[i + 2] = layer;
+        }
+        let last = *layers.last().unwrap();
+        (last, self.bound(last))
+    }
+}
+
+fn rect([x, y, w, h]: [f64; 4]) -> Rect {
+    Rect {
+        x: x as f32,
+        y: y as f32,
+        width: w as f32,
+        height: h as f32,
+    }
+}
+
+fn transfers(functions: &[Transfer; 4]) -> Vec<f32> {
+    let mut data = vec![0.; 16];
+    for (i, f) in functions.iter().enumerate() {
+        let header = match f {
+            Transfer::Identity => [0.; 4],
+            Transfer::Linear([a, b]) => [3., *a as f32, *b as f32, 0.],
+            Transfer::Gamma([a, b, c]) => [4., *a as f32, *b as f32, *c as f32],
+            Transfer::Table(values, discrete) => {
+                let start = data.len();
+                data.extend(values.iter().map(|v| *v as f32));
+                [
+                    if *discrete { 2. } else { 1. },
+                    start as f32,
+                    values.len() as f32,
+                    0.,
+                ]
+            }
+        };
+        data[i * 4..i * 4 + 4].copy_from_slice(&header);
+    }
+    data
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gpu::{Gpu, Renderer};
+    use crate::paint::{Item, work};
+    use crate::svg::{
+        Length,
+        filter::{Definition, Node},
+    };
+    use std::rc::Rc;
+
+    fn node(op: Operation, inputs: &[usize]) -> Node {
+        Node {
+            inputs: inputs.to_vec(),
+            region: [None; 4],
+            op,
+            linear: true,
+            flood: [0.; 4],
+            transfer: std::array::from_fn(|_| Transfer::Identity),
+        }
+    }
+    fn graph(nodes: Vec<Node>, items: Vec<Item>) -> Item {
+        Item::FilterGraph {
+            graph: Rc::new(Graph {
+                definition: Definition {
+                    user_space: true,
+                    primitive_user_space: true,
+                    region: [0., 0., 16., 16.].map(|units| Length { units, percent: 0. }),
+                },
+                nodes,
+            }),
+            bbox: [0., 0., 16., 16.],
+            viewport: [16., 16.],
+            items,
+        }
+    }
+    fn close(pixel: &[u8], expected: [u8; 4]) {
+        assert!(
+            pixel.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 2),
+            "{pixel:?} != {expected:?}"
+        );
+    }
+
+    #[test]
+    fn filter_graph_pixels_cover_spaces_aliasing_empty_sources_and_regions() {
+        if !std::env::var("VALLE_TEST_LAYERS")
+            .unwrap_or_default()
+            .split(',')
+            .any(|v| v == "gpu")
+        {
+            return;
+        }
+        let gpu = valle_native::gpu::adapter(None)
+            .and_then(|a| Gpu::with(a.adapter))
+            .unwrap();
+        let mut renderer = Renderer::new(&gpu, 16, 16);
+        let draw = |renderer: &mut Renderer<'_>, nodes, items| {
+            renderer
+                .render(&[graph(nodes, items)], &[], &[], &[])
+                .unwrap()
+        };
+        // Flood has no input dependency. The graph must execute even with no drawing runs.
+        let mut red = node(Operation::Flood, &[]);
+        red.flood = [1., 0., 0., 0.5];
+        let mut blue = node(Operation::Flood, &[]);
+        blue.flood = [0., 0., 1., 0.5];
+        for linear in [false, true, false] {
+            let mut over = node(
+                Operation::Composite {
+                    operator: 0,
+                    k: [0.; 4],
+                },
+                &[2, 3],
+            );
+            over.linear = linear;
+            let pixels = draw(&mut renderer, vec![red.clone(), blue.clone(), over], vec![]);
+            close(
+                &pixels[0..4],
+                if linear {
+                    [213, 0, 156, 191]
+                } else {
+                    [170, 0, 85, 191]
+                },
+            );
+        }
+        // The same target can feed both inputs and later frames reuse its allocation safely.
+        let alias = node(
+            Operation::Composite {
+                operator: 0,
+                k: [0.; 4],
+            },
+            &[2, 2],
+        );
+        for _ in 0..3 {
+            let pixels = draw(&mut renderer, vec![red.clone(), alias.clone()], vec![]);
+            close(&pixels[0..4], [255, 0, 0, 191]);
+        }
+        // Arithmetic's constant term can create visible pixels from a transparent source.
+        let constant = node(
+            Operation::Composite {
+                operator: 5,
+                k: [0., 0., 0., 0.25],
+            },
+            &[0, 0],
+        );
+        let pixels = draw(&mut renderer, vec![constant], vec![]);
+        close(&pixels[0..4], [255, 255, 255, 64]);
+        red.region = [
+            Some(Length {
+                units: 4.,
+                percent: 0.,
+            }),
+            Some(Length {
+                units: 4.,
+                percent: 0.,
+            }),
+            Some(Length {
+                units: 4.,
+                percent: 0.,
+            }),
+            Some(Length {
+                units: 4.,
+                percent: 0.,
+            }),
+        ];
+        let pixels = draw(&mut renderer, vec![red], vec![]);
+        assert_eq!(&pixels[0..4], &[0; 4]);
+        close(
+            &pixels[(5 * 16 + 5) * 4..(5 * 16 + 5) * 4 + 4],
+            [255, 0, 0, 128],
+        );
+        let source = Item::Rect {
+            rect: rect([2., 2., 8., 8.]),
+            radii: [[0.; 2]; 4],
+            color: work([0., 1., 0., 1.]),
+        };
+        let pixels = draw(&mut renderer, vec![], vec![source.clone()]);
+        assert!(
+            pixels.iter().all(|v| *v == 0),
+            "empty definitions hide the source"
+        );
+        let pixels = draw(
+            &mut renderer,
+            vec![node(Operation::Offset([2., 3.]), &[0])],
+            vec![source],
+        );
+        close(
+            &pixels[(6 * 16 + 5) * 4..(6 * 16 + 5) * 4 + 4],
+            [0, 255, 0, 255],
+        );
+        assert_eq!(&pixels[(3 * 16 + 3) * 4..(3 * 16 + 3) * 4 + 4], &[0; 4]);
+    }
+}

@@ -1,0 +1,10 @@
+{
+  "size": [480, 360],
+  "sources": {
+    "tests/baselines/browser/svg/filter-graph/inline/scene.html": "7dc7cf4ef7bb0deb00e02c17b3f3f4c6a3f2970792acf8138764c526c9ac30ab"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

@@ -270,6 +270,7 @@ impl Sheet {
             }
         }
         self.references(&out, &ids)?;
+        svg::filter::prepare(&mut out, &self.parents)?;
         let mut copied = 0;
         for (u, style) in out.iter_mut().enumerate() {
             self.instantiate(u, style, &ids, &frame, 0, &mut copied)?;
@@ -475,6 +476,12 @@ impl Sheet {
         style.source = b.source;
         let nested = self.parents[i].is_some_and(|p| self.nodes[p as usize].svg.is_some());
         let boxed = (b.svg.as_ref()).is_none_or(|g| g.tag == Tag::Svg && !nested);
+        if boxed && style.filter_ref.is_some() {
+            return Err(format!(
+                "{}: filter: url() is supported on elements inside an <svg>",
+                b.place
+            ));
+        }
         if boxed && (style.clip_ref.is_some() || style.mask_ref.is_some()) {
             return Err(format!(
                 "{}: clip-path: url() and mask: url() are supported in an <svg> only, not on a \
@@ -529,13 +536,15 @@ impl Sheet {
                 }
             }
         }
-        let refers = |s: &&Style| s.clip_ref.is_some() || s.mask_ref.is_some();
+        let refers =
+            |s: &&Style| s.clip_ref.is_some() || s.mask_ref.is_some() || s.filter_ref.is_some();
         for (i, s) in styles.iter().enumerate().filter(|(_, s)| refers(s)) {
             let place = &self.nodes[i].place;
             let parent = self.parents[i].and_then(|p| tag(p as usize));
             for (id, want, name) in [
                 (&s.clip_ref, Tag::ClipPath, "clip-path"),
                 (&s.mask_ref, Tag::Mask, "mask"),
+                (&s.filter_ref, Tag::Filter, "filter"),
             ] {
                 let Some(id) = id.as_deref() else {
                     continue;

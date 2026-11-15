@@ -2,6 +2,7 @@
 //! viewBox puts them in its box, and the outlines of strokes.
 
 pub mod file;
+pub mod filter;
 mod template;
 pub(crate) mod text;
 
@@ -97,6 +98,8 @@ pub enum Element {
         size: [Option<Length>; 2],
     },
     G,
+    Filter(filter::Definition),
+    Primitive(filter::Primitive),
     Text(text::Position),
     TextRun(Rc<str>),
     Shape(Shape),
@@ -243,7 +246,7 @@ pub struct Computed {
 
 /// Presentation attributes: style properties of the same name, which the element's style
 /// overrides. Every SVG element takes them.
-const PRESENTATION: [&str; 47] = [
+const PRESENTATION: [&str; 50] = [
     "fill",
     "fillOpacity",
     "fillRule",
@@ -291,6 +294,9 @@ const PRESENTATION: [&str; 47] = [
     "imageRendering",
     "transformOrigin",
     "filter",
+    "floodColor",
+    "floodOpacity",
+    "colorInterpolationFilters",
 ];
 
 /// Attributes that change nothing drawn, as pasted SVG and editors' files have them.
@@ -341,6 +347,124 @@ fn own(tag: Tag) -> &'static [&'static str] {
             "preserveAspectRatio",
         ],
         Tag::G | Tag::Defs => &[],
+        Tag::Filter => &["filterUnits", "primitiveUnits", "x", "y", "width", "height"],
+        Tag::FeGaussianBlur => &[
+            "in",
+            "in2",
+            "result",
+            "x",
+            "y",
+            "width",
+            "height",
+            "stdDeviation",
+            "edgeMode",
+        ],
+        Tag::FeOffset => &[
+            "in", "in2", "result", "x", "y", "width", "height", "dx", "dy",
+        ],
+        Tag::FeFlood => &["in", "in2", "result", "x", "y", "width", "height"],
+        Tag::FeColorMatrix => &[
+            "in", "in2", "result", "x", "y", "width", "height", "type", "values",
+        ],
+        Tag::FeBlend => &["in", "in2", "result", "x", "y", "width", "height", "mode"],
+        Tag::FeComposite => &[
+            "in", "in2", "result", "x", "y", "width", "height", "operator", "k1", "k2", "k3", "k4",
+        ],
+        Tag::FeMerge => &["in", "in2", "result", "x", "y", "width", "height"],
+        Tag::FeMergeNode => &["in", "in2", "result", "x", "y", "width", "height"],
+        Tag::FeMorphology => &[
+            "in", "in2", "result", "x", "y", "width", "height", "operator", "radius",
+        ],
+        Tag::FeDisplacementMap => &[
+            "in",
+            "in2",
+            "result",
+            "x",
+            "y",
+            "width",
+            "height",
+            "scale",
+            "xChannelSelector",
+            "yChannelSelector",
+        ],
+        Tag::FeDropShadow => &[
+            "in",
+            "in2",
+            "result",
+            "x",
+            "y",
+            "width",
+            "height",
+            "dx",
+            "dy",
+            "stdDeviation",
+        ],
+        Tag::FeComponentTransfer => &["in", "in2", "result", "x", "y", "width", "height"],
+        Tag::FeFuncR => &[
+            "in",
+            "in2",
+            "result",
+            "x",
+            "y",
+            "width",
+            "height",
+            "type",
+            "tableValues",
+            "slope",
+            "intercept",
+            "amplitude",
+            "exponent",
+            "offset",
+        ],
+        Tag::FeFuncG => &[
+            "in",
+            "in2",
+            "result",
+            "x",
+            "y",
+            "width",
+            "height",
+            "type",
+            "tableValues",
+            "slope",
+            "intercept",
+            "amplitude",
+            "exponent",
+            "offset",
+        ],
+        Tag::FeFuncB => &[
+            "in",
+            "in2",
+            "result",
+            "x",
+            "y",
+            "width",
+            "height",
+            "type",
+            "tableValues",
+            "slope",
+            "intercept",
+            "amplitude",
+            "exponent",
+            "offset",
+        ],
+        Tag::FeFuncA => &[
+            "in",
+            "in2",
+            "result",
+            "x",
+            "y",
+            "width",
+            "height",
+            "type",
+            "tableValues",
+            "slope",
+            "intercept",
+            "amplitude",
+            "exponent",
+            "offset",
+        ],
+
         Tag::Pattern => &[
             "x",
             "y",
@@ -453,6 +577,27 @@ pub fn holds(tag: Tag) -> Holds {
             Holds::Any
         }
         Tag::LinearGradient | Tag::RadialGradient => Holds::Only(&[Tag::Stop], "<stop>s"),
+        Tag::Filter => Holds::Only(
+            &[
+                Tag::FeGaussianBlur,
+                Tag::FeOffset,
+                Tag::FeFlood,
+                Tag::FeColorMatrix,
+                Tag::FeBlend,
+                Tag::FeComposite,
+                Tag::FeMerge,
+                Tag::FeMorphology,
+                Tag::FeDisplacementMap,
+                Tag::FeDropShadow,
+                Tag::FeComponentTransfer,
+            ],
+            "filter primitives",
+        ),
+        Tag::FeMerge => Holds::Only(&[Tag::FeMergeNode], "<feMergeNode>s"),
+        Tag::FeComponentTransfer => Holds::Only(
+            &[Tag::FeFuncR, Tag::FeFuncG, Tag::FeFuncB, Tag::FeFuncA],
+            "channel transfer functions",
+        ),
         Tag::ClipPath => Holds::Only(&CLIP_CONTENT, "shapes, text and use elements"),
         Tag::Text | Tag::Tspan => Holds::Only(
             &[Tag::Tspan, Tag::TextPath, Tag::TextRun],
@@ -549,6 +694,23 @@ pub fn computed(
     let transform =
         (text("transform").map(|t| transform(&t).map_err(at("transform")))).transpose()?;
     let element = match tag {
+        Tag::Filter => Element::Filter(filter::definition(attributes)?),
+        Tag::FeGaussianBlur
+        | Tag::FeOffset
+        | Tag::FeFlood
+        | Tag::FeColorMatrix
+        | Tag::FeBlend
+        | Tag::FeComposite
+        | Tag::FeMerge
+        | Tag::FeMergeNode
+        | Tag::FeMorphology
+        | Tag::FeDisplacementMap
+        | Tag::FeDropShadow
+        | Tag::FeComponentTransfer
+        | Tag::FeFuncR
+        | Tag::FeFuncG
+        | Tag::FeFuncB
+        | Tag::FeFuncA => Element::Primitive(filter::primitive(tag, attributes)?),
         Tag::Svg => {
             let (view_box, fit) = fitting()?;
             Element::Svg {
@@ -739,7 +901,12 @@ pub fn computed(
             fit: fitting()?.1,
         },
     };
-    if transform.is_some() && matches!(element, Element::Defs | Element::Stop(_)) {
+    if transform.is_some()
+        && matches!(
+            element,
+            Element::Defs | Element::Stop(_) | Element::Filter(_) | Element::Primitive(_)
+        )
+    {
         return Err(format!(
             "transform: a <{}> draws nothing to transform",
             tag.name()

@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/filter-effects-1/",
+  "assertion": "Named SVG filter inputs form reusable branches with blur, offset, flood, merge, blend, arithmetic composite, matrix, transfer, morphology, displacement and drop shadow. Filter/primitive regions and default linearRGB are honored.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All three browsers were inspected. Chrome is closest for this graph after explicit named displacement input; WebKit differs in semitransparent source composition. Remaining differences are Gaussian kernel approximation, displacement resampling, fractional subregion clipping and edge antialiasing. Independent GPU tests assert linear/sRGB compositing, aliased inputs, empty-source generation and clipping.",
+    "pixels": {
+      "maxPixels": 23500,
+      "maxDifference": 120
+    }
+  }
+}

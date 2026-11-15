@@ -139,6 +139,10 @@ pub(super) struct Declared {
     pub(super) preserve_3d: bool,
     pub(super) blend: Blend,
     pub(super) isolate: bool,
+    pub(super) filter_ref: Option<Rc<str>>,
+    pub(super) flood_color: Option<Option<color::Specified>>,
+    pub(super) flood_opacity: Option<f64>,
+    pub(super) filter_linear: Option<bool>,
     pub(super) filter: Vec<filter::Function<Len, Option<color::Specified>>>,
     /// `motionBlur` as the frontend gives it, if declared: the trail in the box's own px, or
     /// `None` for `auto`.
@@ -291,6 +295,10 @@ impl Default for Declared {
             preserve_3d: false,
             blend: Blend::Normal,
             isolate: false,
+            filter_ref: None,
+            flood_color: None,
+            flood_opacity: None,
+            filter_linear: None,
             filter: Vec::new(),
             motion_blur: None,
             backdrop: Vec::new(),
@@ -1243,7 +1251,23 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::Opacity => d.opacity = alpha(v)?,
         F::MixBlendMode => d.blend = keyword(v, &BLENDS)?,
         F::Isolation => d.isolate = keyword(v, &[("auto", false), ("isolate", true)])?,
-        F::Filter => d.filter = filter::filter(&text(v)?)?,
+        F::Filter => {
+            if let Some(id) = reference(&v.text()) {
+                d.filter_ref = Some(id?);
+                d.filter.clear();
+            } else {
+                d.filter = filter::filter(&text(v)?)?;
+                d.filter_ref = None;
+            }
+        }
+        F::FloodColor => d.flood_color = Some(current_color(v)?),
+        F::FloodOpacity => d.flood_opacity = Some(alpha(v)?),
+        F::ColorInterpolationFilters => {
+            d.filter_linear = Some(keyword(
+                v,
+                &[("auto", true), ("linearrgb", true), ("srgb", false)],
+            )?)
+        }
         F::MotionBlur => {
             let trail = text(v)?;
             let xy: Vec<f64> = trail.split(' ').filter_map(|n| n.parse().ok()).collect();

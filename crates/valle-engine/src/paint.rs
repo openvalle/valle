@@ -148,6 +148,13 @@ pub enum Item {
         filters: Vec<Filter>,
         items: Vec<Item>,
     },
+    /// A named SVG filter DAG; intermediate images stay on the GPU.
+    FilterGraph {
+        graph: Rc<crate::svg::filter::Graph>,
+        bbox: [f64; 4],
+        viewport: [f64; 2],
+        items: Vec<Item>,
+    },
     /// Layers of items that a shader authors wrote reads as the images they are named by, its
     /// `content`, or a transition's two children, and what is under the box as its `backdrop`,
     /// as a `Backdrop` has it: the shader paints the box `rect`, grown by `outset` px on each

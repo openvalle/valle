@@ -1312,7 +1312,7 @@ mod tests {
 
             let broken = |path: &str| match path {
                 "scenes/icon.svg" => {
-                    Some(b"<svg xmlns='http://www.w3.org/2000/svg'><filter/></svg>".to_vec())
+                    Some(b"<svg xmlns='http://www.w3.org/2000/svg'><foreignObject/></svg>".to_vec())
                 }
                 _ => files(source.clone())(path),
             };
@@ -1321,7 +1321,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 e,
-                "scenes/s.motion.tsx: resource icon: scenes/icon.svg: 1:41: <filter> is not supported yet"
+                "scenes/s.motion.tsx: resource icon: scenes/icon.svg: 1:41: <foreignObject> is not supported: put HTML-like content in Valle elements outside the <svg>"
             );
         });
     }

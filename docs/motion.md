@@ -187,8 +187,8 @@ SVG shapes and groups also accept `filter`, `mixBlendMode` and `isolation`. A fi
 processes the whole element/group before its clip path and mask; opacity and blending
 then apply to that result. `isolation: "isolate"` keeps descendant blends inside the
 group. The outer SVG isolates its contents from the page. CSS filter functions use
-SVG user units and follow the element's transform; `filter: "url(#id)"` and SVG
-`<filter>`/`<fe*>` definitions are not implemented.
+SVG user units and follow the element's transform. SVG descendants can also use
+`filter="url(#id)"` to reference a local SVG filter graph (see below).
 
 `color-mix()` can include `currentColor`, including nested mixtures. It works in
 backgrounds, borders, outlines, gradients, shadows, text paints, and SVG fill,
@@ -433,6 +433,73 @@ and `<use>` directly referencing a shape or text. They contribute glyph or shape
 silhouettes regardless of fill, stroke, opacity or filters; `display` and
 `visibility` still apply. Referenced text uses the use instance's inherited font.
 A use referencing a group or another use does not contribute a silhouette.
+
+### SVG filter graphs
+
+Define `<filter id="…">` inside `<defs>` and apply `filter="url(#…)"` to an SVG
+shape or group. Both inline SVG and SVG files support these primitives:
+
+| Primitive | Attributes |
+| --- | --- |
+| `feGaussianBlur` | `stdDeviation` (one or two nonnegative numbers), `edgeMode="none"` |
+| `feOffset` | `dx`, `dy` |
+| `feFlood` | `floodColor`, `floodOpacity` |
+| `feColorMatrix` | `type`: `matrix` (20 `values`), `saturate`, `hueRotate`, `luminanceToAlpha` |
+| `feBlend` | `in`, `in2`, `mode` (the CSS blend modes) |
+| `feComposite` | `in`, `in2`, `operator`: `over`, `in`, `out`, `atop`, `xor`, `arithmetic`; `k1`–`k4` |
+| `feMerge` | ordered `<feMergeNode in="…" />` children |
+| `feMorphology` | `operator`: `erode` or `dilate`; `radius` (one or two nonnegative numbers) |
+| `feDisplacementMap` | `in`, `in2`, `scale`, `xChannelSelector`, `yChannelSelector` (`R`, `G`, `B`, `A`) |
+| `feComponentTransfer` | `<feFuncR/G/B/A>` children: `identity`, `table`, `discrete`, `linear`, `gamma` |
+| `feDropShadow` | `dx`, `dy`, `stdDeviation`, `floodColor`, `floodOpacity` |
+
+Transfer functions use `tableValues` for table/discrete, `slope` and `intercept`
+for linear, and `amplitude`, `exponent`, `offset` for gamma. Omitted channels stay
+unchanged. Matrix/transfer operate on unpremultiplied components; compositing uses
+premultiplied components.
+
+```tsx
+<svg width="240" height="160" viewBox="0 0 240 160">
+  <defs>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4" result="soft" />
+      <feOffset in="soft" dx="4" dy="6" result="shifted" />
+      <feFlood floodColor="#16436d" floodOpacity="0.6" />
+      <feComposite in2="shifted" operator="in" />
+      <feMerge>
+        <feMergeNode />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+  <rect x="40" y="30" width="160" height="90" rx="18" fill="skyblue" filter="url(#shadow)" />
+</svg>
+```
+
+`in`/`in2` can name `SourceGraphic`, `SourceAlpha`, or an earlier primitive's
+`result`. An omitted input uses the previous primitive, or `SourceGraphic` for
+the first primitive. Repeated result names resolve to the closest earlier result.
+Valle reports missing/forward references as errors. Only the final primitive and
+its dependencies draw; an empty definition draws nothing. Parameters may use
+Motion expressions and remain deterministic when seeking backwards.
+
+`filterUnits` defaults to `objectBoundingBox`, with the filter region
+`x="-10%" y="-10%" width="120%" height="120%"`. `primitiveUnits` defaults to
+`userSpaceOnUse`. Both also accept the other coordinate system. Each primitive
+accepts `x`, `y`, `width`, `height` to restrict its output. Without explicit bounds,
+its subregion is the union of its input subregions, or the full filter region for
+standard inputs and input-free primitives. Regions clip; enlarge them for shadows.
+
+`colorInterpolationFilters` is inherited and defaults to `linearRGB`; `sRGB`
+selects encoded color operations and `auto` uses linear RGB. This does not change
+CSS filter functions, which continue to operate in sRGB. Offset/flood do not
+transform colors; displacement converts only its map input. Intermediate results
+stay on the GPU, with textures released after their last reader.
+
+Not supported: external filter references, filter URLs on CSS boxes/the outer SVG,
+URL/function lists, `BackgroundImage`/`BackgroundAlpha`/`FillPaint`/`StrokePaint`,
+`feImage`, `feTile`, `feTurbulence`, convolution or lighting primitives, and blur
+edge modes other than `none`. These produce errors rather than a partial effect.
 
 ## Valle filters
 

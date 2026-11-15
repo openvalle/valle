@@ -212,6 +212,9 @@ pub(super) enum Field {
     MixBlendMode,
     Isolation,
     Filter,
+    FloodColor,
+    FloodOpacity,
+    ColorInterpolationFilters,
     MotionBlur,
     BackdropFilter,
     ClipPath,
@@ -331,7 +334,7 @@ pub(super) enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 276] = [
+const FIELDS: [(&str, Field); 279] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -603,6 +606,12 @@ const FIELDS: [(&str, Field); 276] = [
     ("mixBlendMode", Field::MixBlendMode),
     ("isolation", Field::Isolation),
     ("filter", Field::Filter),
+    ("floodColor", Field::FloodColor),
+    ("floodOpacity", Field::FloodOpacity),
+    (
+        "colorInterpolationFilters",
+        Field::ColorInterpolationFilters,
+    ),
     ("motionBlur", Field::MotionBlur),
     ("backdropFilter", Field::BackdropFilter),
     ("clipPath", Field::ClipPath),
@@ -767,6 +776,9 @@ impl Field {
                 | Field::WordSpacing
                 | Field::WhiteSpace
                 | Field::WhiteSpaceCollapse
+                | Field::FloodColor
+                | Field::FloodOpacity
+                | Field::ColorInterpolationFilters
                 | Field::Filter
                 | Field::MixBlendMode
                 | Field::Isolation
@@ -840,6 +852,9 @@ impl Field {
                 | Field::OutlineOffset
                 | Field::BoxShadow
                 | Field::Opacity
+                | Field::FloodColor
+                | Field::FloodOpacity
+                | Field::ColorInterpolationFilters
                 | Field::Filter
                 | Field::MotionBlur
                 | Field::BackdropFilter
@@ -868,6 +883,9 @@ impl Field {
                 | Field::Scale
                 | Field::Transform
                 | Field::TransformOrigin
+                | Field::FloodColor
+                | Field::FloodOpacity
+                | Field::ColorInterpolationFilters
                 | Field::Filter
         )
     }

@@ -220,6 +220,9 @@ pub(crate) mod paint {
                         .collect();
                     format!("shader {layers:?}")
                 }
+                Item::FilterGraph { graph, items, .. } => {
+                    format!("filter graph {} {:?}", graph.nodes.len(), names(items))
+                }
                 Item::Filter { filters, items } => {
                     let filters: Vec<&str> = (filters.iter())
                         .map(|f| match f {

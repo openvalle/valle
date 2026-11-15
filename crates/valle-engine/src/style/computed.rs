@@ -145,6 +145,11 @@ pub struct Style {
     pub blend: Blend,
     pub isolate: bool,
     /// `filter` and `backdrop-filter`: empty for `none`. A `motionBlur` is the last filter.
+    pub filter_ref: Option<Rc<str>>,
+    pub filter_graph: Option<Rc<svg::filter::Graph>>,
+    pub flood_color: Option<color::Specified>,
+    pub flood_opacity: f64,
+    pub filter_linear: bool,
     pub filter: Vec<filter::Function>,
     /// `motionBlur: "auto"`: the scene measures the trail of its last filter.
     pub motion_auto: bool,
@@ -260,6 +265,7 @@ impl Style {
         self.transformed()
             || self.perspective.is_some()
             || self.preserve_3d
+            || self.filter_ref.is_some()
             || !self.filter.is_empty()
             || !self.backdrop.is_empty()
             || self.shader.is_some()
@@ -291,6 +297,11 @@ impl Style {
             motion: _,
             perspective: _,
             preserve_3d: _,
+            filter_ref: _,
+            filter_graph: _,
+            flood_color: _,
+            flood_opacity: _,
+            filter_linear: _,
             filter: _,
             backdrop: _,
             shader: _,
@@ -800,6 +811,16 @@ pub(super) fn compute(
         preserve_3d: d.preserve_3d,
         blend: d.blend,
         isolate: d.isolate,
+        filter_ref: d.filter_ref.clone(),
+        filter_graph: None,
+        flood_color: d
+            .flood_color
+            .clone()
+            .unwrap_or_else(|| Some(color::BLACK.into())),
+        flood_opacity: d.flood_opacity.unwrap_or(1.0),
+        filter_linear: d
+            .filter_linear
+            .unwrap_or_else(|| parent.is_none_or(|p| p.filter_linear)),
         filter: (d.filter.iter().map(|f| f.computed(u, color)))
             .chain(
                 (d.motion_blur)

@@ -391,6 +391,8 @@ impl<'a> Drawing<'a> {
             Element::TextRun(_)
             | Element::Shape(_)
             | Element::Image { .. }
+            | Element::Filter(_)
+            | Element::Primitive(_)
             | Element::Defs
             | Element::Pattern(_)
             | Element::Gradient(_)
@@ -400,8 +402,23 @@ impl<'a> Drawing<'a> {
             | Element::Symbol { .. }
             | Element::Marker(_) => {}
         }
-        if items.is_empty() {
+        if items.is_empty() && s.filter_ref.is_none() {
             return;
+        }
+        if let Some(id) = &s.filter_ref {
+            let Some(graph) = self
+                .ids
+                .get(&**id)
+                .and_then(|n| self.styles[*n].filter_graph.clone())
+            else {
+                return;
+            };
+            items = vec![Item::FilterGraph {
+                graph,
+                bbox: self.bbox(i, size, copy).unwrap_or([0.0; 4]),
+                viewport: size,
+                items,
+            }];
         }
         if !s.filter.is_empty() {
             let frame = rect(self.bbox(i, size, copy).unwrap_or([0.0; 4]));
