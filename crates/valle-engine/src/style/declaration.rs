@@ -203,6 +203,7 @@ pub(super) struct Declared {
     pub(super) line_break: Option<parley::LineBreak>,
     pub(super) writing: Option<WritingMode>,
     pub(super) orientation: Option<Orientation>,
+    pub(super) combine: Option<bool>,
     /// `normal` is `Auto`, 0.
     pub(super) text_indent: Option<Len>,
     pub(super) letter_spacing: Option<Len>,
@@ -344,6 +345,7 @@ impl Default for Declared {
             line_break: None,
             writing: None,
             orientation: None,
+            combine: None,
             text_indent: None,
             letter_spacing: None,
             word_spacing: None,
@@ -1382,6 +1384,7 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
                 ],
             )?)
         }
+        F::TextCombineUpright => d.combine = Some(keyword(v, &[("none", false), ("all", true)])?),
         F::TextOrientation => {
             d.orientation = Some(keyword(
                 v,

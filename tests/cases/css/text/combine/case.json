@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/css-writing-modes-3/#text-combine-upright",
+  "assertion": "Combined text remains horizontal in one vertical 1em cell, including fullwidth digits, compression, both column directions, underline and one emphasis mark for the whole cell.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three browsers plus enlarged native and difference images. Chrome and Firefox use width variants/compression to retain the text height; WebKit shrinks some multi-character cells in both axes. Native one-cell advances, fullwidth digits, both column directions and emphasis count agree with Chrome. Remaining 5623 pixels (maximum 235) are text-edge/subpixel differences and UA-defined annotation/decoration placement. Numerical tests independently assert the 1em advance, compression, inheritance, box-boundary handling and backward seeks.",
+    "pixels": {
+      "maxDifference": 240,
+      "maxPixels": 5750
+    }
+  }
+}

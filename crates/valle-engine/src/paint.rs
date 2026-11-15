@@ -2151,7 +2151,7 @@ fn faces(
                 Item::Transform {
                     matrix: Matrix::affine([
                         0.0,
-                        -1.0,
+                        -f64::from(g.scale_x),
                         1.0,
                         0.0,
                         (at.x + g.x + dx) as f64,

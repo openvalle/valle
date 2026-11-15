@@ -242,7 +242,17 @@ horizontal text. These values can change over time, including on backward seeks.
 
 This is vertical **Text/Span** layout; vertical container layout and vertical SVG
 text are not implemented and report an error. Use flex or grid to position separate
-text blocks. `sideways-rl`, `sideways-lr` and `text-combine-upright` are not supported.
+text blocks. `sideways-rl` and `sideways-lr` are not supported.
+
+Use `textCombineUpright: "all"` on a `Span` to compose its text horizontally inside
+one upright 1em cell, for example `第<Span style={{ textCombineUpright: "all" }}>12</Span>回`.
+The inherited default is `"none"`; horizontal paragraphs are unaffected. Available
+half/third/quarter-width font variants are used for two/three/four characters, with
+horizontal compression when still needed. Letter spacing and forced line breaks
+inside the combined text are ignored. The cell remains indivisible when wrapping
+and receives one emphasis mark. Nested box boundaries interrupt an inherited
+combination; use separate explicit spans for separate cells. The Level 4 `digits`
+value is not supported.
 
 ### Emphasis marks
 

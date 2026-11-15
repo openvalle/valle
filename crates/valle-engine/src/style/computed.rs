@@ -517,6 +517,10 @@ pub(super) fn compute(
         line_break: d.line_break.unwrap_or(inherited.line_break),
         writing: d.writing.unwrap_or(inherited.writing),
         orientation: d.orientation.unwrap_or(inherited.orientation),
+        combine: d
+            .combine
+            .map(|v| v.then_some(node))
+            .unwrap_or(inherited.combine),
         emphasis: d
             .emphasis
             .clone()

@@ -262,6 +262,7 @@ pub(super) enum Field {
     LineBreak,
     WritingMode,
     TextOrientation,
+    TextCombineUpright,
     TextIndent,
     LetterSpacing,
     WordSpacing,
@@ -326,7 +327,7 @@ pub(super) enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 272] = [
+const FIELDS: [(&str, Field); 273] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -691,6 +692,7 @@ const FIELDS: [(&str, Field); 272] = [
     ("lineBreak", Field::LineBreak),
     ("writingMode", Field::WritingMode),
     ("textOrientation", Field::TextOrientation),
+    ("textCombineUpright", Field::TextCombineUpright),
     ("textIndent", Field::TextIndent),
     ("letterSpacing", Field::LetterSpacing),
     ("wordSpacing", Field::WordSpacing),
@@ -935,6 +937,7 @@ impl Field {
                 | Field::LineBreak
                 | Field::WritingMode
                 | Field::TextOrientation
+                | Field::TextCombineUpright
                 | Field::TextIndent
                 | Field::LetterSpacing
                 | Field::WordSpacing

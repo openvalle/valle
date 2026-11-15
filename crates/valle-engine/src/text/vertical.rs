@@ -1,6 +1,6 @@
 //! Vertical paragraphs keep logical inline/block coordinates until paint. Font fallback
 //! comes from Parley; upright clusters use HarfRust's vertical forms, origins and advances.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use unicode_segmentation::UnicodeSegmentation;
 
 use icu_properties::{
@@ -20,6 +20,7 @@ struct Cluster {
     glyphs: Vec<Glyph>,
     advance: f32,
     upright: bool,
+    combined: bool,
     space: bool,
     collapse: bool,
     wrap: bool,
@@ -80,12 +81,43 @@ fn layout(
     alignment_width: Option<f32>,
 ) -> Result<Lines, String> {
     let marks = super::emphasis::shapes(text, content)?;
+    // An inherited combination split by an inline box boundary must not combine
+    // fragments independently. Explicit sibling scopes remain independent.
+    let mut owners = HashMap::new();
+    let mut split = HashSet::new();
+    for p in &content.pieces {
+        if let Some(owner) = p.font.combine
+            && owners.insert(owner, p.node).is_some_and(|n| n != p.node)
+        {
+            split.insert(owner);
+        }
+    }
+    let combines = |font: &Font| font.combine.is_some_and(|owner| !split.contains(&owner));
     let plain: Vec<_> = content
         .pieces
         .iter()
         .map(|p| {
             let mut f = p.font.clone();
             f.emphasis = crate::style::emphasis::Mark::None;
+            if combines(&f) {
+                f.spacing = 0.0;
+                f.collapse = Collapse::Collapse;
+                f.wrap = false;
+                let count = p.text.graphemes(true).count();
+                if let Some(tag) = match count {
+                    2 => Some(*b"hwid"),
+                    3 => Some(*b"twid"),
+                    4 => Some(*b"qwid"),
+                    _ => None,
+                } {
+                    f.features = f
+                        .features
+                        .iter()
+                        .copied()
+                        .chain([crate::style::Feature { tag, value: 1 }])
+                        .collect();
+                }
+            }
             f
         })
         .collect();
@@ -159,6 +191,7 @@ fn layout(
                 let first = value.chars().next().unwrap_or(' ');
                 let category = CodePointMapData::<VerticalOrientation>::new().get(first);
                 let mut upright = match font.orientation {
+                    _ if combines(font) => false,
                     Orientation::Upright => true,
                     Orientation::Sideways => false,
                     Orientation::Mixed => matches!(
@@ -168,9 +201,10 @@ fn layout(
                 };
                 let origin = group[0].x;
                 let advance = groups.get(k + 1).map_or(run.x[1], |g| g[0].x) - origin;
-                let vertical = if upright
-                    || font.orientation == Orientation::Mixed
-                        && category == VerticalOrientation::TransformedRotated
+                let vertical = if !combines(font)
+                    && (upright
+                        || font.orientation == Orientation::Mixed
+                            && category == VerticalOrientation::TransformedRotated)
                 {
                     let shaped = upright_glyphs(text, group[0], value, font)?;
                     upright |= shaped.0.iter().map(|g| g.id).ne(group.iter().map(|g| g.id));
@@ -205,6 +239,7 @@ fn layout(
                     glyphs,
                     advance,
                     upright,
+                    combined: false,
                     space,
                     collapse: matches!(
                         font.collapse,
@@ -228,9 +263,55 @@ fn layout(
                 .find(|p| p.node == node)
                 .map_or(content.font, |p| p.font)
         };
+        // One box's consecutive text becomes one upright 1em cell. A font fallback
+        // may split the shaping runs, but does not split this composition.
         let mut from = 0;
         while from < clusters.len() {
-            if !clusters[from].upright {
+            let font = font_of(clusters[from].node);
+            if !combines(font) {
+                from += 1;
+                continue;
+            }
+            let mut to = from + 1;
+            while to < clusters.len() && clusters[to].node == clusters[from].node {
+                to += 1;
+            }
+            let em = font.size as f32;
+            let width: f32 = clusters[from..to].iter().map(|c| c.advance).sum();
+            let scale = if width > em && width > 0.0 {
+                em / width
+            } else {
+                1.0
+            };
+            let metrics = text.metrics(font)?;
+            let baseline = em / 2.0 + (metrics[0].round() - metrics[1].round()) / 2.0;
+            let mut pen = 0.0;
+            let mut glyphs = Vec::new();
+            for c in &clusters[from..to] {
+                glyphs.extend(c.glyphs.iter().map(|g| Glyph {
+                    x: (g.x + pen - width / 2.0) * scale,
+                    y: baseline + g.y,
+                    scale_x: scale,
+                    ..*g
+                }));
+                pen += c.advance;
+            }
+            let end = clusters[to - 1].range.end;
+            let break_after = clusters[to - 1].break_after;
+            let first = &mut clusters[from];
+            first.glyphs = glyphs;
+            first.range.end = end;
+            first.advance = em;
+            first.upright = true;
+            first.combined = true;
+            first.emergency = false;
+            first.break_after = break_after;
+            clusters.drain(from + 1..to);
+            from += 1;
+        }
+        let mut from = 0;
+        while from < clusters.len() {
+            if !clusters[from].upright || clusters[from].combined {
                 from += 1;
                 continue;
             }
@@ -239,6 +320,7 @@ fn layout(
             let mut to = from + 1;
             while to < clusters.len()
                 && clusters[to].upright
+                && !clusters[to].combined
                 && clusters[to].glyphs[0].face == face
                 && font_of(clusters[to].node) == font
             {
@@ -409,7 +491,11 @@ fn layout(
                         &mut out.marks,
                         mark,
                         font_of(c.node),
-                        &base.string[c.range.clone()],
+                        if c.combined {
+                            "\u{fffc}"
+                        } else {
+                            &base.string[c.range.clone()]
+                        },
                         super::emphasis::Placement {
                             node: c.node,
                             line: index,
@@ -584,6 +670,58 @@ mod tests {
             crate::testing::fonts(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn combined_text_occupies_one_cell_and_seeks_restore_glyphs() {
+        let source = indoc::indoc! {r#"
+            export const composition = {width:160,height:200,fps:4,duration:2};
+            export default function Scene() {
+                const {seconds} = useCurrentTime();
+                return <Text style={{width:70,height:180,fontSize:20,lineHeight:"30px",writingMode:"vertical-rl"}}>第<Span style={{textCombineUpright:seconds<1?"all":"none",textEmphasis:"filled dot",letterSpacing:"4px"}}>123456</Span>回</Text>;
+            }
+        "#};
+        let mut scene = load(source);
+        for number in [0, 5, 2, 7, 0] {
+            let at = Tick::from_seconds(number as f64 / 4.0).unwrap();
+            let frame = scene.frame(at).unwrap();
+            assert_eq!(frame.items, load(source).frame(at).unwrap().items);
+            let lines = frame.layout.lines.iter().flatten().next().unwrap();
+            if number < 4 {
+                assert_eq!(lines.marks.len(), 1);
+                assert!((lines.runs.last().unwrap().x[1] - 60.0).abs() < 0.01);
+                assert_eq!(lines.glyphs.iter().filter(|g| g.scale_x < 1.0).count(), 6);
+                assert!(lines.glyphs.iter().all(|g| g.upright));
+            } else {
+                assert_eq!(lines.marks.len(), 6);
+                assert!(lines.glyphs.iter().all(|g| g.scale_x == 1.0));
+            }
+        }
+    }
+
+    #[test]
+    fn inherited_combine_does_not_join_across_inline_box_boundaries() {
+        let source = indoc::indoc! {r#"
+            export const composition={width:120,height:160,fps:1,duration:1};
+            export default function Scene(){return <Text style={{writingMode:"vertical-rl",height:150}}><Span style={{textCombineUpright:"all"}}>12<Span>34</Span></Span></Text>}
+        "#};
+        let mut scene = load(source);
+        let frame = scene.frame(Tick::ZERO).unwrap();
+        let lines = frame.layout.lines.iter().flatten().next().unwrap();
+        assert!(lines.glyphs.iter().all(|g| !g.upright && g.scale_x == 1.0));
+    }
+
+    #[test]
+    fn combine_is_inherited_but_has_no_effect_in_horizontal_text() {
+        let source = indoc::indoc! {r#"
+            export const composition={width:200,height:100,fps:1,duration:1};
+            export default function Scene(){return <Text style={{textCombineUpright:"all"}}>12<Span>34</Span></Text>}
+        "#};
+        let mut scene = load(source);
+        let frame = scene.frame(Tick::ZERO).unwrap();
+        let mut plain = load(&source.replace("all", "none"));
+        assert_eq!(frame.items, plain.frame(Tick::ZERO).unwrap().items);
+        assert!(frame.styles[1].font.combine.is_some());
     }
 
     #[test]

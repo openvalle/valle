@@ -96,6 +96,8 @@ pub struct Glyph {
     pub cluster: u32,
     /// Counter-rotate a vertical upright glyph before the paragraph turns clockwise.
     pub upright: bool,
+    /// Horizontal glyph compression for combined upright text; advances are already scaled.
+    pub scale_x: f32,
 }
 
 /// A run of glyphs of one node on a line, with its left and right edges, less the white space
@@ -727,6 +729,7 @@ impl Text {
                 node,
                 cluster,
                 upright: false,
+                scale_x: 1.0,
             }));
         }
         let mut lines = Lines {
@@ -752,6 +755,7 @@ impl Text {
         size: f32,
         band: [f32; 2],
         upright: bool,
+        scale_x: f32,
     ) -> Result<Option<[f32; 2]>, Error> {
         let (em, curves) = match self.outlines.entry((face, id)) {
             Entry::Occupied(o) => o.into_mut(),
@@ -766,7 +770,7 @@ impl Text {
         let curves = if upright {
             turned = curves
                 .iter()
-                .map(|c| c.map(|[x, y]| [-y, x]))
+                .map(|c| c.map(|[x, y]| [-y, x * scale_x]))
                 .collect::<Vec<_>>();
             &turned
         } else {
@@ -897,6 +901,7 @@ impl Text {
                 node,
                 cluster: lines.string.len() as u32,
                 upright: false,
+                scale_x: 1.0,
             }));
             lines.runs.push(Run {
                 node,
@@ -1607,6 +1612,7 @@ mod tests {
             line_break: parley::LineBreak::Strict,
             writing: WritingMode::Horizontal,
             orientation: crate::style::Orientation::Mixed,
+            combine: None,
             emphasis: crate::style::emphasis::Mark::None,
             emphasis_color: None,
             emphasis_position: Default::default(),
@@ -2104,8 +2110,11 @@ mod tests {
         assert_eq!(lines.runs[0].glyphs, [0, 2]);
         let [x, g] = [lines.glyphs[0], lines.glyphs[1]];
         let below = [1.5, 2.5];
-        assert_eq!(t.ink(x.face, x.id, 20.0, below, false).unwrap(), None);
-        let [left, right] = t.ink(g.face, g.id, 20.0, below, false).unwrap().unwrap();
+        assert_eq!(t.ink(x.face, x.id, 20.0, below, false, 1.0).unwrap(), None);
+        let [left, right] = t
+            .ink(g.face, g.id, 20.0, below, false, 1.0)
+            .unwrap()
+            .unwrap();
         // The g's tail, within its advance.
         assert!(
             0.0 < left && left < right && right < g.x - x.x,

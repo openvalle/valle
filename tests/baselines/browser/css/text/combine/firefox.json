@@ -1,0 +1,11 @@
+{
+  "size": [400, 300],
+  "sources": {
+    "tests/baselines/browser/css/text/combine/scene.html": "54940c57216d270c44d616c8304c3c6deecaa3a1faf896abfbfa3392aec25443",
+    "tests/resources/NotoSansSC.ttf": "6cbd3ac22ef454e4e9bcfb67369ea94297002a218e9abebc90852534afee096a"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}
