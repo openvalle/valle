@@ -432,7 +432,31 @@ impl<'a> Drawing<'a> {
                 return;
             };
             let bbox = self.bbox(i, size, copy).unwrap_or([0.; 4]);
-            let images = self.filter_images(&graph, bbox, size, matrix);
+            let mut images = self.filter_images(&graph, bbox, size, matrix);
+            let needed = graph.needed();
+            let pixel = [0, 1].map(|k| 1. / matrix.0[k][0].hypot(matrix.0[k][1]));
+            for (input, paint, opacity) in [
+                (2, &s.fill, s.fill_opacity),
+                (3, &s.stroke.paint, s.stroke.opacity),
+            ] {
+                if needed[input] {
+                    let region = graph.paint_region(input, bbox, size, pixel);
+                    let items = self
+                        .paint(paint, opacity, s, size, bbox, matrix)
+                        .and_then(|fill| {
+                            painted(
+                                svg::rect(region.map(|v| v as f32), [0.; 2]),
+                                false,
+                                fill,
+                                region,
+                                matrix.radius_scale(),
+                            )
+                        })
+                        .into_iter()
+                        .collect();
+                    images.push((input, items));
+                }
+            }
             items = vec![Item::FilterGraph {
                 graph,
                 images,
@@ -702,13 +726,13 @@ impl<'a> Drawing<'a> {
             let svg::filter::Operation::Image(image) = &node.op else {
                 continue;
             };
-            if !needed[index + 2] {
+            if !needed[index + svg::filter::SOURCES] {
                 continue;
             }
-            let region = regions[index + 2];
+            let region = regions[index + svg::filter::SOURCES];
             let mut items = Vec::new();
             if region[2] <= 0. || region[3] <= 0. {
-                images.push((index, items));
+                images.push((index + svg::filter::SOURCES, items));
                 continue;
             }
             if let Some(id) = image.href.strip_prefix('#') {
@@ -796,7 +820,7 @@ impl<'a> Drawing<'a> {
                     }
                 }
             }
-            images.push((index, items));
+            images.push((index + svg::filter::SOURCES, items));
         }
         images
     }

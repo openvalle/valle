@@ -12,6 +12,9 @@ use super::{Element, Length};
 use crate::style::{Style, color};
 use crate::template::{Tag, V};
 
+/// SourceGraphic, SourceAlpha, FillPaint and StrokePaint precede primitive results.
+pub const SOURCES: usize = 4;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Definition {
     pub user_space: bool,
@@ -60,7 +63,8 @@ pub enum Transfer {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Node {
-    /// 0 = SourceGraphic, 1 = SourceAlpha; subsequent values index earlier nodes + 2.
+    /// 0 = SourceGraphic, 1 = SourceAlpha, 2 = FillPaint, 3 = StrokePaint;
+    /// subsequent values index earlier nodes + SOURCES.
     pub inputs: Vec<usize>,
     pub region: [Option<Length>; 4],
     pub op: Operation,
@@ -374,15 +378,21 @@ pub(crate) fn prepare(styles: &mut [Style], parents: &[Option<u32>]) -> Result<(
             let Some(Element::Primitive(p)) = styles[k].svg.as_deref().map(|c| &c.element) else {
                 continue;
             };
-            let previous = if nodes.is_empty() { 0 } else { nodes.len() + 1 };
+            let previous = if nodes.is_empty() {
+                0
+            } else {
+                nodes.len() + SOURCES - 1
+            };
             let input = |v: Option<&str>| -> Result<usize, String> {
                 match v {
                     None => Ok(previous),
                     Some("SourceGraphic") => Ok(0),
                     Some("SourceAlpha") => Ok(1),
-                    Some("BackgroundImage" | "BackgroundAlpha" | "FillPaint" | "StrokePaint") => {
+                    Some("FillPaint") => Ok(2),
+                    Some("StrokePaint") => Ok(3),
+                    Some("BackgroundImage" | "BackgroundAlpha") => {
                         Err(
-                            "filter input supports SourceGraphic, SourceAlpha or an earlier result"
+                            "filter input supports SourceGraphic, SourceAlpha, FillPaint, StrokePaint or an earlier result"
                                 .into(),
                         )
                     }
@@ -450,7 +460,7 @@ pub(crate) fn prepare(styles: &mut [Style], parents: &[Option<u32>]) -> Result<(
                 if result.is_empty() {
                     return Err("filter result must not be empty".into());
                 }
-                names.insert(result.clone(), nodes.len() + 1);
+                names.insert(result.clone(), nodes.len() + SOURCES - 1);
             }
         }
         styles[i].filter_graph = Some(Rc::new(Graph { definition, nodes }));
@@ -464,14 +474,14 @@ pub(crate) fn prepare(styles: &mut [Style], parents: &[Option<u32>]) -> Result<(
 impl Graph {
     /// Standard sources and earlier results which contribute to the final primitive.
     pub fn needed(&self) -> Vec<bool> {
-        let mut needed = vec![false; self.nodes.len() + 2];
+        let mut needed = vec![false; self.nodes.len() + SOURCES];
         let mut pending = vec![needed.len() - 1];
         while let Some(i) = pending.pop() {
             if std::mem::replace(&mut needed[i], true) {
                 continue;
             }
-            if i >= 2 {
-                pending.extend(self.nodes[i - 2].inputs.iter().copied());
+            if i >= SOURCES {
+                pending.extend(self.nodes[i - SOURCES].inputs.iter().copied());
             }
         }
         needed
@@ -489,13 +499,75 @@ impl Graph {
         })
     }
 
+    /// Paint sources are unbounded. Materialize the area sampled by their direct readers,
+    /// including kernel/offset guard pixels, instead of clipping the paint at the output edge.
+    pub fn paint_region(
+        &self,
+        input: usize,
+        bbox: [f64; 4],
+        viewport: [f64; 2],
+        pixel: [f64; 2],
+    ) -> [f64; 4] {
+        let regions = self.regions(bbox, viewport);
+        let needed = self.needed();
+        let units = if self.definition.primitive_user_space {
+            [1.; 2]
+        } else {
+            [bbox[2], bbox[3]]
+        };
+        let mut cover = regions[0];
+        for (i, n) in self.nodes.iter().enumerate() {
+            if !needed[i + SOURCES] || !n.inputs.contains(&input) {
+                continue;
+            }
+            let mut region = regions[i + SOURCES];
+            let mut grow = [0.; 2];
+            if n.inputs.first() == Some(&input) {
+                match &n.op {
+                    Operation::Offset(v) => {
+                        region[0] -= v[0] * units[0];
+                        region[1] -= v[1] * units[1];
+                    }
+                    Operation::Blur(v) => grow = [3. * v[0] * units[0], 3. * v[1] * units[1]],
+                    Operation::Morphology { radius, .. } => {
+                        grow = [radius[0] * units[0], radius[1] * units[1]]
+                    }
+                    Operation::Displacement { scale, .. } => {
+                        grow = [scale.abs() * units[0] / 2., scale.abs() * units[1] / 2.]
+                    }
+                    Operation::Shadow { offset, sigma } => {
+                        grow = [
+                            (offset[0].abs() + 3. * sigma[0]) * units[0],
+                            (offset[1].abs() + 3. * sigma[1]) * units[1],
+                        ];
+                    }
+                    Operation::Convolve(k) => {
+                        let step = k.unit.map_or(pixel, |v| [v[0] * units[0], v[1] * units[1]]);
+                        grow = std::array::from_fn(|axis| {
+                            f64::from(k.target[axis].max(k.order[axis] - 1 - k.target[axis]))
+                                * step[axis]
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            for axis in 0..2 {
+                let margin = grow[axis] + pixel[axis];
+                region[axis] -= margin;
+                region[axis + 2] += 2. * margin;
+            }
+            cover = union(cover, region);
+        }
+        cover
+    }
+
     pub fn regions(&self, bbox: [f64; 4], viewport: [f64; 2]) -> Vec<[f64; 4]> {
         let region = self.region(bbox, viewport);
-        let mut regions = vec![region; 2];
+        let mut regions = vec![region; SOURCES];
         for n in &self.nodes {
             let default = if matches!(n.op, Operation::Tile)
                 || n.inputs.is_empty()
-                || n.inputs.iter().any(|i| *i < 2)
+                || n.inputs.iter().any(|i| *i < SOURCES)
             {
                 region
             } else {
@@ -602,11 +674,41 @@ mod tests {
                     .iter()
                     .map(|n| n.inputs.clone())
                     .collect::<Vec<_>>(),
-                [vec![0], vec![2], vec![3, 3], vec![4, 1]]
+                [vec![0], vec![4], vec![5, 5], vec![6, 1]]
             );
             assert_eq!(graph.nodes[0].op, Operation::Blur([sigma; 2]));
             assert!(graph.nodes.iter().all(|n| !n.linear));
         }
+    }
+
+    #[test]
+    fn paint_sources_are_independent_inputs_with_filter_sized_regions() {
+        let sheet = sheet(vec![
+            svg(Tag::Svg, &[], &[1]),
+            svg(Tag::Filter, &[], &[2]),
+            svg(
+                Tag::FeBlend,
+                &[("in", "FillPaint"), ("in2", "StrokePaint")],
+                &[],
+            ),
+        ])
+        .unwrap();
+        let styles = sheet.compute(&[], true, [100., 100.], &[]).unwrap();
+        let graph = styles[1].filter_graph.as_ref().unwrap();
+        assert_eq!(graph.nodes[0].inputs, [2, 3]);
+        assert_eq!(graph.needed(), [false, false, true, true, true]);
+        assert_eq!(
+            graph.regions([20., 20., 40., 40.], [100., 100.]),
+            vec![[16., 16., 48., 48.]; 5]
+        );
+        assert!(definition(&[("width", &V::Str("-1".into()))]).is_err());
+        let mut blur = (**graph).clone();
+        blur.nodes[0].op = Operation::Blur([3.; 2]);
+        blur.nodes[0].inputs = vec![2];
+        assert_eq!(
+            blur.paint_region(2, [20., 20., 40., 40.], [100., 100.], [1.; 2]),
+            [6., 6., 68., 68.]
+        );
     }
 
     #[test]
@@ -647,6 +749,8 @@ mod tests {
         assert_eq!(
             graph.regions([20., 10., 80., 40.], [200., 100.]),
             [
+                [12., 6., 96., 48.],
+                [12., 6., 96., 48.],
                 [12., 6., 96., 48.],
                 [12., 6., 96., 48.],
                 [40., 20., 40., 20.],

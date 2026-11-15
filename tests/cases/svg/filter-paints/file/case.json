@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/filters.html#FilterPrimitiveInAttribute",
+  "assertion": "FillPaint and StrokePaint fill the filter region using the target paint independently of shape coverage, including alpha, object-bounding-box gradients, patterns, currentColor and none.",
+  "at": [0],
+  "browser": {
+    "selected": "firefox",
+    "reason": "Firefox follows SVG 1.1 paint-source semantics for opacity, gradients, patterns and unbounded solid paint under blur. Chromium and WebKit use SourceGraphic for these inputs. Independent unit tests check source indices, liveness and default regions. Reviewed native differences are primarily 1-2 channel levels from filter color rounding, plus circle antialiasing (18600 pixels, maximum delta 27).",
+    "pixels": {
+      "maxDifference": 30,
+      "maxPixels": 19000
+    }
+  }
+}

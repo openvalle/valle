@@ -3,7 +3,7 @@ use super::Step;
 use super::plan::{Plan, Reach};
 use crate::layout::Rect;
 use crate::paint::Matrix;
-use crate::svg::filter::{Graph, Operation, Transfer};
+use crate::svg::filter::{Graph, Operation, SOURCES, Transfer};
 
 #[derive(Clone, Copy)]
 struct Pass {
@@ -107,7 +107,7 @@ impl Plan {
             target: blank,
             runs: Vec::new(),
         });
-        let mut layers = vec![blank; graph.nodes.len() + 2];
+        let mut layers = vec![blank; graph.nodes.len() + SOURCES];
         layers[0] = self.graph_pass(
             [source; 2],
             0,
@@ -134,6 +134,14 @@ impl Plan {
                 &[],
             );
         }
+        for source in [2, 3] {
+            if needed[source] {
+                layers[source] = images
+                    .iter()
+                    .find(|(index, _)| *index == source)
+                    .map_or(blank, |(_, layer)| *layer);
+            }
+        }
         let units = if graph.definition.primitive_user_space {
             [1.0; 2]
         } else {
@@ -146,14 +154,27 @@ impl Plan {
                 (matrix.0[0][1] * x + matrix.0[1][1] * y) as f32,
             ]
         };
+        let pixel = [0, 1].map(|k| 1. / matrix.0[k][0].hypot(matrix.0[k][1]));
+        let paint_regions = [2, 3].map(|i| {
+            if needed[i] {
+                graph.paint_region(i, bbox, viewport, pixel)
+            } else {
+                filter_region
+            }
+        });
         for (i, n) in graph.nodes.iter().enumerate() {
-            if !needed[i + 2] {
+            if !needed[i + SOURCES] {
                 continue;
             }
-            let region = regions[i + 2];
+            let region = regions[i + SOURCES];
             let a = n.inputs.first().map_or(blank, |i| layers[*i]);
             let b = n.inputs.get(1).map_or(a, |i| layers[*i]);
             let linear = n.linear;
+            let source_region = n
+                .inputs
+                .first()
+                .filter(|&&i| matches!(i, 2 | 3))
+                .map_or(filter_region, |&i| paint_regions[i - 2]);
             let layer = match &n.op {
                 Operation::Turbulence(noise) => {
                     let origin = if graph.definition.primitive_user_space {
@@ -273,7 +294,7 @@ impl Plan {
                 Operation::Image(_) => {
                     let source = images
                         .iter()
-                        .find(|(index, _)| *index == i)
+                        .find(|(index, _)| *index == i + SOURCES)
                         .map_or(blank, |(_, layer)| *layer);
                     self.graph_pass(
                         [source; 2],
@@ -399,7 +420,7 @@ impl Plan {
                         region,
                         matrix,
                     },
-                    filter_region,
+                    source_region,
                 ),
                 Operation::Morphology { dilate, radius } => self.graph_kernel(
                     a,
@@ -410,7 +431,7 @@ impl Plan {
                         region,
                         matrix,
                     },
-                    filter_region,
+                    source_region,
                 ),
                 Operation::Displacement { scale, channels } => self.graph_pass(
                     [a, b],
@@ -434,7 +455,7 @@ impl Plan {
                         1,
                         Pass {
                             linear: false,
-                            region: filter_region,
+                            region: source_region,
                             matrix,
                         },
                         &[],
@@ -446,17 +467,17 @@ impl Plan {
                         [sigma[0] * units[0], sigma[1] * units[1]],
                         Pass {
                             linear: false,
-                            region: filter_region,
+                            region: source_region,
                             matrix,
                         },
-                        filter_region,
+                        source_region,
                     );
                     let colored = self.graph_pass(
                         [blurred; 2],
                         11,
                         Pass {
                             linear: false,
-                            region: filter_region,
+                            region: source_region,
                             matrix,
                         },
                         &n.flood.map(|v| v as f32),
@@ -467,7 +488,7 @@ impl Plan {
                         3,
                         Pass {
                             linear: false,
-                            region: filter_region,
+                            region: source_region,
                             matrix,
                         },
                         &offset(*v),
@@ -489,7 +510,7 @@ impl Plan {
                     unreachable!("validated primitive child")
                 }
             };
-            layers[i + 2] = layer;
+            layers[i + SOURCES] = layer;
         }
         let last = *layers.last().unwrap();
         (last, self.bound(last))
@@ -694,7 +715,7 @@ mod tests {
                     operator: 0,
                     k: [0.; 4],
                 },
-                &[2, 3],
+                &[4, 5],
             );
             over.linear = linear;
             let pixels = draw(&mut renderer, vec![red.clone(), blue.clone(), over], vec![]);
@@ -713,7 +734,7 @@ mod tests {
                 operator: 0,
                 k: [0.; 4],
             },
-            &[2, 2],
+            &[4, 4],
         );
         let mut allocated = None;
         for _ in 0..8 {
@@ -737,7 +758,7 @@ mod tests {
             unit: None,
             preserve_alpha: true,
         };
-        let mut convolve = node(Operation::Convolve(kernel), &[2]);
+        let mut convolve = node(Operation::Convolve(kernel), &[4]);
         convolve.linear = false;
         let pixels = draw(&mut renderer, vec![red.clone(), convolve], vec![]);
         close(&pixels[..4], [255, 64, 64, 128]);
@@ -790,7 +811,7 @@ mod tests {
             unit: None,
             preserve_alpha: false,
         };
-        let mut convolve = node(Operation::Convolve(kernel), &[2]);
+        let mut convolve = node(Operation::Convolve(kernel), &[4]);
         convolve.region = [0., 0., 16., 16.].map(|units| {
             Some(Length {
                 units,
@@ -817,7 +838,7 @@ mod tests {
         };
         let pixels = draw(
             &mut renderer,
-            vec![red.clone(), node(Operation::Convolve(kernel), &[2])],
+            vec![red.clone(), node(Operation::Convolve(kernel), &[4])],
             vec![],
         );
         close(
@@ -825,7 +846,7 @@ mod tests {
             [255, 0, 0, 128],
         );
         // Tile defaults to the whole filter, not its smaller input subregion.
-        let tile = node(Operation::Tile, &[2]);
+        let tile = node(Operation::Tile, &[4]);
         let pixels = draw(&mut renderer, vec![red.clone(), tile.clone()], vec![]);
         for pixel in pixels.as_chunks::<4>().0 {
             close(pixel, [255, 0, 0, 128]);

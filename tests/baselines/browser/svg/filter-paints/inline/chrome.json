@@ -1,0 +1,10 @@
+{
+  "size": [440, 240],
+  "sources": {
+    "tests/baselines/browser/svg/filter-paints/inline/scene.html": "31142a8ca58c5499b339b6ff0b6221d23f6bd5d5cb4a7e87147b888445e3f6dc"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

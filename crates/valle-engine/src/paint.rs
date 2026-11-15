@@ -151,6 +151,7 @@ pub enum Item {
     /// A named SVG filter DAG; intermediate images stay on the GPU.
     FilterGraph {
         graph: Rc<crate::svg::filter::Graph>,
+        /// Prepainted graph inputs, keyed by standard-source or primitive-result index.
         images: Vec<(usize, Vec<Item>)>,
         bbox: [f64; 4],
         viewport: [f64; 2],

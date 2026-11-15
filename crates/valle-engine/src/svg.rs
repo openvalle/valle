@@ -1458,7 +1458,7 @@ pub(crate) fn ellipse(c: Point, [rx, ry]: [f32; 2]) -> Option<Path> {
 
 /// A rectangle, its corners rounded by radii no more than half its sides, clockwise from the
 /// top left corner's end.
-fn rect([x, y, w, h]: [f32; 4], [rx, ry]: [f32; 2]) -> Path {
+pub(crate) fn rect([x, y, w, h]: [f32; 4], [rx, ry]: [f32; 2]) -> Path {
     let [rx, ry] = [rx.min(w / 2.0), ry.min(h / 2.0)];
     if rx <= 0.0 || ry <= 0.0 {
         return Path(vec![

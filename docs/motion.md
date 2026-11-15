@@ -612,8 +612,10 @@ premultiplied components.
 </svg>
 ```
 
-`in`/`in2` can name `SourceGraphic`, `SourceAlpha`, or an earlier primitive's
-`result`. An omitted input uses the previous primitive, or `SourceGraphic` for
+`in`/`in2` can name `SourceGraphic`, `SourceAlpha`, `FillPaint`, `StrokePaint`, or an earlier primitive's
+`result`. `FillPaint` and `StrokePaint` use the target element's paint, including
+its opacity, gradients and patterns, across the filter region without clipping to
+the shape or stroke outline. An omitted input uses the previous primitive, or `SourceGraphic` for
 the first primitive. Repeated result names resolve to the closest earlier result.
 Valle reports missing/forward references as errors. Only the final primitive and
 its dependencies draw; an empty definition draws nothing. Parameters may use
@@ -653,7 +655,7 @@ the largest RGB component; composite it over the source or add it with `feCompos
 convolution kernels and noise octaves small unless the effect needs more detail.
 
 Not supported: filter URLs on CSS boxes/the outer SVG,
-URL/function lists, `BackgroundImage`/`BackgroundAlpha`/`FillPaint`/`StrokePaint`,
+URL/function lists, `BackgroundImage`/`BackgroundAlpha`,
 blur
 edge modes other than `none`. These produce errors rather than a partial effect.
 
