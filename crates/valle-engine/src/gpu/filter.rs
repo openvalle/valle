@@ -236,6 +236,48 @@ impl Plan {
                         &data,
                     )
                 }
+                Operation::Lighting(lighting) => {
+                    let pixel = [0, 1].map(|axis| 1. / matrix.0[axis][0].hypot(matrix.0[axis][1]));
+                    let unit = lighting
+                        .unit
+                        .map_or(pixel, |u| [u[0] * units[0], u[1] * units[1]]);
+                    let z = units[0].hypot(units[1]) / std::f64::consts::SQRT_2;
+                    let origin = if graph.definition.primitive_user_space {
+                        [0.; 2]
+                    } else {
+                        [bbox[0], bbox[1]]
+                    };
+                    let mut data = regions[n.inputs[0]].map(|v| v as f32).to_vec();
+                    data.extend(
+                        lighting
+                            .light
+                            .as_ref()
+                            .expect("validated light source")
+                            .parameters(origin, [units[0], units[1], z]),
+                    );
+                    let c = lighting.color;
+                    let params = [
+                        unit[0] as f32,
+                        unit[1] as f32,
+                        (lighting.surface * z) as f32,
+                        lighting.constant as f32,
+                        c[0] as f32,
+                        c[1] as f32,
+                        c[2] as f32,
+                        0.,
+                    ];
+                    self.graph_pass(
+                        [a; 2],
+                        15,
+                        Pass {
+                            linear,
+                            region,
+                            matrix,
+                        },
+                        &params,
+                        &data,
+                    )
+                }
                 Operation::Tile => self.graph_pass(
                     [a; 2],
                     12,
@@ -434,7 +476,7 @@ impl Plan {
                         &[],
                     )
                 }
-                Operation::Channel(..) | Operation::MergeNode => {
+                Operation::Channel(..) | Operation::MergeNode | Operation::Light(_) => {
                     unreachable!("validated primitive child")
                 }
             };
@@ -560,6 +602,57 @@ mod tests {
                 },
             );
         }
+        // A front light on a flat height map produces a constant opaque diffuse map,
+        // including the Sobel corners and edges. Lighting colors do not contribute alpha.
+        let light = crate::svg::filter::lighting::Lighting {
+            surface: 2.,
+            constant: 0.5,
+            unit: None,
+            light: Some(crate::svg::filter::lighting::Light::Distant([0., 90.])),
+            color: [1., 0.5, 0.25, 0.],
+        };
+        let mut diffuse = node(Operation::Lighting(light.clone()), &[0]);
+        diffuse.linear = false;
+        let pixels = draw(&mut renderer, vec![diffuse], vec![]);
+        for pixel in pixels.as_chunks::<4>().0 {
+            close(pixel, [128, 64, 32, 255]);
+        }
+        let mut light = light;
+        light.constant = 1.;
+        light.color = [1.; 4];
+        light.light = Some(crate::svg::filter::lighting::Light::Distant([180., 0.]));
+        let mut diffuse = node(Operation::Lighting(light), &[0]);
+        diffuse.linear = false;
+        let step = Item::Rect {
+            rect: rect([8., 0., 8., 16.]),
+            radii: [[0.; 2]; 4],
+            color: work([1.; 4]),
+        };
+        let pixels = draw(&mut renderer, vec![diffuse], vec![step]);
+        close(
+            &pixels[(8 * 16 + 7) * 4..(8 * 16 + 8) * 4],
+            [228, 228, 228, 255],
+        );
+        let light = crate::svg::filter::lighting::Lighting {
+            surface: 1.,
+            constant: 1.,
+            unit: None,
+            color: [1.; 4],
+            light: Some(crate::svg::filter::lighting::Light::Spot {
+                position: [200., 0., 30.],
+                target: [200., 0., 0.],
+                exponent: 1.,
+                cone: Some(20.),
+            }),
+        };
+        let pixels = draw(
+            &mut renderer,
+            vec![node(Operation::Lighting(light), &[0])],
+            vec![],
+        );
+        for pixel in pixels.as_chunks::<4>().0 {
+            close(pixel, [0, 0, 0, 255]);
+        }
         // Flood has no input dependency. The graph must execute even with no drawing runs.
         let mut red = node(Operation::Flood, &[]);
         red.flood = [1., 0., 0., 0.5];
@@ -645,7 +738,6 @@ mod tests {
             &pixels[(5 * 16 + 5) * 4..(5 * 16 + 5) * 4 + 4],
             [255, 0, 0, 128],
         );
-        // Tile defaults to the whole filter, not its smaller input subregion.
         // A reversed asymmetric kernel moves the 4..8 input two pixels left.
         let kernel = crate::svg::filter::convolve::Kernel {
             order: [3, 1],
@@ -685,6 +777,7 @@ mod tests {
             &pixels[(4 * 16 + 7) * 4..(4 * 16 + 8) * 4],
             [255, 0, 0, 128],
         );
+        // Tile defaults to the whole filter, not its smaller input subregion.
         let tile = node(Operation::Tile, &[2]);
         let pixels = draw(&mut renderer, vec![red.clone(), tile.clone()], vec![]);
         for pixel in pixels.as_chunks::<4>().0 {

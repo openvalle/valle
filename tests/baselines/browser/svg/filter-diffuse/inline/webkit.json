@@ -1,0 +1,10 @@
+{
+  "size": [340, 130],
+  "sources": {
+    "tests/baselines/browser/svg/filter-diffuse/inline/scene.html": "825dc96ef6d03dcf19e803861c2a18c4987549976aa88477641ecfd33328d563"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

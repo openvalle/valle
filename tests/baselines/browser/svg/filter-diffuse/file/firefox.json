@@ -1,0 +1,11 @@
+{
+  "size": [340, 130],
+  "sources": {
+    "tests/baselines/browser/svg/filter-diffuse/file/scene.html": "ee378176517befec0336a3febbe8edbaf3a025e78cb41bbbbcf1b14692805069",
+    "tests/cases/svg/filter-diffuse/file/source.svg": "1eb0d17b6ade184dca7c6a6eba79de50f61e30e1fe836e96d18c699436c7f66a"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

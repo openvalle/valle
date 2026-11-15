@@ -185,6 +185,64 @@ fn convolve(v: Out, linear: bool) -> vec4f {
   return vec4f(clamp(sum.rgb + h[3].w * alpha, vec3f(0.0), vec3f(alpha)), alpha);
 }
 
+fn height_at(t: u32, at: vec2f) -> f32 {
+  let p = transforms[t].forward * vec3f(at, 1.0);
+  return sample_at(first, p.xy / p.z).a;
+}
+fn unit_vector(v: vec3f) -> vec3f {
+  let d = length(v);
+  if (d > 0.0) { return v / d; }
+  return vec3f(0.0);
+}
+fn lighting(v: Out, linear: bool) -> vec4f {
+  let h = graph[v.index].m;
+  let t = u32(h[0].z);
+  let at = local(v.pos.xy, t);
+  let unit = h[2].xy;
+  let bounds = vec4f(data(v.index, 0u), data(v.index, 1u), data(v.index, 2u), data(v.index, 3u));
+  let lo = max(at - unit, bounds.xy + unit * 0.5);
+  let hi = min(at + unit, bounds.xy + bounds.zw - unit * 0.5);
+  // Truncate the Sobel kernel at the input edge, then normalize by its surviving
+  // weights and distance. This gives SVG's distinct corner/edge/interior factors.
+  let left = at.x - unit.x >= bounds.x;
+  let right = at.x + unit.x < bounds.x + bounds.z;
+  let top = at.y - unit.y >= bounds.y;
+  let bottom = at.y + unit.y < bounds.y + bounds.w;
+  var dx = 2.0 * (height_at(t, vec2f(hi.x, at.y)) - height_at(t, vec2f(lo.x, at.y)));
+  var dy = 2.0 * (height_at(t, vec2f(at.x, hi.y)) - height_at(t, vec2f(at.x, lo.y)));
+  if (top) { dx += height_at(t, vec2f(hi.x, at.y - unit.y)) - height_at(t, vec2f(lo.x, at.y - unit.y)); }
+  if (bottom) { dx += height_at(t, vec2f(hi.x, at.y + unit.y)) - height_at(t, vec2f(lo.x, at.y + unit.y)); }
+  if (left) { dy += height_at(t, vec2f(at.x - unit.x, hi.y)) - height_at(t, vec2f(at.x - unit.x, lo.y)); }
+  if (right) { dy += height_at(t, vec2f(at.x + unit.x, hi.y)) - height_at(t, vec2f(at.x + unit.x, lo.y)); }
+  let weights = vec2f(2.0 + f32(top) + f32(bottom), 2.0 + f32(left) + f32(right));
+  let slope = 2.0 * vec2f(dx, dy) / (weights * max(hi - lo, vec2f(0.000001)));
+  let normal = normalize(vec3f(-h[2].z * slope, 1.0));
+  let point = vec3f(at, height_at(t, at) * h[2].z);
+  let kind = u32(data(v.index, 4u));
+  let position = vec3f(data(v.index, 5u), data(v.index, 6u), data(v.index, 7u));
+  var light = position;
+  if (kind != 0u) { light = unit_vector(position - point); }
+  var intensity = 1.0;
+  if (kind == 2u) {
+    let aim = vec3f(data(v.index, 8u), data(v.index, 9u), data(v.index, 10u));
+    let direction = unit_vector(aim - position);
+    let cosine = dot(-light, direction);
+    let cone = data(v.index, 12u);
+    if (cosine <= 0.0 || cosine < cone) { intensity = 0.0; }
+    else {
+      intensity = pow(cosine, data(v.index, 11u));
+      // Smooth the cone cutoff over roughly one sample footprint.
+      if (cone > -1.0) {
+        let footprint = max(unit.x, unit.y) / max(length(position - point), 0.000001);
+        intensity *= clamp((cosine - cone) / max(footprint, 0.000001), 0.0, 1.0);
+      }
+    }
+  }
+  let color = select(h[3].rgb, decode(h[3].rgb), linear);
+  let amount = h[2].w * max(dot(normal, light), 0.0) * intensity;
+  return vec4f(clamp(color * amount, vec3f(0.0), vec3f(1.0)), 1.0);
+}
+
 fn filtered(v: Out) -> vec4f {
   let h = graph[v.index].m;
   let op = u32(h[0].x);
@@ -274,6 +332,7 @@ fn filtered(v: Out) -> vec4f {
     // Match the noise raster sampling phase used by Chrome and WebKit.
     case 13u: { result = turbulence(v.index, local(v.pos.xy + 0.5, t)); }
     case 14u: { result = convolve(v, linear); }
+    case 15u: { result = lighting(v, linear); }
     case 12u: {
       let tile = h[2];
       if (any(tile.zw <= vec2f(0.0))) { return vec4f(0.0); }

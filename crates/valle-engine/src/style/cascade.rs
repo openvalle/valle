@@ -201,6 +201,7 @@ fn copy(d: &mut Declared, s: &Declared, field: Field) {
         F::MixBlendMode => fields!(blend),
         F::Isolation => fields!(isolate),
         F::Filter => fields!(filter, filter_ref),
+        F::LightingColor => fields!(lighting_color),
         F::FloodColor => fields!(flood_color),
         F::FloodOpacity => fields!(flood_opacity),
         F::ColorInterpolationFilters => fields!(filter_linear),
@@ -453,6 +454,7 @@ pub(super) fn resolved(d: &Declared, s: &Style, canvas: [f64; 2]) -> Declared {
         mask_alpha = s.mask_alpha,
         paint_order = s.paint_order,
         flood_color = s.flood_color.clone(),
+        lighting_color = s.lighting_color.clone(),
         flood_opacity = s.flood_opacity,
         filter_linear = s.filter_linear
     );

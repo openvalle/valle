@@ -1,6 +1,7 @@
 //! SVG filter primitives retain their named inputs until the complete definition is known.
 //! The resolved graph is a DAG: inputs can only name a standard source or an earlier result.
 pub mod convolve;
+pub mod lighting;
 pub mod turbulence;
 
 use std::collections::HashMap;
@@ -31,6 +32,8 @@ pub enum Operation {
     Offset([f64; 2]),
     Flood,
     Tile,
+    Lighting(lighting::Lighting),
+    Light(lighting::Light),
     Convolve(convolve::Kernel),
     Turbulence(turbulence::Noise),
     Matrix([f64; 20]),
@@ -114,6 +117,10 @@ pub fn primitive(tag: Tag, attributes: &[(&str, &V)]) -> Result<Primitive, Strin
         Tag::FeOffset => Operation::Offset([a.number("dx", 0.0)?, a.number("dy", 0.0)?]),
         Tag::FeFlood => Operation::Flood,
         Tag::FeTile => Operation::Tile,
+        Tag::FeDiffuseLighting => Operation::Lighting(lighting::Lighting::parse(&a)?),
+        Tag::FeDistantLight | Tag::FePointLight | Tag::FeSpotLight => {
+            Operation::Light(lighting::Light::parse(tag, &a)?)
+        }
         Tag::FeConvolveMatrix => Operation::Convolve(convolve::Kernel::parse(&a)?),
         Tag::FeTurbulence => {
             let octaves = a.number("numOctaves", 1.)?;
@@ -387,6 +394,7 @@ pub(crate) fn prepare(styles: &mut [Style], parents: &[Option<u32>]) -> Result<(
                 ],
                 _ => vec![input(p.inputs[0].as_deref())?],
             };
+            let mut op = p.op.clone();
             let mut transfer = std::array::from_fn(|_| Transfer::Identity);
             for child in k + 1..styles.len() {
                 if parents[child] != Some(k as u32) {
@@ -396,6 +404,13 @@ pub(crate) fn prepare(styles: &mut [Style], parents: &[Option<u32>]) -> Result<(
                     styles[child].svg.as_deref().map(|c| &c.element)
                 {
                     match &c.op {
+                        Operation::Light(source) => {
+                            if let Operation::Lighting(lighting) = &mut op
+                                && lighting.light.replace(source.clone()).is_some()
+                            {
+                                return Err("lighting needs exactly one light source".into());
+                            }
+                        }
                         Operation::MergeNode => inputs.push(input(c.inputs[0].as_deref())?),
                         Operation::Channel(channel, value) => transfer[*channel] = value.clone(),
                         _ => {}
@@ -403,12 +418,18 @@ pub(crate) fn prepare(styles: &mut [Style], parents: &[Option<u32>]) -> Result<(
                 }
             }
             let style = &styles[k];
+            if let Operation::Lighting(lighting) = &mut op {
+                if lighting.light.is_none() {
+                    return Err("lighting needs exactly one light source".into());
+                }
+                lighting.color = color::resolve(&style.lighting_color, style.color);
+            }
             let mut flood = color::resolve(&style.flood_color, style.color);
             flood[3] *= style.flood_opacity;
             nodes.push(Node {
                 inputs,
                 region: p.region,
-                op: p.op.clone(),
+                op,
                 linear: style.filter_linear,
                 flood,
                 transfer,
@@ -606,6 +627,36 @@ mod tests {
     }
 
     #[test]
+    fn lighting_requires_one_source_and_resolves_current_color() {
+        for sources in [0, 1, 2] {
+            let mut nodes = vec![
+                svg(Tag::Svg, &[], &[1]),
+                svg(Tag::Filter, &[], &[2]),
+                svg(
+                    Tag::FeDiffuseLighting,
+                    &[("lightingColor", "currentColor"), ("color", "#804020")],
+                    &(3..3 + sources).collect::<Vec<_>>(),
+                ),
+            ];
+            for _ in 0..sources {
+                nodes.push(svg(Tag::FeDistantLight, &[("elevation", "90")], &[]));
+            }
+            let styles = sheet(nodes).unwrap().compute(&[], true, [100., 100.], &[]);
+            if sources == 1 {
+                let styles = styles.unwrap();
+                let graph = styles[1].filter_graph.as_ref().unwrap();
+                let Operation::Lighting(lighting) = &graph.nodes[0].op else {
+                    panic!("expected lighting");
+                };
+                assert_eq!(lighting.light, Some(lighting::Light::Distant([0., 90.])));
+                assert_eq!(lighting.color, [128. / 255., 64. / 255., 32. / 255., 1.]);
+            } else {
+                assert!(styles.unwrap_err().contains("exactly one light source"));
+            }
+        }
+    }
+
+    #[test]
     fn invalid_primitives_and_unavailable_inputs_report_authored_names() {
         for (tag, attrs, message) in [
             (
@@ -627,6 +678,16 @@ mod tests {
                 Tag::FeTurbulence,
                 vec![("stitchTiles", "repeat")],
                 "not one of",
+            ),
+            (
+                Tag::FeDiffuseLighting,
+                vec![("diffuseConstant", "-1")],
+                "must not be negative",
+            ),
+            (
+                Tag::FeDiffuseLighting,
+                vec![("kernelUnitLength", "0")],
+                "positive",
             ),
             (Tag::FeMorphology, vec![("radius", "1 2 3")], "one or two"),
             (Tag::FeColorMatrix, vec![("values", "1 2")], "20 values"),

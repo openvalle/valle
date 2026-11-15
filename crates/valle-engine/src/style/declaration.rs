@@ -140,6 +140,7 @@ pub(super) struct Declared {
     pub(super) blend: Blend,
     pub(super) isolate: bool,
     pub(super) filter_ref: Option<Rc<str>>,
+    pub(super) lighting_color: Option<Option<color::Specified>>,
     pub(super) flood_color: Option<Option<color::Specified>>,
     pub(super) flood_opacity: Option<f64>,
     pub(super) filter_linear: Option<bool>,
@@ -297,6 +298,7 @@ impl Default for Declared {
             isolate: false,
             filter_ref: None,
             flood_color: None,
+            lighting_color: None,
             flood_opacity: None,
             filter_linear: None,
             filter: Vec::new(),
@@ -1274,6 +1276,7 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
                 d.filter_ref = None;
             }
         }
+        F::LightingColor => d.lighting_color = Some(current_color(v)?),
         F::FloodColor => d.flood_color = Some(current_color(v)?),
         F::FloodOpacity => d.flood_opacity = Some(alpha(v)?),
         F::ColorInterpolationFilters => {

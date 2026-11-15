@@ -246,7 +246,7 @@ pub struct Computed {
 
 /// Presentation attributes: style properties of the same name, which the element's style
 /// overrides. Every SVG element takes them.
-const PRESENTATION: [&str; 51] = [
+const PRESENTATION: [&str; 52] = [
     "xmlSpace",
     "fill",
     "fillOpacity",
@@ -296,6 +296,7 @@ const PRESENTATION: [&str; 51] = [
     "transformOrigin",
     "filter",
     "floodColor",
+    "lightingColor",
     "floodOpacity",
     "colorInterpolationFilters",
 ];
@@ -365,6 +366,29 @@ fn own(tag: Tag) -> &'static [&'static str] {
         ],
         Tag::FeFlood => &["in", "in2", "result", "x", "y", "width", "height"],
         Tag::FeTile => &["in", "result", "x", "y", "width", "height"],
+        Tag::FeSpotLight => &[
+            "x",
+            "y",
+            "z",
+            "pointsAtX",
+            "pointsAtY",
+            "pointsAtZ",
+            "specularExponent",
+            "limitingConeAngle",
+        ],
+        Tag::FePointLight => &["x", "y", "z"],
+        Tag::FeDistantLight => &["azimuth", "elevation"],
+        Tag::FeDiffuseLighting => &[
+            "in",
+            "result",
+            "x",
+            "y",
+            "width",
+            "height",
+            "surfaceScale",
+            "diffuseConstant",
+            "kernelUnitLength",
+        ],
         Tag::FeConvolveMatrix => &[
             "in",
             "result",
@@ -622,10 +646,15 @@ pub fn holds(tag: Tag) -> Holds {
                 Tag::FeDropShadow,
                 Tag::FeComponentTransfer,
                 Tag::FeTile,
+                Tag::FeDiffuseLighting,
                 Tag::FeConvolveMatrix,
                 Tag::FeTurbulence,
             ],
             "filter primitives",
+        ),
+        Tag::FeDiffuseLighting => Holds::Only(
+            &[Tag::FeDistantLight, Tag::FePointLight, Tag::FeSpotLight],
+            "a light source",
         ),
         Tag::FeMerge => Holds::Only(&[Tag::FeMergeNode], "<feMergeNode>s"),
         Tag::FeComponentTransfer => Holds::Only(
@@ -745,6 +774,10 @@ pub fn computed(
         | Tag::FeFuncG
         | Tag::FeFuncB
         | Tag::FeTile
+        | Tag::FeSpotLight
+        | Tag::FePointLight
+        | Tag::FeDistantLight
+        | Tag::FeDiffuseLighting
         | Tag::FeConvolveMatrix
         | Tag::FeTurbulence
         | Tag::FeFuncA => Element::Primitive(filter::primitive(tag, attributes)?),

@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG11/filters.html#feDiffuseLightingElement",
+  "assertion": "Diffuse lighting uses the alpha height map, SVG Sobel normals at corners and edges, light colors and distant, point and spot sources.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "The three browsers agree on the light directions and intensities. Their 8-bit alpha gradients produce striped normals; Valle retains a smoother F16 height map. Chrome differs by at most 8 channel levels at the outer Sobel columns, with only 569 pixels above 2. Flat and step normals and cone rejection have independent GPU pixel assertions.",
+    "pixels": {
+      "maxDifference": 8,
+      "maxPixels": 25000
+    }
+  }
+}

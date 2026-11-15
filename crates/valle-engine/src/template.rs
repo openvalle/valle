@@ -674,11 +674,15 @@ pub enum Tag {
     FeFuncB,
     FeFuncA,
     FeTile,
+    FeSpotLight,
+    FePointLight,
+    FeDistantLight,
+    FeDiffuseLighting,
     FeConvolveMatrix,
     FeTurbulence,
 }
 
-const TAGS: [(&str, Tag); 44] = [
+const TAGS: [(&str, Tag); 48] = [
     ("svg", Tag::Svg),
     ("g", Tag::G),
     ("path", Tag::Path),
@@ -721,6 +725,10 @@ const TAGS: [(&str, Tag); 44] = [
     ("feFuncB", Tag::FeFuncB),
     ("feFuncA", Tag::FeFuncA),
     ("feTile", Tag::FeTile),
+    ("feSpotLight", Tag::FeSpotLight),
+    ("fePointLight", Tag::FePointLight),
+    ("feDistantLight", Tag::FeDistantLight),
+    ("feDiffuseLighting", Tag::FeDiffuseLighting),
     ("feConvolveMatrix", Tag::FeConvolveMatrix),
     ("feTurbulence", Tag::FeTurbulence),
 ];

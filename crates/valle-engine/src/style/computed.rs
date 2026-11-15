@@ -148,6 +148,7 @@ pub struct Style {
     /// `filter` and `backdrop-filter`: empty for `none`. A `motionBlur` is the last filter.
     pub filter_ref: Option<Rc<str>>,
     pub filter_graph: Option<Rc<svg::filter::Graph>>,
+    pub lighting_color: Option<color::Specified>,
     pub flood_color: Option<color::Specified>,
     pub flood_opacity: f64,
     pub filter_linear: bool,
@@ -302,6 +303,7 @@ impl Style {
             filter_ref: _,
             filter_graph: _,
             flood_color: _,
+            lighting_color: _,
             flood_opacity: _,
             filter_linear: _,
             filter: _,
@@ -816,6 +818,10 @@ pub(super) fn compute(
         isolate: d.isolate,
         filter_ref: d.filter_ref.clone(),
         filter_graph: None,
+        lighting_color: d
+            .lighting_color
+            .clone()
+            .unwrap_or_else(|| Some([1.; 4].into())),
         flood_color: d
             .flood_color
             .clone()
