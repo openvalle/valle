@@ -91,6 +91,7 @@ fn inherited(field: Field) -> bool {
         field,
         Font | Color
             | FontSize
+            | FontSizeAdjust
             | FontWeight
             | FontStretch
             | FontStyle
@@ -248,6 +249,7 @@ fn copy(d: &mut Declared, s: &Declared, field: Field) {
         F::Color => fields!(color),
         F::Font => fields!(
             font_size,
+            size_adjust,
             font_weight,
             stretch,
             font_style,
@@ -258,6 +260,7 @@ fn copy(d: &mut Declared, s: &Declared, field: Field) {
             line_height
         ),
         F::FontSize => fields!(font_size),
+        F::FontSizeAdjust => fields!(size_adjust),
         F::FontWeight => fields!(font_weight),
         F::FontStretch => fields!(stretch),
         F::FontStyle => fields!(font_style),
@@ -411,6 +414,7 @@ pub(super) fn resolved(d: &Declared, s: &Style, canvas: [f64; 2]) -> Declared {
     some!(
         color = s.color.into(),
         font_size = Len::Px(f.size),
+        size_adjust = f.size_adjust,
         font_weight = Weight::Absolute(f.weight),
         stretch = f.stretch,
         font_style = f.style,

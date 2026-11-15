@@ -1,0 +1,59 @@
+<!doctype html><meta charset="utf-8" /><title>Font size adjustment</title
+><style>
+  @font-face {
+    font-family: Test;
+    src: url("/tests/resources/NotoSans.ttf");
+    font-weight: 100 900;
+  }
+  body {
+    margin: 0;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  #canvas {
+    position: relative;
+    width: 480px;
+    height: 220px;
+    background: white;
+    font-family: Test;
+  }
+  .text {
+    position: absolute;
+    line-height: 64px;
+    color: #17365d;
+  }
+</style>
+<div id="canvas">
+  <div class="text" style="left: 12px; top: 8px; font-size: 24px; font-size-adjust: 1.072">
+    Hello
+  </div>
+  <div class="text" style="left: 252px; top: 8px; font-size: 48px">Hello</div>
+  <!-- prettier-ignore -->
+  <div class="text" style="left:12px;top:80px;font-size:24px;font-size-adjust:1.072">Big<span style="font-size-adjust:0.536"> small</span></div>
+  <!-- prettier-ignore -->
+  <div class="text" style="left:252px;top:80px;font-size:48px">Big<span style="font-size:24px"> small</span></div>
+  <div
+    data-key="units"
+    style="
+      position: absolute;
+      left: 12px;
+      top: 164px;
+      font-size: 31.25px;
+      font-size-adjust: 1.072;
+      width: 1em;
+      height: 1ex;
+      background: #2878b8;
+    "
+  ></div>
+  <div
+    style="
+      position: absolute;
+      left: 252px;
+      top: 164px;
+      width: 31.25px;
+      height: 33.5px;
+      background: #2878b8;
+    "
+  ></div>
+</div>

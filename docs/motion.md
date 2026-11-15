@@ -158,6 +158,12 @@ font. Explicitly inherited lengths keep their resolved size.
 It inherits. `none` disables simulated bold and italic when the selected family
 lacks those faces; it does not disable real bold, italic or variable-font axes.
 
+`fontSizeAdjust` accepts `none` (default) or a nonnegative x-height/em ratio.
+For example, `fontSize: 24, fontSizeAdjust: 0.6` targets a 14.4px x-height for
+each selected face, including fallback faces. It inherits; the `font` shorthand
+resets it to `none`. Computed `fontSize`, `em` and numeric `lineHeight` stay
+unchanged; glyph sizes and `ex` use the adjustment. A value of `0` hides glyphs.
+
 Supported, among others:
 
 - Layout: `display` `flex`, `grid`, `block`, `none`; flexbox and grid properties, `gap`,

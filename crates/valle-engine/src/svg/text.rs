@@ -673,7 +673,7 @@ fn subtree(
                 baselines.push((ancestor, baseline));
             }
             let (em, contours) = slug::contours(&text.faces()[glyph.face as usize], glyph.id)?;
-            let scale = font.size as f32 / em;
+            let scale = glyph.size / em;
             let mut path = Path::default();
             let origin = glyph.vertical_cell.map_or(glyph.x, |c| c[0]);
             let point = |[x, y]: [f32; 2]| {

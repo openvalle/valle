@@ -183,6 +183,8 @@ pub enum Orientation {
 pub struct Font {
     /// px.
     pub size: f64,
+    /// Target x-height/em ratio; CSS computed size and em units stay unchanged.
+    pub size_adjust: Option<f64>,
     /// 1–1000.
     pub weight: f64,
     /// `font-stretch`, % of the normal width.
@@ -259,6 +261,7 @@ impl Font {
     pub(super) fn initial() -> Font {
         Font {
             size: 16.0,
+            size_adjust: None,
             weight: 400.0,
             stretch: 100.0,
             style: FontStyle::Normal,
@@ -487,6 +490,7 @@ pub(super) fn shorthand(v: &V, d: &mut Declared) -> Result<(), String> {
     });
     d.features = Some(Rc::new([]));
     d.variations = Some(Rc::new([]));
+    d.size_adjust = Some(None);
     Ok(())
 }
 
@@ -919,6 +923,23 @@ mod tests {
 
     use super::*;
     use crate::testing::styles::{error, num, one, styles, text, view};
+
+    #[test]
+    fn size_adjust_inherits_and_font_shorthand_resets_it() {
+        let tree = vec![
+            view(&[("fontSizeAdjust", num(0.6))], &[1, 2, 3]),
+            view(&[], &[]),
+            view(&[("font", text("20px sans-serif"))], &[]),
+            view(&[("fontSizeAdjust", text("initial"))], &[]),
+        ];
+        let s = styles(tree, &[]).unwrap();
+        assert_eq!(s[1].font.size_adjust, Some(0.6));
+        assert_eq!(s[2].font.size_adjust, None);
+        assert_eq!(s[3].font.size_adjust, None);
+        for value in ["-1", "from-font", "ex-height 0.5", "50%"] {
+            assert!(error(&[("fontSizeAdjust", text(value))]).contains("style"));
+        }
+    }
 
     #[test]
     fn synthesis_accepts_only_css_fonts_three_permissions() {
@@ -1628,6 +1649,7 @@ mod tests {
         let feature = |tag: &[u8; 4], value| Feature { tag: *tag, value };
         let initial = Font {
             size: 16.0,
+            size_adjust: None,
             weight: 400.0,
             stretch: 100.0,
             style: FontStyle::Normal,
@@ -1672,6 +1694,7 @@ mod tests {
 
         let brand = Font {
             size: 20.0,
+            size_adjust: None,
             weight: 700.0,
             stretch: 75.0,
             style: FontStyle::Oblique(20.0),
@@ -1746,6 +1769,7 @@ mod tests {
         assert_eq!(s[2].color, s[1].color);
         let smaller = Font {
             size: 20.0,
+            size_adjust: None,
             weight: 700.0,
             line_height: LineHeight::Px(30.0),
             ..brand

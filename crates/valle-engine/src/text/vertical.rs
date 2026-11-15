@@ -621,7 +621,7 @@ fn upright_glyphs(
     buffer.set_direction(harfrust::Direction::TopToBottom);
     buffer.guess_segment_properties();
     let shaped = shaper.shape(buffer, harfrust::ShapeOptions::new().features(&features));
-    let scale = font.size as f32 / shaper.units_per_em() as f32;
+    let scale = first.size / shaper.units_per_em() as f32;
     let mut cursor = 0.0;
     let glyphs = shaped
         .glyph_infos()

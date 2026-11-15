@@ -197,6 +197,7 @@ pub(super) struct Declared {
     pub(super) paint_order: Option<[PaintPart; 3]>,
     pub(super) color: Option<color::Specified>,
     pub(super) font_size: Option<Len>,
+    pub(super) size_adjust: Option<Option<f64>>,
     pub(super) font_weight: Option<Weight>,
     pub(super) stretch: Option<f64>,
     pub(super) font_style: Option<FontStyle>,
@@ -350,6 +351,7 @@ impl Default for Declared {
             paint_order: None,
             color: None,
             font_size: None,
+            size_adjust: None,
             font_weight: None,
             stretch: None,
             font_style: None,
@@ -1443,6 +1445,12 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::FontStretch => d.stretch = Some(stretch(v)?),
         F::FontStyle => d.font_style = Some(font_style(v)?),
         F::FontSynthesis => d.synthesis = Some(super::font::synthesis(v)?),
+        F::FontSizeAdjust => {
+            d.size_adjust = Some(match v {
+                V::Str(s) if s.eq_ignore_ascii_case("none") => None,
+                _ => Some(factor(v)?),
+            })
+        }
         F::FontFamily => d.font_family = Some(families(v)?),
         F::FontFeatureSettings => d.features = Some(features(v)?),
         F::FontVariant(variant) => variants(v, variant, d)?,

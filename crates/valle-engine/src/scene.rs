@@ -692,7 +692,7 @@ impl Typeset for Typesetter {
             }
         };
         let mut text = self.text.borrow_mut();
-        let (s, laid) = self.laid(&mut text, content, style, Some(align))?;
+        let (_, laid) = self.laid(&mut text, content, style, Some(align))?;
         let (border, at) = (laid.boxes[0].border, laid.boxes[0].content);
         let mut all = BezPath::new();
         let mut glyphs = Vec::new();
@@ -714,13 +714,12 @@ impl Typeset for Typesetter {
             word[lines.string.len()] = count.max(1) - 1;
             let round = |v: f64| (v * 1000.0).round() / 1000.0;
             for run in &lines.runs {
-                let k = s.font.size;
                 for g in &lines.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize] {
                     let (em, contours) = slug::contours(&text.faces()[g.face as usize], g.id)?;
                     if contours.is_empty() {
                         continue;
                     }
-                    let k = k / f64::from(em);
+                    let k = f64::from(g.size) / f64::from(em);
                     let x = f64::from(at.x + g.x) + dx;
                     let y = f64::from(at.y + g.y) + dy;
                     let p = |[px, py]: [f32; 2]| {

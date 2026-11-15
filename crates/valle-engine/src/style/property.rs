@@ -256,6 +256,7 @@ pub(super) enum Field {
     MaskType,
     Color,
     FontSize,
+    FontSizeAdjust,
     FontWeight,
     FontStretch,
     FontStyle,
@@ -339,7 +340,7 @@ pub(super) enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 284] = [
+const FIELDS: [(&str, Field); 285] = [
     ("font", Field::Font),
     ("xmlSpace", Field::XmlSpace),
     ("display", Field::Display),
@@ -679,6 +680,7 @@ const FIELDS: [(&str, Field); 284] = [
     ("maskType", Field::MaskType),
     ("color", Field::Color),
     ("fontSize", Field::FontSize),
+    ("fontSizeAdjust", Field::FontSizeAdjust),
     ("fontWeight", Field::FontWeight),
     ("fontStretch", Field::FontStretch),
     ("fontStyle", Field::FontStyle),
@@ -781,6 +783,7 @@ impl Field {
                 | Field::TextUnderlineOffset
                 | Field::TextUnderlinePosition
                 | Field::FontSize
+                | Field::FontSizeAdjust
                 | Field::FontWeight
                 | Field::FontStretch
                 | Field::FontStyle
@@ -1040,6 +1043,7 @@ impl Field {
                 | Field::Visibility
                 | Field::Color
                 | Field::FontSize
+                | Field::FontSizeAdjust
                 | Field::FontWeight
                 | Field::FontStretch
                 | Field::FontStyle

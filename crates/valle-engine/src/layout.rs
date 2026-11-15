@@ -523,7 +523,7 @@ fn decorations(
                         }
                         let below = |y: f32| y - at[1] - g.y;
                         let band = [below(band[0]) + 0.5, below(band[1]) - 0.5];
-                        let size = style.font.size as f32;
+                        let size = g.size;
                         if let Some([x0, x1]) =
                             text.ink(g.face, g.id, size, band, g.upright, g.scale_x)?
                         {

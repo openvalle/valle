@@ -545,6 +545,7 @@ pub(super) fn compute(
     };
     let mut selected = inherited.clone();
     selected.size = size;
+    selected.size_adjust = d.size_adjust.unwrap_or(inherited.size_adjust);
     selected.weight = match d.font_weight {
         None => inherited.weight,
         Some(Weight::Absolute(w)) => w,
@@ -591,6 +592,7 @@ pub(super) fn compute(
     };
     let font = Font {
         size,
+        size_adjust: selected.size_adjust,
         weight: selected.weight,
         stretch: d.stretch.unwrap_or(inherited.stretch),
         style: d.font_style.unwrap_or(inherited.style),

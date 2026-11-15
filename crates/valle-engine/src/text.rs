@@ -133,6 +133,8 @@ pub struct Edge {
 pub struct Glyph {
     pub face: u32,
     pub id: u32,
+    /// Actual shaped size, including per-face font-size-adjust.
+    pub size: f32,
     pub x: f32,
     pub y: f32,
     pub node: u32,
@@ -265,6 +267,7 @@ struct Shaping {
     family: Rc<[Family]>,
     /// f32 bits.
     size: u32,
+    size_adjust: Option<u32>,
     weight: u32,
     stretch: u32,
     /// Normal, italic or oblique, and the angle's f32 bits.
@@ -291,6 +294,7 @@ impl Shaping {
         Shaping {
             family: font.family.clone(),
             size: (font.size as f32).to_bits(),
+            size_adjust: font.size_adjust.map(|v| (v as f32).to_bits()),
             weight: (font.weight as f32).to_bits(),
             stretch: (font.stretch as f32).to_bits(),
             style: match font.style {
@@ -322,7 +326,7 @@ impl Shaping {
 /// advance.
 #[derive(Clone)]
 struct Ellipsis {
-    glyphs: Vec<(u32, u32, f32)>,
+    glyphs: Vec<(u32, u32, f32, f32)>,
     advance: f32,
 }
 
@@ -791,7 +795,7 @@ impl Text {
                     x: [run.offset() + shift, x],
                     glyphs: [0, 0],
                 });
-                shaped.push((face, node, glyphs));
+                shaped.push((face, node, run.run().font_size(), glyphs));
             }
             // White space that hangs past the end of the line is not in its runs' boxes.
             let mut hanging = line.metrics().hanging_advance;
@@ -814,12 +818,13 @@ impl Text {
             }
         }
         let mut glyphs = Vec::new();
-        for (run, (face, node, list)) in runs.iter_mut().zip(shaped) {
+        for (run, (face, node, size, list)) in runs.iter_mut().zip(shaped) {
             run.glyphs = [glyphs.len() as u32, (glyphs.len() + list.len()) as u32];
             let face = self.face(face);
             glyphs.extend((list.into_iter()).map(|(id, x, y, cluster)| Glyph {
                 face,
                 id,
+                size,
                 x,
                 y,
                 node,
@@ -884,7 +889,10 @@ impl Text {
         if let Some(height) = self.x_heights.get(&key) {
             return Ok(*height);
         }
-        let layout = self.alone("x", font)?;
+        if font.size_adjust == Some(0.0) {
+            return Ok(0.0);
+        }
+        let layout = self.alone(" ", font)?;
         let height = layout
             .lines()
             .find_map(|line| {
@@ -998,9 +1006,10 @@ impl Text {
                 continue;
             };
             let start = glyphs.len() as u32;
-            glyphs.extend(ellipsis.iter().map(|&(face, id, x)| Glyph {
+            glyphs.extend(ellipsis.iter().map(|&(face, id, x, size)| Glyph {
                 face,
                 id,
+                size,
                 x: c + x,
                 y: lines.baselines[l],
                 node,
@@ -1037,13 +1046,13 @@ impl Text {
                 };
                 let face = Face::of(run.run(), font);
                 for g in run.glyphs() {
-                    shaped.push((face.clone(), g.id, x + g.x));
+                    shaped.push((face.clone(), g.id, x + g.x, run.run().font_size()));
                     x += g.advance;
                 }
             }
         }
         let glyphs = (shaped.into_iter())
-            .map(|(face, id, x)| (self.face(face), id, x))
+            .map(|(face, id, x, size)| (self.face(face), id, x, size))
             .collect();
         let e = Ellipsis { glyphs, advance: x };
         self.ellipses.insert(key, e.clone());
@@ -1055,23 +1064,39 @@ impl Text {
         self.give(font)?;
         self.give_fallbacks(text)?;
         let families = families(&font.family, &self.named)?;
-        let mut builder = (self.layouts).ranged_builder(&mut self.fonts, text, 1.0, false);
-        let family = FontFamily::List(Cow::Borrowed(&families));
-        builder.push_default(StyleProperty::FontFamily(family));
-        let first = emoji_first(&families);
-        for range in presented(text) {
-            let family = FontFamily::List(Cow::Borrowed(&first));
-            builder.push(StyleProperty::FontFamily(family), range);
-        }
-        builder.push_default(StyleProperty::FontSize(font.size as f32));
-        let weight = FontWeight::new(font.weight as f32);
-        builder.push_default(StyleProperty::FontWeight(weight));
-        let width = FontWidth::from_percentage(font.stretch as f32);
-        builder.push_default(StyleProperty::FontWidth(width));
-        builder.push_default(StyleProperty::FontStyle(style(font)));
-        builder.push_default(StyleProperty::FontVariations(variations(font)));
-        let mut layout = builder.build(text);
-        layout.break_all_lines(None);
+        let mut sizes: Option<Vec<(Range<usize>, f32)>> = None;
+        let layout = loop {
+            let mut builder = (self.layouts).ranged_builder(&mut self.fonts, text, 1.0, false);
+            let family = FontFamily::List(Cow::Borrowed(&families));
+            builder.push_default(StyleProperty::FontFamily(family));
+            let first = emoji_first(&families);
+            for range in presented(text) {
+                let family = FontFamily::List(Cow::Borrowed(&first));
+                builder.push(StyleProperty::FontFamily(family), range);
+            }
+            builder.push_default(StyleProperty::FontSize(font.size as f32));
+            let weight = FontWeight::new(font.weight as f32);
+            builder.push_default(StyleProperty::FontWeight(weight));
+            let width = FontWidth::from_percentage(font.stretch as f32);
+            builder.push_default(StyleProperty::FontWidth(width));
+            builder.push_default(StyleProperty::FontStyle(style(font)));
+            builder.push_default(StyleProperty::FontVariations(variations(font)));
+            if let Some(sizes) = &sizes {
+                for (range, size) in sizes {
+                    builder.push(StyleProperty::FontSize(*size), range.clone());
+                }
+            }
+            let mut layout = builder.build(text);
+            layout.break_all_lines(None);
+            if sizes.is_none() && font.size_adjust.is_some() {
+                let next = adjusted_sizes(&layout, |_| (font, 0..text.len()))?;
+                if !next.is_empty() {
+                    sizes = Some(next);
+                    continue;
+                }
+            }
+            break layout;
+        };
         covered(&layout, text)?;
         Ok(layout)
     }
@@ -1159,106 +1184,129 @@ impl Text {
                 .map(|p| families(&p.font.family, &self.named))
                 .collect::<Result<Vec<_>, _>>()?;
             let firsts: Vec<_> = families.iter().map(|f| emoji_first(f)).collect();
-            let mut builder = (self.layouts).ranged_builder(&mut self.fonts, &string, 1.0, false);
-            builder.set_base_direction(
-                if content.font.bidi == crate::style::bidi::Bidi::Plaintext {
-                    parley::BaseDirection::Auto
-                } else if content.font.rtl {
-                    parley::BaseDirection::Rtl
-                } else {
-                    parley::BaseDirection::Ltr
-                },
-            );
-            for (k, (piece, range)) in content.pieces.iter().zip(ranges).enumerate() {
-                if range.is_empty() {
-                    continue;
-                }
-                let font = piece.font;
-                let family = FontFamily::List(Cow::Borrowed(&families[k]));
-                builder.push(StyleProperty::FontFamily(family), range.clone());
-                builder.push(StyleProperty::FontSize(font.size as f32), range.clone());
-                let weight = FontWeight::new(font.weight as f32);
-                builder.push(StyleProperty::FontWeight(weight), range.clone());
-                let width = FontWidth::from_percentage(font.stretch as f32);
-                builder.push(StyleProperty::FontWidth(width), range.clone());
-                builder.push(StyleProperty::FontStyle(style(font)), range.clone());
-                let spacing = font.spacing as f32;
-                builder.push(StyleProperty::LetterSpacing(spacing), range.clone());
-                let spacing = font.word_spacing as f32;
-                builder.push(StyleProperty::WordSpacing(spacing), range.clone());
-                if !font.wrap {
-                    let mode = StyleProperty::TextWrapMode(TextWrapMode::NoWrap);
-                    builder.push(mode, range.clone());
-                }
-                if font.collapse == Collapse::BreakSpaces {
-                    let spaces = WhiteSpaceCollapse::BreakSpaces;
-                    builder.push(StyleProperty::WhiteSpaceCollapse(spaces), range.clone());
-                }
-                let breaks = match font.word_break {
-                    WordBreak::Normal | WordBreak::BreakWord => parley::WordBreak::Normal,
-                    WordBreak::BreakAll => parley::WordBreak::BreakAll,
-                    WordBreak::KeepAll => parley::WordBreak::KeepAll,
-                };
-                builder.push(StyleProperty::WordBreak(breaks), range.clone());
-                builder.push(StyleProperty::LineBreak(font.line_break), range.clone());
-                // CSS Text 3 forbids a break before small kana in normal as well as strict.
-                // ICU's normal table still treats CJ as an ideograph. Tailor only those
-                // characters, preserving normal's other punctuation rules and Span styles.
-                if font.line_break == parley::LineBreak::Normal {
-                    use icu_properties::{CodePointMapData, props::LineBreak};
-                    let classes = CodePointMapData::<LineBreak>::new();
-                    for (offset, c) in string[range.clone()].char_indices() {
-                        if classes.get(c) == LineBreak::ConditionalJapaneseStarter {
-                            let start = range.start + offset;
-                            builder.push(
-                                StyleProperty::LineBreak(parley::LineBreak::Strict),
-                                start..start + c.len_utf8(),
-                            );
+            let mut sizes: Option<Vec<(Range<usize>, f32)>> = None;
+            let layout = loop {
+                let mut builder =
+                    (self.layouts).ranged_builder(&mut self.fonts, &string, 1.0, false);
+                builder.set_base_direction(
+                    if content.font.bidi == crate::style::bidi::Bidi::Plaintext {
+                        parley::BaseDirection::Auto
+                    } else if content.font.rtl {
+                        parley::BaseDirection::Rtl
+                    } else {
+                        parley::BaseDirection::Ltr
+                    },
+                );
+                for (k, (piece, range)) in content
+                    .pieces
+                    .iter()
+                    .zip(ranges.iter().cloned())
+                    .enumerate()
+                {
+                    if range.is_empty() {
+                        continue;
+                    }
+                    let font = piece.font;
+                    let family = FontFamily::List(Cow::Borrowed(&families[k]));
+                    builder.push(StyleProperty::FontFamily(family), range.clone());
+                    builder.push(StyleProperty::FontSize(font.size as f32), range.clone());
+                    let weight = FontWeight::new(font.weight as f32);
+                    builder.push(StyleProperty::FontWeight(weight), range.clone());
+                    let width = FontWidth::from_percentage(font.stretch as f32);
+                    builder.push(StyleProperty::FontWidth(width), range.clone());
+                    builder.push(StyleProperty::FontStyle(style(font)), range.clone());
+                    let spacing = font.spacing as f32;
+                    builder.push(StyleProperty::LetterSpacing(spacing), range.clone());
+                    let spacing = font.word_spacing as f32;
+                    builder.push(StyleProperty::WordSpacing(spacing), range.clone());
+                    if !font.wrap {
+                        let mode = StyleProperty::TextWrapMode(TextWrapMode::NoWrap);
+                        builder.push(mode, range.clone());
+                    }
+                    if font.collapse == Collapse::BreakSpaces {
+                        let spaces = WhiteSpaceCollapse::BreakSpaces;
+                        builder.push(StyleProperty::WhiteSpaceCollapse(spaces), range.clone());
+                    }
+                    let breaks = match font.word_break {
+                        WordBreak::Normal | WordBreak::BreakWord => parley::WordBreak::Normal,
+                        WordBreak::BreakAll => parley::WordBreak::BreakAll,
+                        WordBreak::KeepAll => parley::WordBreak::KeepAll,
+                    };
+                    builder.push(StyleProperty::WordBreak(breaks), range.clone());
+                    builder.push(StyleProperty::LineBreak(font.line_break), range.clone());
+                    // CSS Text 3 forbids a break before small kana in normal as well as strict.
+                    // ICU's normal table still treats CJ as an ideograph. Tailor only those
+                    // characters, preserving normal's other punctuation rules and Span styles.
+                    if font.line_break == parley::LineBreak::Normal {
+                        use icu_properties::{CodePointMapData, props::LineBreak};
+                        let classes = CodePointMapData::<LineBreak>::new();
+                        for (offset, c) in string[range.clone()].char_indices() {
+                            if classes.get(c) == LineBreak::ConditionalJapaneseStarter {
+                                let start = range.start + offset;
+                                builder.push(
+                                    StyleProperty::LineBreak(parley::LineBreak::Strict),
+                                    start..start + c.len_utf8(),
+                                );
+                            }
                         }
                     }
-                }
-                let wrap = match key.2[k].1.overflow_wrap {
-                    OverflowWrap::Normal => parley::OverflowWrap::Normal,
-                    OverflowWrap::Anywhere => parley::OverflowWrap::Anywhere,
-                    OverflowWrap::BreakWord => parley::OverflowWrap::BreakWord,
-                };
-                builder.push(StyleProperty::OverflowWrap(wrap), range.clone());
-                let features = font.variants.iter().flat_map(|v| v.iter());
-                let mut features = features.chain(font.features.iter()).peekable();
-                if features.peek().is_some() {
-                    let features = (features)
-                        .map(|f| FontFeature::new(Tag::new(&f.tag), f.value))
-                        .collect();
-                    let features = FontFeatures::List(Cow::Owned(features));
-                    builder.push(StyleProperty::FontFeatures(features), range.clone());
-                }
-                if !font.variations.is_empty() {
-                    let axes = StyleProperty::FontVariations(variations(font));
-                    builder.push(axes, range.clone());
-                }
-                for emoji in presented(&string[range.clone()]) {
-                    let family = FontFamily::List(Cow::Borrowed(&firsts[k]));
-                    let at = range.start + emoji.start..range.start + emoji.end;
-                    builder.push(StyleProperty::FontFamily(family), at);
-                }
-                if let Some((advance, _)) = key.2[k].3 {
-                    builder.push(StyleProperty::FontSize(0.0), range.clone());
-                    builder.push(StyleProperty::WordSpacing(0.0), range.clone());
-                    builder.push(StyleProperty::LetterSpacing(0.0), range.clone());
-                    for (offset, c) in string[range.clone()].char_indices() {
-                        if c == '\u{a0}' {
-                            let at = range.start + offset;
-                            builder.push(
-                                StyleProperty::LetterSpacing(f32::from_bits(advance)),
-                                at..at + c.len_utf8(),
-                            );
+                    let wrap = match key.2[k].1.overflow_wrap {
+                        OverflowWrap::Normal => parley::OverflowWrap::Normal,
+                        OverflowWrap::Anywhere => parley::OverflowWrap::Anywhere,
+                        OverflowWrap::BreakWord => parley::OverflowWrap::BreakWord,
+                    };
+                    builder.push(StyleProperty::OverflowWrap(wrap), range.clone());
+                    let features = font.variants.iter().flat_map(|v| v.iter());
+                    let mut features = features.chain(font.features.iter()).peekable();
+                    if features.peek().is_some() {
+                        let features = (features)
+                            .map(|f| FontFeature::new(Tag::new(&f.tag), f.value))
+                            .collect();
+                        let features = FontFeatures::List(Cow::Owned(features));
+                        builder.push(StyleProperty::FontFeatures(features), range.clone());
+                    }
+                    if !font.variations.is_empty() {
+                        let axes = StyleProperty::FontVariations(variations(font));
+                        builder.push(axes, range.clone());
+                    }
+                    for emoji in presented(&string[range.clone()]) {
+                        let family = FontFamily::List(Cow::Borrowed(&firsts[k]));
+                        let at = range.start + emoji.start..range.start + emoji.end;
+                        builder.push(StyleProperty::FontFamily(family), at);
+                    }
+                    if let Some((advance, _)) = key.2[k].3 {
+                        builder.push(StyleProperty::FontSize(0.0), range.clone());
+                        builder.push(StyleProperty::WordSpacing(0.0), range.clone());
+                        builder.push(StyleProperty::LetterSpacing(0.0), range.clone());
+                        for (offset, c) in string[range.clone()].char_indices() {
+                            if c == '\u{a0}' {
+                                let at = range.start + offset;
+                                builder.push(
+                                    StyleProperty::LetterSpacing(f32::from_bits(advance)),
+                                    at..at + c.len_utf8(),
+                                );
+                            }
                         }
                     }
+                    builder.push(StyleProperty::Brush(k as u32), range);
                 }
-                builder.push(StyleProperty::Brush(k as u32), range);
-            }
-            let mut layout = builder.build(&string);
-            layout.break_all_lines(None);
+                if let Some(sizes) = &sizes {
+                    for (range, size) in sizes {
+                        builder.push(StyleProperty::FontSize(*size), range.clone());
+                    }
+                }
+                let mut layout = builder.build(&string);
+                layout.break_all_lines(None);
+                if sizes.is_none() && content.pieces.iter().any(|p| p.font.size_adjust.is_some()) {
+                    let next =
+                        adjusted_sizes(&layout, |k| (content.pieces[k].font, ranges[k].clone()))?;
+                    if !next.is_empty() {
+                        sizes = Some(next);
+                        continue;
+                    }
+                }
+                break layout;
+            };
             covered(&layout, &string)?;
             let paragraph = Paragraph {
                 layout,
@@ -1297,6 +1345,51 @@ impl Text {
         }
         Ok(p)
     }
+}
+
+/// Match each actual face independently, including explicit and built-in fallback fonts.
+/// The second shaping pass keeps spacing and CSS line-height at their computed values.
+fn adjusted_sizes<'a>(
+    layout: &parley::Layout<u32>,
+    font: impl Fn(usize) -> (&'a Font, Range<usize>),
+) -> Result<Vec<(Range<usize>, f32)>, Error> {
+    let mut sizes = Vec::new();
+    for line in layout.lines() {
+        for item in line.items() {
+            let PositionedLayoutItem::GlyphRun(run) = item else {
+                continue;
+            };
+            let (font, range) = font(run.style().brush as usize);
+            let Some(aspect) = font.size_adjust else {
+                continue;
+            };
+            let run = run.run();
+            let nominal = run.font_size();
+            let x = run
+                .font_metrics()
+                .x_height
+                .filter(|x| *x > 0.0)
+                .unwrap_or(nominal * 0.5);
+            let size = if nominal == 0.0 {
+                0.0
+            } else {
+                font.size * aspect * f64::from(nominal / x)
+            };
+            if !size.is_finite() || size > f64::from(f32::MAX) {
+                return Err("font-size-adjust produces a font size too large to render".into());
+            }
+            let size = size as f32;
+            if (size - nominal).abs() <= f32::EPSILON {
+                continue;
+            }
+            let shaped = run.text_range();
+            let range = range.start.max(shaped.start)..range.end.min(shaped.end);
+            if !range.is_empty() {
+                sizes.push((range, size));
+            }
+        }
+    }
+    Ok(sizes)
 }
 
 /// `text-wrap: balance` as Chrome has it, on lines broken to fit `width`: those up to the first
@@ -1790,6 +1883,7 @@ mod tests {
     fn font(size: f64) -> Font {
         Font {
             size,
+            size_adjust: None,
             weight: 400.0,
             stretch: 100.0,
             style: FontStyle::Normal,
@@ -2703,6 +2797,55 @@ mod tests {
         assert!(wide(75.0) < wide(100.0));
         assert_eq!(wide(150.0), wide(100.0));
         assert_eq!(wide(50.0), wide(62.5));
+    }
+
+    #[test]
+    fn size_adjust_scales_each_actual_face_without_changing_computed_size() {
+        use skrifa::instance::{LocationRef, NormalizedCoord, Size};
+        use skrifa::{FontRef, MetadataProvider};
+        let mut t = text();
+        let f = Font {
+            size_adjust: Some(1.072),
+            ..font(24.0)
+        };
+        let lines = t.lines(&plain("hello 漢", &f), 1000.0).unwrap();
+        let mut faces = std::collections::BTreeSet::new();
+        for g in &lines.glyphs {
+            faces.insert(g.face);
+            let face = &t.faces()[g.face as usize];
+            let font = FontRef::from_index(face.data.data(), face.index).unwrap();
+            let coords: Vec<_> = face
+                .coords
+                .iter()
+                .map(|&v| NormalizedCoord::from_bits(v))
+                .collect();
+            let metrics = font.metrics(Size::new(g.size), LocationRef::new(&coords));
+            let x = metrics.x_height.unwrap();
+            assert!((x - 24.0 * 1.072).abs() < 0.01, "{x}");
+        }
+        assert!(
+            faces.len() >= 2,
+            "exercise actual fallback, not just one preferred face"
+        );
+        assert_eq!(f.size, 24.0);
+        let same = Font {
+            size_adjust: Some(0.536),
+            ..font(24.0)
+        };
+        let a = t.lines(&plain("hello", &same), 500.0).unwrap();
+        let b = t.lines(&plain("hello", &font(24.0)), 500.0).unwrap();
+        assert!(
+            a.glyphs
+                .iter()
+                .zip(&b.glyphs)
+                .all(|(a, b)| (a.size - b.size).abs() < 0.001)
+        );
+        let zero = Font {
+            size_adjust: Some(0.0),
+            ..font(24.0)
+        };
+        assert_eq!(t.x_height(&zero).unwrap(), 0.0);
+        assert_eq!(t.measure(&plain("hello", &zero), None).unwrap()[0], 0.0);
     }
 
     #[test]

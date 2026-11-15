@@ -1864,9 +1864,8 @@ impl Painter<'_> {
                 }
             };
             let glyphs = &lines.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize];
-            let size = s.font.size as f32;
             let drawn = |stroke: f32, color: [f32; 4], by: [f32; 2]| {
-                faces(glyphs, at, size, color, stroke, offset(by))
+                faces(glyphs, at, color, stroke, offset(by))
             };
             let fill = work(crate::style::color::resolve(&s.font.fill, s.color));
             let stroke = match s.font.stroke > 0.0 && s.font.size > 0.0 {
@@ -2142,8 +2141,7 @@ impl Painter<'_> {
                     continue;
                 }
                 let glyphs = &lines.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize];
-                let size = s.font.size as f32;
-                items.extend(faces(glyphs, at, size, OPAQUE, 0.0, [0.0; 2]));
+                items.extend(faces(glyphs, at, OPAQUE, 0.0, [0.0; 2]));
                 let decorations = lines.decorations.iter().filter(|d| d.run == k as u32);
                 items.extend(decorations.flat_map(|d| stripe(d, at, OPAQUE, [0.0; 2])));
             }
@@ -2303,14 +2301,14 @@ impl Painter<'_> {
 fn faces(
     glyphs: &[Glyph],
     at: Rect,
-    size: f32,
     color: [f32; 4],
     stroke: f32,
     [dx, dy]: [f32; 2],
 ) -> impl Iterator<Item = Item> + '_ {
     glyphs
-        .chunk_by(|a, b| a.face == b.face && !a.upright && !b.upright)
+        .chunk_by(|a, b| a.face == b.face && a.size == b.size && !a.upright && !b.upright)
         .map(move |g| {
+            let size = g[0].size;
             if g[0].upright {
                 let g = g[0];
                 Item::Transform {

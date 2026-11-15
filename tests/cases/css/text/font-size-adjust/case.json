@@ -1,0 +1,36 @@
+{
+  "spec": "https://www.w3.org/TR/css-fonts-3/#propdef-font-size-adjust",
+  "assertion": "Adjusted 24px Noto Sans with aspect 1.072 matches a 48px control, including a Span override. The box uses 31.25px computed size: em stays 31.25px while ex becomes 33.5px.",
+  "at": [0],
+  "layout": [
+    {
+      "key": "units",
+      "border": {
+        "x": 12,
+        "y": 164,
+        "width": 31.25,
+        "height": 33.5
+      },
+      "padding": {
+        "x": 12,
+        "y": 164,
+        "width": 31.25,
+        "height": 33.5
+      },
+      "content": {
+        "x": 12,
+        "y": 164,
+        "width": 31.25,
+        "height": 33.5
+      }
+    }
+  ],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three browsers, native output and enlarged differences. Glyph sizes and Span baselines match the independently sized control text. Remaining differences are font rasterization at edges, also present on the unadjusted control. Box dimensions are independently derived from the font metrics.",
+    "pixels": {
+      "maxDifference": 200,
+      "maxPixels": 3800
+    }
+  }
+}
