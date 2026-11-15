@@ -1,0 +1,267 @@
+{
+  "spec": "https://www.w3.org/TR/CSS2/visudet.html#propdef-vertical-align",
+  "assertion": "Inline alignment positions child line boxes relative to the parent or whole line, with nested scopes, percentages and signed lengths. Span backgrounds follow their own baselines.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three browsers, native output and difference images. Chromium matches the inline and nested baselines; remaining differences follow glyph rasterization and fractional edges. Numeric assertions separately constrain fixed paragraph geometry; unit tests constrain nested baseline shifts, line heights and decorations.",
+    "pixels": {
+      "maxDifference": 180,
+      "maxPixels": 5500
+    }
+  },
+  "layout": [
+    {
+      "key": "row0",
+      "border": {
+        "x": 12,
+        "y": 12,
+        "width": 220,
+        "height": 58
+      },
+      "padding": {
+        "x": 12,
+        "y": 12,
+        "width": 220,
+        "height": 58
+      },
+      "content": {
+        "x": 12,
+        "y": 12,
+        "width": 220,
+        "height": 58
+      }
+    },
+    {
+      "key": "row1",
+      "border": {
+        "x": 252,
+        "y": 12,
+        "width": 220,
+        "height": 58
+      },
+      "padding": {
+        "x": 252,
+        "y": 12,
+        "width": 220,
+        "height": 58
+      },
+      "content": {
+        "x": 252,
+        "y": 12,
+        "width": 220,
+        "height": 58
+      }
+    },
+    {
+      "key": "row2",
+      "border": {
+        "x": 492,
+        "y": 12,
+        "width": 220,
+        "height": 58
+      },
+      "padding": {
+        "x": 492,
+        "y": 12,
+        "width": 220,
+        "height": 58
+      },
+      "content": {
+        "x": 492,
+        "y": 12,
+        "width": 220,
+        "height": 58
+      }
+    },
+    {
+      "key": "row3",
+      "border": {
+        "x": 12,
+        "y": 82,
+        "width": 220,
+        "height": 58
+      },
+      "padding": {
+        "x": 12,
+        "y": 82,
+        "width": 220,
+        "height": 58
+      },
+      "content": {
+        "x": 12,
+        "y": 82,
+        "width": 220,
+        "height": 58
+      }
+    },
+    {
+      "key": "row4",
+      "border": {
+        "x": 252,
+        "y": 82,
+        "width": 220,
+        "height": 58
+      },
+      "padding": {
+        "x": 252,
+        "y": 82,
+        "width": 220,
+        "height": 58
+      },
+      "content": {
+        "x": 252,
+        "y": 82,
+        "width": 220,
+        "height": 58
+      }
+    },
+    {
+      "key": "row5",
+      "border": {
+        "x": 492,
+        "y": 82,
+        "width": 220,
+        "height": 58
+      },
+      "padding": {
+        "x": 492,
+        "y": 82,
+        "width": 220,
+        "height": 58
+      },
+      "content": {
+        "x": 492,
+        "y": 82,
+        "width": 220,
+        "height": 58
+      }
+    },
+    {
+      "key": "row6",
+      "border": {
+        "x": 12,
+        "y": 152,
+        "width": 220,
+        "height": 58
+      },
+      "padding": {
+        "x": 12,
+        "y": 152,
+        "width": 220,
+        "height": 58
+      },
+      "content": {
+        "x": 12,
+        "y": 152,
+        "width": 220,
+        "height": 58
+      }
+    },
+    {
+      "key": "row7",
+      "border": {
+        "x": 252,
+        "y": 152,
+        "width": 220,
+        "height": 58
+      },
+      "padding": {
+        "x": 252,
+        "y": 152,
+        "width": 220,
+        "height": 58
+      },
+      "content": {
+        "x": 252,
+        "y": 152,
+        "width": 220,
+        "height": 58
+      }
+    },
+    {
+      "key": "row8",
+      "border": {
+        "x": 492,
+        "y": 152,
+        "width": 220,
+        "height": 58
+      },
+      "padding": {
+        "x": 492,
+        "y": 152,
+        "width": 220,
+        "height": 58
+      },
+      "content": {
+        "x": 492,
+        "y": 152,
+        "width": 220,
+        "height": 58
+      }
+    },
+    {
+      "key": "row9",
+      "border": {
+        "x": 12,
+        "y": 222,
+        "width": 220,
+        "height": 58
+      },
+      "padding": {
+        "x": 12,
+        "y": 222,
+        "width": 220,
+        "height": 58
+      },
+      "content": {
+        "x": 12,
+        "y": 222,
+        "width": 220,
+        "height": 58
+      }
+    },
+    {
+      "key": "row10",
+      "border": {
+        "x": 252,
+        "y": 222,
+        "width": 220,
+        "height": 58
+      },
+      "padding": {
+        "x": 252,
+        "y": 222,
+        "width": 220,
+        "height": 58
+      },
+      "content": {
+        "x": 252,
+        "y": 222,
+        "width": 220,
+        "height": 58
+      }
+    },
+    {
+      "key": "row11",
+      "border": {
+        "x": 492,
+        "y": 222,
+        "width": 220,
+        "height": 58
+      },
+      "padding": {
+        "x": 492,
+        "y": 222,
+        "width": 220,
+        "height": 58
+      },
+      "content": {
+        "x": 492,
+        "y": 222,
+        "width": 220,
+        "height": 58
+      }
+    }
+  ]
+}

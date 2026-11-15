@@ -1749,11 +1749,7 @@ mod tests {
             error("items-baseline-last")
                 .starts_with("className items-baseline-last: align-items: ")
         );
-        assert_eq!(
-            error("align-middle"),
-            "className align-middle: vertical-align is not supported: there is no HTML inline flow; \
-         use flex layout, and Span for styled runs of text"
-        );
+        assert_eq!(css("align-middle"), "& { vertical-align: middle; }");
         let e = error("container");
         assert_eq!(
             e,

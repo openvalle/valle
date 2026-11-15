@@ -202,6 +202,7 @@ pub struct Style {
     pub shader: Option<Shaded>,
     pub color: Rgba,
     pub font: Rc<Font>,
+    pub vertical_align: super::inline::Align<Calc>,
     /// The text decorations its text takes: those of the boxes around it, outermost first, then
     /// its own. A box out of flow takes none from around it.
     pub decorations: Vec<Decoration>,
@@ -295,6 +296,7 @@ impl Style {
             source,
             svg,
             font,
+            vertical_align,
             decorations,
             ellipsis,
             clamp,
@@ -367,6 +369,7 @@ impl Style {
             && *source == other.source
             && *svg == other.svg
             && *font == other.font
+            && *vertical_align == other.vertical_align
             && *decorations == other.decorations
             && *ellipsis == other.ellipsis
             && *clamp == other.clamp
@@ -946,6 +949,7 @@ pub(super) fn compute(
         shader: None,
         color,
         font: Rc::new(font),
+        vertical_align: d.vertical_align.map(|l| l.calc(u)),
         decorations,
         ellipsis: d.ellipsis,
         clamp: match (d.display, d.box_vertical) {

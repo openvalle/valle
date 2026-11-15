@@ -197,6 +197,7 @@ pub(super) struct Declared {
     pub(super) paint_order: Option<[PaintPart; 3]>,
     pub(super) color: Option<color::Specified>,
     pub(super) font_size: Option<Len>,
+    pub(super) vertical_align: super::inline::Align<Len>,
     pub(super) size_adjust: Option<Option<f64>>,
     pub(super) font_weight: Option<Weight>,
     pub(super) stretch: Option<f64>,
@@ -351,6 +352,7 @@ impl Default for Declared {
             paint_order: None,
             color: None,
             font_size: None,
+            vertical_align: Default::default(),
             size_adjust: None,
             font_weight: None,
             stretch: None,
@@ -1492,6 +1494,7 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
                 ],
             )?)
         }
+        F::VerticalAlign => d.vertical_align = super::inline::parse(v)?,
         F::TextAlign => d.text_align = Some(text_align(v)?),
         F::TextAlignLast => {
             d.align_last = Some(if text(v)?.eq_ignore_ascii_case("auto") {

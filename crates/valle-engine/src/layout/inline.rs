@@ -53,7 +53,10 @@ pub(super) fn edge(styles: &[Style], i: usize, start: bool) -> Option<Piece<'_>>
     let side = if start != s.font.rtl { 3 } else { 1 };
     let border = logical(s.border, vertical)[side];
     let pad = logical(padding(styles, i), vertical)[side].clone();
-    if border == 0.0 && !pad.any(&|v| v[0] != 0.0 || v[1] != 0.0) {
+    if border == 0.0
+        && !pad.any(&|v| v[0] != 0.0 || v[1] != 0.0)
+        && s.vertical_align == crate::style::inline::Align::Baseline
+    {
         return None;
     }
     Some(Piece {
@@ -107,6 +110,7 @@ pub(super) fn spans(
         let mut span = Some(run.node as usize);
         while let Some(s) = span.filter(|&s| parents[s].is_some()) {
             let [ascent, descent, _] = text.metrics(&styles[s].font)?;
+            let baseline = baseline + lines.offset(s as u32, run.line);
             let r = [
                 at.x + x[0],
                 baseline - ascent.round(),
@@ -198,6 +202,47 @@ pub(super) fn spans(
         };
     }
     Ok(())
+}
+
+/// Preserve the authored inline hierarchy for baseline-relative alignment.
+pub(super) fn scopes<'a>(
+    template: &crate::template::Template,
+    styles: &'a [Style],
+    root: usize,
+) -> Vec<crate::text::align::Scope<'a>> {
+    use crate::style::inline::Align;
+    use crate::template::Kind;
+    fn needed(t: &crate::template::Template, s: &[Style], i: usize) -> bool {
+        t.nodes[i].children.iter().any(|&c| {
+            matches!(t.nodes[c as usize].kind, Kind::Span { .. })
+                && (s[c as usize].vertical_align != Align::Baseline || needed(t, s, c as usize))
+        })
+    }
+    fn visit<'a>(
+        t: &crate::template::Template,
+        s: &'a [Style],
+        i: usize,
+        parent: Option<usize>,
+        out: &mut Vec<crate::text::align::Scope<'a>>,
+    ) {
+        let at = out.len();
+        out.push(crate::text::align::Scope {
+            node: i as u32,
+            parent,
+            font: &s[i].font,
+            align: &s[i].vertical_align,
+        });
+        for &c in &t.nodes[i].children {
+            if matches!(t.nodes[c as usize].kind, Kind::Span { .. }) {
+                visit(t, s, c as usize, Some(at), out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    if needed(template, styles, root) {
+        visit(template, styles, root, None, &mut out);
+    }
+    out
 }
 
 #[cfg(test)]

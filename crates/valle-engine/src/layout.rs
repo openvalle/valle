@@ -93,6 +93,7 @@ pub fn layout(
                 let font = &styles[i].font;
                 let clamp = styles[i].clamp.map(|n| n as usize);
                 Some(Content {
+                    scopes: inline::scopes(template, styles, i),
                     font,
                     pieces,
                     clamp,
@@ -452,10 +453,11 @@ fn decorations(
         if style.decorations.is_empty() {
             continue;
         }
-        let baseline = at[1] + lines.baselines[run.line as usize];
+        let base = at[1] + lines.baselines[run.line as usize];
         let ascent = text.metrics(&style.font)?[0].round();
         let glyphs = &lines.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize];
         for d in &style.decorations {
+            let baseline = base + lines.offset(d.by as u32, run.line);
             let font = match template.nodes[d.by].kind {
                 Kind::Span { .. } => &styles[d.by].font,
                 _ => &styles[i].font,
@@ -1736,6 +1738,56 @@ mod tests {
         assert!(hi.width > 0.0 && hi.width < 30.0, "{hi:?}");
         assert_eq!([hi.x, hi.y, hi.height], [0.0, height + 4.0, 22.0]);
         assert!(l.lines[0].is_none());
+    }
+
+    #[test]
+    fn nested_inline_offsets_use_each_line_height_and_move_decorations() {
+        let piece = |s: &str| template::Piece::Text(Prop::Const(V::Str(s.into())));
+        let mut paragraph = text_node("", &[("fontSize", "20px"), ("lineHeight", "40px")]);
+        paragraph.kind = Kind::Text {
+            content: vec![piece("A"), template::Piece::Span(1), piece("B")],
+        };
+        paragraph.children = vec![1];
+        let mut outer = view(
+            &[
+                ("verticalAlign", "8px"),
+                ("fontSize", "10px"),
+                ("lineHeight", "20px"),
+            ],
+            &[2],
+        );
+        outer.kind = Kind::Span {
+            content: vec![piece("x"), template::Piece::Span(2)],
+            unit: false,
+        };
+        let mut inner = view(
+            &[
+                ("verticalAlign", "50%"),
+                ("textDecoration", "underline"),
+                ("textDecorationSkipInk", "none"),
+            ],
+            &[],
+        );
+        inner.kind = Kind::Span {
+            content: vec![piece("y")],
+            unit: false,
+        };
+        let l = lay(vec![paragraph, outer, inner], &[0]).unwrap();
+        let lines = l.lines[0].as_ref().unwrap();
+        assert_eq!(lines.offset(1, 0), -8.0);
+        assert_eq!(lines.offset(2, 0), -18.0);
+        let baseline = lines.baselines[0];
+        for (node, shift) in [(0, 0.0), (1, -8.0), (2, -18.0)] {
+            let g = lines.glyphs.iter().find(|g| g.node == node).unwrap();
+            assert_eq!(g.y, baseline + shift);
+        }
+        assert_eq!(l.boxes[2].border.y, baseline - 18.0 - 11.0);
+        assert!(
+            lines
+                .decorations
+                .iter()
+                .all(|d| d.rect[1] < baseline - 10.0)
+        );
     }
 
     #[test]

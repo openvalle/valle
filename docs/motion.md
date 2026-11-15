@@ -91,12 +91,12 @@ Timeline and Project renders.
 
 ## The file
 
-| Export | Required | What it is |
-| --- | --- | --- |
-| `default` | yes | The root component |
-| `composition` | yes | `{ width, height, fps, duration }`: pixels, frames a second, seconds |
-| `controls` | no | Props, data and resources a timeline or the command line binds: see below |
-| `role` | no | How a timeline uses the scene: see the timeline roles |
+| Export        | Required | What it is                                                                |
+| ------------- | -------- | ------------------------------------------------------------------------- |
+| `default`     | yes      | The root component                                                        |
+| `composition` | yes      | `{ width, height, fps, duration }`: pixels, frames a second, seconds      |
+| `controls`    | no       | Props, data and resources a timeline or the command line binds: see below |
+| `role`        | no       | How a timeline uses the scene: see the timeline roles                     |
 
 `composition`, `controls` and `role` are object literals: tools read them without running the
 scene. Built-in functions and tags need no import. A scene may import its own relative
@@ -123,21 +123,21 @@ gives `width`, `height`, `fps`, `duration` and `clipDuration`.
 
 ## Elements
 
-| Tag | What it is |
-| --- | --- |
-| `View` | A box, like a `div`: layout, background, border, children |
-| `Text` | A run of text; text must be inside a `Text`. `split` and `perUnit` animate characters, words or lines |
-| `Span` | Styled text inside a `Text` |
-| `Image` | `src`: a `resource://name`, a relative path or an `https://` address |
-| `Video` | `src`, with `trimStart` and `rate`, or `time` for the source time directly |
-| `Mask` | `source={<…/>}`, `mode` `alpha` or `luminance`, `invert`: shows its children through another tree |
-| `TimeScope` | `offset` and `rate`: a child clock, `(time - offset) × rate` |
-| `Echo` | `count`, `delay`, `decay`: copies of its children at earlier times |
-| `Shutter` | `samples`, `angle`: motion blur from several sub-frame samples |
-| `World` | `camera={{ center, zoom, rotation }}`: a 2D camera over its children |
-| `ShaderLayer` | Your own WGSL shader: `code` or `source`, `uniforms`, `inputs`, `outset`; see below |
-| `Transition` | Goes between two children over the scene's time |
-| `svg` | Inline SVG: `path`, `circle`, `rect`, `line`, `polyline`, `polygon`, `g`, gradients, `text` |
+| Tag           | What it is                                                                                            |
+| ------------- | ----------------------------------------------------------------------------------------------------- |
+| `View`        | A box, like a `div`: layout, background, border, children                                             |
+| `Text`        | A run of text; text must be inside a `Text`. `split` and `perUnit` animate characters, words or lines |
+| `Span`        | Styled text inside a `Text`                                                                           |
+| `Image`       | `src`: a `resource://name`, a relative path or an `https://` address                                  |
+| `Video`       | `src`, with `trimStart` and `rate`, or `time` for the source time directly                            |
+| `Mask`        | `source={<…/>}`, `mode` `alpha` or `luminance`, `invert`: shows its children through another tree     |
+| `TimeScope`   | `offset` and `rate`: a child clock, `(time - offset) × rate`                                          |
+| `Echo`        | `count`, `delay`, `decay`: copies of its children at earlier times                                    |
+| `Shutter`     | `samples`, `angle`: motion blur from several sub-frame samples                                        |
+| `World`       | `camera={{ center, zoom, rotation }}`: a 2D camera over its children                                  |
+| `ShaderLayer` | Your own WGSL shader: `code` or `source`, `uniforms`, `inputs`, `outset`; see below                   |
+| `Transition`  | Goes between two children over the scene's time                                                       |
+| `svg`         | Inline SVG: `path`, `circle`, `rect`, `line`, `polyline`, `polygon`, `g`, gradients, `text`           |
 
 HTML tags (`div`, `span`, `img`, `h1`…) are errors that name the tag to use instead.
 
@@ -247,10 +247,15 @@ one quadratic control point or two cubic controls separated by `/`, after `with`
 Controls can explicitly use `from start`, `from end` or `from origin`.
 
 ```tsx
-<View style={{
-  width: 240, height: 140, background: "royalblue",
-  clipPath: "shape(from 0 30%, curve to 100% 30% with 25% 0 / 75% 60%, line to 100% 100%, line to 0 100%, close)",
-}} />
+<View
+  style={{
+    width: 240,
+    height: 140,
+    background: "royalblue",
+    clipPath:
+      "shape(from 0 30%, curve to 100% 30% with 25% 0 / 75% 60%, line to 100% 100%, line to 0 100%, close)",
+  }}
+/>
 ```
 
 `arc to … of …` takes one or two radii, optional `cw`/`ccw`, `large`/`small`,
@@ -288,15 +293,24 @@ only at its first/last fragment. `boxDecorationBreak: "clone"` is not supported.
 
 ```tsx
 <Text style={{ width: 360, fontSize: 24, lineHeight: "48px" }}>
-  Highlight <Span style={{ background: "#ffe496", padding: "3px 8px", border: "2px solid #b58300" }}>
+  Highlight{" "}
+  <Span style={{ background: "#ffe496", padding: "3px 8px", border: "2px solid #b58300" }}>
     a phrase that can wrap
-  </Span> inside a paragraph.
+  </Span>{" "}
+  inside a paragraph.
 </Text>
 ```
 
 The same inline edges follow `direction` and `writingMode`. A Span remains part
 of the paragraph: width, height, margins and block layout do not apply. Animate
 its style with time expressions; no browser layout or previous-frame state is used.
+
+`verticalAlign` on a Span supports `baseline`, `middle`, `sub`, `super`,
+`text-top`, `text-bottom`, `top`, `bottom`, and signed CSS lengths or percentages.
+Positive lengths raise the inline box; percentages use its own line height.
+Nested offsets accumulate, while `top` and `bottom` align the entire inline
+subtree to its line. Alignment can enlarge the line box; backgrounds, borders
+and decorations follow their declaring Span. The property does not inherit.
 
 ### Vertical text
 
@@ -550,12 +564,19 @@ letter spacing. SVG text paints with `fill` and `stroke`, not CSS `color`.
 
 ```tsx
 <svg width={600} height={200}>
-  <defs><path id="arc" d="M40 160 Q300 -40 560 160" /></defs>
+  <defs>
+    <path id="arc" d="M40 160 Q300 -40 560 160" />
+  </defs>
   <text x={300} y={40} fontSize={28} textAnchor="middle">
-    Hello <tspan fill="#e86a55" fontWeight={700}>Valle</tspan>
+    Hello{" "}
+    <tspan fill="#e86a55" fontWeight={700}>
+      Valle
+    </tspan>
   </text>
   <text fontSize={24} fill="#3869c9" textAnchor="middle">
-    <textPath href="#arc" startOffset={`${40 + progress * 20}%`}>Along the curve</textPath>
+    <textPath href="#arc" startOffset={`${40 + progress * 20}%`}>
+      Along the curve
+    </textPath>
   </text>
 </svg>
 ```
@@ -584,7 +605,11 @@ for following siblings. Both attributes can be animated.
 
 ```tsx
 <text x={20} y={60} fontSize={32} textDecoration="underline" fill="royalblue">
-  H<tspan baselineShift="sub" fontSize={20}>2</tspan>O
+  H
+  <tspan baselineShift="sub" fontSize={20}>
+    2
+  </tspan>
+  O
 </text>
 ```
 
@@ -618,25 +643,25 @@ each reference's own space. Cyclic clipping references produce an empty clip.
 Define `<filter id="…">` inside `<defs>` and apply `filter="url(#…)"` to an SVG
 shape or group. Both inline SVG and SVG files support these primitives:
 
-| Primitive | Attributes |
-| --- | --- |
-| `feGaussianBlur` | `stdDeviation` (one or two nonnegative numbers), `edgeMode="none"` |
-| `feOffset` | `dx`, `dy` |
-| `feFlood` | `floodColor`, `floodOpacity` |
-| `feColorMatrix` | `type`: `matrix` (20 `values`), `saturate`, `hueRotate`, `luminanceToAlpha` |
-| `feBlend` | `in`, `in2`, `mode` (the CSS blend modes) |
-| `feComposite` | `in`, `in2`, `operator`: `over`, `in`, `out`, `atop`, `xor`, `arithmetic`; `k1`–`k4` |
-| `feMerge` | ordered `<feMergeNode in="…" />` children |
-| `feMorphology` | `operator`: `erode` or `dilate`; `radius` (one or two nonnegative numbers) |
-| `feDisplacementMap` | `in`, `in2`, `scale`, `xChannelSelector`, `yChannelSelector` (`R`, `G`, `B`, `A`) |
-| `feComponentTransfer` | `<feFuncR/G/B/A>` children: `identity`, `table`, `discrete`, `linear`, `gamma` |
-| `feDropShadow` | `dx`, `dy`, `stdDeviation`, `floodColor`, `floodOpacity` |
-| `feTurbulence` | `baseFrequency` (one or two nonnegative numbers), `numOctaves` (nonnegative integer, default 1), `seed` (default 0), `type`: `turbulence` or `fractalNoise`; `stitchTiles`: `noStitch` or `stitch` |
-| `feConvolveMatrix` | `order` (positive integer pair, default 3), `kernelMatrix` (orderX × orderY numbers), `divisor` (nonzero; default sum or 1), `bias` (default 0), `targetX/Y` (default center), `edgeMode`: `duplicate`, `wrap` or `none`, `kernelUnitLength` (positive pair), `preserveAlpha`: `false` or `true` |
-| `feDiffuseLighting` | `surfaceScale` (default 1), `diffuseConstant` (nonnegative, default 1), `kernelUnitLength` (positive pair), `lightingColor` (default white); exactly one light child |
-| `feSpecularLighting` | `surfaceScale` (default 1), `specularConstant` (nonnegative, default 1), `specularExponent` (1–128, default 1), `kernelUnitLength`, `lightingColor`; exactly one light child |
-| `feImage` | `href` / `xlinkHref` (a local `#element` or an image), `preserveAspectRatio` (default `xMidYMid meet`); no input dependency |
-| `feTile` | `in`; repeats its input primitive's subregion to fill the output subregion |
+| Primitive             | Attributes                                                                                                                                                                                                                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `feGaussianBlur`      | `stdDeviation` (one or two nonnegative numbers), `edgeMode="none"`                                                                                                                                                                                                                               |
+| `feOffset`            | `dx`, `dy`                                                                                                                                                                                                                                                                                       |
+| `feFlood`             | `floodColor`, `floodOpacity`                                                                                                                                                                                                                                                                     |
+| `feColorMatrix`       | `type`: `matrix` (20 `values`), `saturate`, `hueRotate`, `luminanceToAlpha`                                                                                                                                                                                                                      |
+| `feBlend`             | `in`, `in2`, `mode` (the CSS blend modes)                                                                                                                                                                                                                                                        |
+| `feComposite`         | `in`, `in2`, `operator`: `over`, `in`, `out`, `atop`, `xor`, `arithmetic`; `k1`–`k4`                                                                                                                                                                                                             |
+| `feMerge`             | ordered `<feMergeNode in="…" />` children                                                                                                                                                                                                                                                        |
+| `feMorphology`        | `operator`: `erode` or `dilate`; `radius` (one or two nonnegative numbers)                                                                                                                                                                                                                       |
+| `feDisplacementMap`   | `in`, `in2`, `scale`, `xChannelSelector`, `yChannelSelector` (`R`, `G`, `B`, `A`)                                                                                                                                                                                                                |
+| `feComponentTransfer` | `<feFuncR/G/B/A>` children: `identity`, `table`, `discrete`, `linear`, `gamma`                                                                                                                                                                                                                   |
+| `feDropShadow`        | `dx`, `dy`, `stdDeviation`, `floodColor`, `floodOpacity`                                                                                                                                                                                                                                         |
+| `feTurbulence`        | `baseFrequency` (one or two nonnegative numbers), `numOctaves` (nonnegative integer, default 1), `seed` (default 0), `type`: `turbulence` or `fractalNoise`; `stitchTiles`: `noStitch` or `stitch`                                                                                               |
+| `feConvolveMatrix`    | `order` (positive integer pair, default 3), `kernelMatrix` (orderX × orderY numbers), `divisor` (nonzero; default sum or 1), `bias` (default 0), `targetX/Y` (default center), `edgeMode`: `duplicate`, `wrap` or `none`, `kernelUnitLength` (positive pair), `preserveAlpha`: `false` or `true` |
+| `feDiffuseLighting`   | `surfaceScale` (default 1), `diffuseConstant` (nonnegative, default 1), `kernelUnitLength` (positive pair), `lightingColor` (default white); exactly one light child                                                                                                                             |
+| `feSpecularLighting`  | `surfaceScale` (default 1), `specularConstant` (nonnegative, default 1), `specularExponent` (1–128, default 1), `kernelUnitLength`, `lightingColor`; exactly one light child                                                                                                                     |
+| `feImage`             | `href` / `xlinkHref` (a local `#element` or an image), `preserveAspectRatio` (default `xMidYMid meet`); no input dependency                                                                                                                                                                      |
+| `feTile`              | `in`; repeats its input primitive's subregion to fill the output subregion                                                                                                                                                                                                                       |
 
 Transfer functions use `tableValues` for table/discrete, `slope` and `intercept`
 for linear, and `amplitude`, `exponent`, `offset` for gamma. Omitted channels stay
@@ -719,14 +744,14 @@ Lengths below take `px`, such as `2px`, not `2`, `2em` or `20%`. A unitless `0` 
 where the range includes zero. Lengths are layout pixels and scale with the output size.
 Numbers have no unit. Square brackets mark optional arguments; do not write the brackets.
 
-| Function | Parameters | Effect |
-| --- | --- | --- |
-| `bloom(radius intensity threshold [knee])` | `radius`: 0–128px; `intensity`: 0–4; `threshold`: 0–1; `knee`: 0–1, default 0.1 | Adds a blurred glow from bright areas. `threshold` selects the brightness; `knee` softens that cutoff. |
+| Function                                          | Parameters                                                                                                                                   | Effect                                                                                                                                 |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `bloom(radius intensity threshold [knee])`        | `radius`: 0–128px; `intensity`: 0–4; `threshold`: 0–1; `knee`: 0–1, default 0.1                                                              | Adds a blurred glow from bright areas. `threshold` selects the brightness; `knee` softens that cutoff.                                 |
 | `displacement(seed fx fy scale [octaves [mode]])` | `fx`, `fy`: 0–1 cycles per layout pixel; `scale`: −256–256px; `octaves`: integer 1–4, default 2; `mode`: `fractal` (default) or `turbulence` | Warps the picture with seeded noise. Higher frequencies make smaller ripples; more octaves add detail. Supply `octaves` before `mode`. |
-| `film-grain(seed amount size)` | `amount`: 0–1; `size`: 1–64px | Adds seeded grain to colors, preserving alpha. `size` is the noise cell size. |
-| `chromatic-aberration(offset)` | `offset`: −256–256px | Moves red and blue in opposite horizontal directions, each by half the offset; green stays put. |
-| `lens-distortion(k1 k2)` | `k1`, `k2`: each −0.5–0.5 | Warps around the box center, with quadratic and quartic radial coefficients. Zero leaves the picture unchanged. |
-| `radial-blur(x y amount)` | `x`, `y`: −1000000–1000000px from the border box's top left; `amount`: 0–128px | Blurs along rays from `(x, y)`, by up to `amount` in each direction. |
+| `film-grain(seed amount size)`                    | `amount`: 0–1; `size`: 1–64px                                                                                                                | Adds seeded grain to colors, preserving alpha. `size` is the noise cell size.                                                          |
+| `chromatic-aberration(offset)`                    | `offset`: −256–256px                                                                                                                         | Moves red and blue in opposite horizontal directions, each by half the offset; green stays put.                                        |
+| `lens-distortion(k1 k2)`                          | `k1`, `k2`: each −0.5–0.5                                                                                                                    | Warps around the box center, with quadratic and quartic radial coefficients. Zero leaves the picture unchanged.                        |
+| `radial-blur(x y amount)`                         | `x`, `y`: −1000000–1000000px from the border box's top left; `amount`: 0–128px                                                               | Blurs along rays from `(x, y)`, by up to `amount` in each direction.                                                                   |
 
 Both `seed` parameters are integers from 0 to 4294967295. A fixed seed gives a fixed pattern;
 the noise does not animate by itself. All parameters are required unless marked optional.
@@ -745,16 +770,31 @@ const effects = [
 
 export default function Filters() {
   return (
-    <View style={{
-      display: "flex", width: 640, height: 360, padding: 24, gap: 24,
-      flexDirection: "row", flexWrap: "wrap", background: "#182030",
-    }}>
+    <View
+      style={{
+        display: "flex",
+        width: 640,
+        height: 360,
+        padding: 24,
+        gap: 24,
+        flexDirection: "row",
+        flexWrap: "wrap",
+        background: "#182030",
+      }}
+    >
       {effects.map((filter) => (
-        <View key={filter} style={{
-          display: "flex", width: 180, height: 140,
-          alignItems: "center", justifyContent: "center",
-          background: "linear-gradient(135deg, #245080, #b04070)", filter,
-        }}>
+        <View
+          key={filter}
+          style={{
+            display: "flex",
+            width: 180,
+            height: 140,
+            alignItems: "center",
+            justifyContent: "center",
+            background: "linear-gradient(135deg, #245080, #b04070)",
+            filter,
+          }}
+        >
           <Text style={{ fontSize: 48, fontWeight: 700, color: "white" }}>Valle</Text>
         </View>
       ))}
@@ -792,11 +832,16 @@ export default function Shader() {
   const amount = interpolate(seconds, [0, 2], [0, 1]);
   return (
     <ShaderLayer code={code} uniforms={{ amount }} style={{ width: 640, height: 360 }}>
-      <View style={{
-        display: "flex", width: "100%", height: "100%",
-        alignItems: "center", justifyContent: "center",
-        background: "linear-gradient(135deg, #245080, #b04070)",
-      }}>
+      <View
+        style={{
+          display: "flex",
+          width: "100%",
+          height: "100%",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "linear-gradient(135deg, #245080, #b04070)",
+        }}
+      >
         <Text style={{ fontSize: 80, fontWeight: 700, color: "white" }}>WGSL</Text>
       </View>
     </ShaderLayer>
@@ -810,23 +855,23 @@ Return sRGB-encoded RGB and straight (unpremultiplied) alpha. Valle clamps the f
 to 0–1, applies edge coverage and premultiplies for compositing; do not multiply RGB by
 alpha yourself. Input textures also contain sRGB colors with straight alpha.
 
-| `ShaderInput` field | Type | Meaning |
-| --- | --- | --- |
-| `uv` | `vec2f` | Normalized local coordinates, `(0, 0)` at the bottom left and `(1, 1)` at the top right. Input textures use the same orientation. |
-| `size` | `vec2f` | The box's width and height in layout pixels, before transforms and output scaling. |
-| `pixel` | `vec2f` | `uv` multiplied by the box's raster dimensions, which account for rendering scale. A local pixel coordinate, not a pixel size or a position on the whole canvas. |
+| `ShaderInput` field | Type    | Meaning                                                                                                                                                          |
+| ------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `uv`                | `vec2f` | Normalized local coordinates, `(0, 0)` at the bottom left and `(1, 1)` at the top right. Input textures use the same orientation.                                |
+| `size`              | `vec2f` | The box's width and height in layout pixels, before transforms and output scaling.                                                                               |
+| `pixel`             | `vec2f` | `uv` multiplied by the box's raster dimensions, which account for rendering scale. A local pixel coordinate, not a pixel size or a position on the whole canvas. |
 
 Use `input.uv * input.size` for positions in layout pixels; `input.pixel` is useful for
 patterns in raster pixels. With `outset`, coordinates outside the original box can go
 below 0 or above 1; the UV range is not stretched to include the extra area.
 
-| Prop | Meaning |
-| --- | --- |
-| `code` | A fixed WGSL string, as above. |
-| `source` | A shader resource such as `"resource://wave"`, instead of `code`. Declare it with `resource({ kind: "shader", default: "./wave.wgsl" })` in `controls.resources`. |
-| `uniforms` | Values by uniform **field** name, such as `{ amount: seconds }`, not by the struct or variable name. Values can animate; code and bindings stay fixed. Omitted fields are zero. |
-| `inputs` | Textures by WGSL variable name, such as `{ picture: "resource://photo" }` for `var picture: texture_2d<f32>`. Declare the image resource in `controls.resources`; Timeline roles can also use `"input://source"`, `"input://from"` or `"input://to"` where available. |
-| `outset` | A fixed nonnegative number of layout pixels to paint past each side of the box, default 0. It does not change layout or enlarge the captured input textures; ancestor clipping still applies. |
+| Prop       | Meaning                                                                                                                                                                                                                                                               |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `code`     | A fixed WGSL string, as above.                                                                                                                                                                                                                                        |
+| `source`   | A shader resource such as `"resource://wave"`, instead of `code`. Declare it with `resource({ kind: "shader", default: "./wave.wgsl" })` in `controls.resources`.                                                                                                     |
+| `uniforms` | Values by uniform **field** name, such as `{ amount: seconds }`, not by the struct or variable name. Values can animate; code and bindings stay fixed. Omitted fields are zero.                                                                                       |
+| `inputs`   | Textures by WGSL variable name, such as `{ picture: "resource://photo" }` for `var picture: texture_2d<f32>`. Declare the image resource in `controls.resources`; Timeline roles can also use `"input://source"`, `"input://from"` or `"input://to"` where available. |
+| `outset`   | A fixed nonnegative number of layout pixels to paint past each side of the box, default 0. It does not change layout or enlarge the captured input textures; ancestor clipping still applies.                                                                         |
 
 Author bindings use `@group(2)`; groups 0 and 1 belong to Valle. Binding numbers must be
 unique but need not be consecutive. You may declare one uniform struct, `texture_2d<f32>`
@@ -883,15 +928,15 @@ It also accepts these 33 case-sensitive preset names:
   or `easeInOutElastic`. `In` eases into movement, `Out` eases into the end, and `InOut`
   eases both ends.
 
-| Family | Motion |
-| --- | --- |
-| `Sine` | Gentle acceleration and deceleration |
-| `Quad`, `Cubic`, `Quart`, `Quint` | Progressively stronger acceleration and deceleration |
-| `Expo` | An abrupt start or finish to the change in speed |
-| `Circ` | Circular-arc-style acceleration and deceleration |
-| `Back` | Pulls back before starting, or overshoots before settling |
-| `Elastic` | Oscillates around the endpoint |
-| `Bounce` | Bounces toward the endpoint |
+| Family                            | Motion                                                    |
+| --------------------------------- | --------------------------------------------------------- |
+| `Sine`                            | Gentle acceleration and deceleration                      |
+| `Quad`, `Cubic`, `Quart`, `Quint` | Progressively stronger acceleration and deceleration      |
+| `Expo`                            | An abrupt start or finish to the change in speed          |
+| `Circ`                            | Circular-arc-style acceleration and deceleration          |
+| `Back`                            | Pulls back before starting, or overshoots before settling |
+| `Elastic`                         | Oscillates around the endpoint                            |
+| `Bounce`                          | Bounces toward the endpoint                               |
 
 ```tsx
 const x = interpolate(seconds, [0, 1], [0, 400], { easing: "easeOutCubic" });
@@ -945,7 +990,12 @@ export const controls = {
     size: number({ default: 64, min: 12, max: 160, step: 1 }),
   },
   data: {
-    rows: { default: [{ label: "A", value: 3 }, { label: "B", value: 5 }] },
+    rows: {
+      default: [
+        { label: "A", value: 3 },
+        { label: "B", value: 5 },
+      ],
+    },
   },
 };
 
@@ -1001,13 +1051,13 @@ A scene declares how a timeline uses it:
 export const role = overlay({ intro: 0.5, outro: 0.5, hold: "once" });
 ```
 
-| Role | Used as | What it reads |
-| --- | --- | --- |
-| none | a `motion` clip, played as it is | |
-| `overlay({ intro, outro, hold })` | a title or lower third of any length | its intro and outro keep their length; `hold` is `once`, `loop` or `stretch` |
-| `transition()` | a timeline `motion` transition | `<Image src="input://from">` and `input://to` |
-| `effect()` | a clip's `effects`, or an adjustment clip | `input://source`: the clip, or all under it |
-| `captionPresenter({ intro, outro })` | a caption track's `presenter` | its `caption` prop: `{ text, runs }` |
+| Role                                 | Used as                                   | What it reads                                                                |
+| ------------------------------------ | ----------------------------------------- | ---------------------------------------------------------------------------- |
+| none                                 | a `motion` clip, played as it is          |                                                                              |
+| `overlay({ intro, outro, hold })`    | a title or lower third of any length      | its intro and outro keep their length; `hold` is `once`, `loop` or `stretch` |
+| `transition()`                       | a timeline `motion` transition            | `<Image src="input://from">` and `input://to`                                |
+| `effect()`                           | a clip's `effects`, or an adjustment clip | `input://source`: the clip, or all under it                                  |
+| `captionPresenter({ intro, outro })` | a caption track's `presenter`             | its `caption` prop: `{ text, runs }`                                         |
 
 A transition or an effect fills its composition with what it reads and draws over it; use
 `clipProgress` for how far it is.

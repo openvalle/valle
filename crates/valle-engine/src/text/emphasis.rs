@@ -58,6 +58,7 @@ pub(super) fn shapes(text: &mut Text, content: &Content) -> Result<HashMap<u32, 
             }])
             .collect();
         let source = Content {
+            scopes: Vec::new(),
             font: &font,
             clamp: None,
             pieces: vec![Piece {

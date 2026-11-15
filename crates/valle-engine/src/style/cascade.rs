@@ -260,6 +260,7 @@ fn copy(d: &mut Declared, s: &Declared, field: Field) {
             line_height
         ),
         F::FontSize => fields!(font_size),
+        F::VerticalAlign => fields!(vertical_align),
         F::FontSizeAdjust => fields!(size_adjust),
         F::FontWeight => fields!(font_weight),
         F::FontStretch => fields!(stretch),

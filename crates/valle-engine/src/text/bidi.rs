@@ -226,6 +226,7 @@ mod tests {
         ]);
         let value = "אבג\nX";
         let content = crate::text::Content {
+            scopes: Vec::new(),
             font: &style.font,
             clamp: None,
             pieces: vec![crate::text::Piece {

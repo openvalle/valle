@@ -47,7 +47,6 @@ const NEVER: &[(&str, &str, &str)] = &[
     ("breakAfter", NO_FLOW, USE_FLEX),
     ("breakInside", NO_FLOW, USE_FLEX),
     ("content", NO_FLOW, "put the text in a <Text>"),
-    ("verticalAlign", NO_INLINE, INLINE_INSTEAD),
     (
         "borderImage*",
         "",
@@ -267,6 +266,7 @@ pub(super) enum Field {
     FontVariationSettings,
     LineHeight,
     TextAlign,
+    VerticalAlign,
     TextAlignLast,
     LineBreak,
     WritingMode,
@@ -340,7 +340,7 @@ pub(super) enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 285] = [
+const FIELDS: [(&str, Field); 286] = [
     ("font", Field::Font),
     ("xmlSpace", Field::XmlSpace),
     ("display", Field::Display),
@@ -713,6 +713,7 @@ const FIELDS: [(&str, Field); 285] = [
     ("fontVariationSettings", Field::FontVariationSettings),
     ("lineHeight", Field::LineHeight),
     ("textAlign", Field::TextAlign),
+    ("verticalAlign", Field::VerticalAlign),
     ("textAlignLast", Field::TextAlignLast),
     ("lineBreak", Field::LineBreak),
     ("writingMode", Field::WritingMode),
@@ -1052,6 +1053,7 @@ impl Field {
                 | Field::FontFeatureSettings
                 | Field::FontVariant(_)
                 | Field::FontVariationSettings
+                | Field::VerticalAlign
                 | Field::LineHeight
                 | Field::TextAlign
                 | Field::TextAlignLast

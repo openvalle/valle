@@ -1,0 +1,267 @@
+{
+  "size": [
+    720,
+    300
+  ],
+  "sources": {
+    "tests/baselines/browser/css/text/vertical-align/scene.html": "265874af8d6681172dc52c44d3956392c83ca93553105f369cccc8e619b45f4b",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "row0",
+        "border": {
+          "x": 12,
+          "y": 12,
+          "width": 220,
+          "height": 58
+        },
+        "padding": {
+          "x": 12,
+          "y": 12,
+          "width": 220,
+          "height": 58
+        },
+        "content": {
+          "x": 12,
+          "y": 12,
+          "width": 220,
+          "height": 58
+        }
+      },
+      {
+        "key": "row1",
+        "border": {
+          "x": 252,
+          "y": 12,
+          "width": 220,
+          "height": 58
+        },
+        "padding": {
+          "x": 252,
+          "y": 12,
+          "width": 220,
+          "height": 58
+        },
+        "content": {
+          "x": 252,
+          "y": 12,
+          "width": 220,
+          "height": 58
+        }
+      },
+      {
+        "key": "row2",
+        "border": {
+          "x": 492,
+          "y": 12,
+          "width": 220,
+          "height": 58
+        },
+        "padding": {
+          "x": 492,
+          "y": 12,
+          "width": 220,
+          "height": 58
+        },
+        "content": {
+          "x": 492,
+          "y": 12,
+          "width": 220,
+          "height": 58
+        }
+      },
+      {
+        "key": "row3",
+        "border": {
+          "x": 12,
+          "y": 82,
+          "width": 220,
+          "height": 58
+        },
+        "padding": {
+          "x": 12,
+          "y": 82,
+          "width": 220,
+          "height": 58
+        },
+        "content": {
+          "x": 12,
+          "y": 82,
+          "width": 220,
+          "height": 58
+        }
+      },
+      {
+        "key": "row4",
+        "border": {
+          "x": 252,
+          "y": 82,
+          "width": 220,
+          "height": 58
+        },
+        "padding": {
+          "x": 252,
+          "y": 82,
+          "width": 220,
+          "height": 58
+        },
+        "content": {
+          "x": 252,
+          "y": 82,
+          "width": 220,
+          "height": 58
+        }
+      },
+      {
+        "key": "row5",
+        "border": {
+          "x": 492,
+          "y": 82,
+          "width": 220,
+          "height": 58
+        },
+        "padding": {
+          "x": 492,
+          "y": 82,
+          "width": 220,
+          "height": 58
+        },
+        "content": {
+          "x": 492,
+          "y": 82,
+          "width": 220,
+          "height": 58
+        }
+      },
+      {
+        "key": "row6",
+        "border": {
+          "x": 12,
+          "y": 152,
+          "width": 220,
+          "height": 58
+        },
+        "padding": {
+          "x": 12,
+          "y": 152,
+          "width": 220,
+          "height": 58
+        },
+        "content": {
+          "x": 12,
+          "y": 152,
+          "width": 220,
+          "height": 58
+        }
+      },
+      {
+        "key": "row7",
+        "border": {
+          "x": 252,
+          "y": 152,
+          "width": 220,
+          "height": 58
+        },
+        "padding": {
+          "x": 252,
+          "y": 152,
+          "width": 220,
+          "height": 58
+        },
+        "content": {
+          "x": 252,
+          "y": 152,
+          "width": 220,
+          "height": 58
+        }
+      },
+      {
+        "key": "row8",
+        "border": {
+          "x": 492,
+          "y": 152,
+          "width": 220,
+          "height": 58
+        },
+        "padding": {
+          "x": 492,
+          "y": 152,
+          "width": 220,
+          "height": 58
+        },
+        "content": {
+          "x": 492,
+          "y": 152,
+          "width": 220,
+          "height": 58
+        }
+      },
+      {
+        "key": "row9",
+        "border": {
+          "x": 12,
+          "y": 222,
+          "width": 220,
+          "height": 58
+        },
+        "padding": {
+          "x": 12,
+          "y": 222,
+          "width": 220,
+          "height": 58
+        },
+        "content": {
+          "x": 12,
+          "y": 222,
+          "width": 220,
+          "height": 58
+        }
+      },
+      {
+        "key": "row10",
+        "border": {
+          "x": 252,
+          "y": 222,
+          "width": 220,
+          "height": 58
+        },
+        "padding": {
+          "x": 252,
+          "y": 222,
+          "width": 220,
+          "height": 58
+        },
+        "content": {
+          "x": 252,
+          "y": 222,
+          "width": 220,
+          "height": 58
+        }
+      },
+      {
+        "key": "row11",
+        "border": {
+          "x": 492,
+          "y": 222,
+          "width": 220,
+          "height": 58
+        },
+        "padding": {
+          "x": 492,
+          "y": 222,
+          "width": 220,
+          "height": 58
+        },
+        "content": {
+          "x": 492,
+          "y": 222,
+          "width": 220,
+          "height": 58
+        }
+      }
+    ],
+    "lines": []
+  }
+}

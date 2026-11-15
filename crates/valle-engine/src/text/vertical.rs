@@ -129,6 +129,7 @@ fn layout(
     font.align_last = None;
     font.indent = None;
     let horizontal = Content {
+        scopes: Vec::new(),
         font: &font,
         pieces: content
             .pieces
@@ -157,6 +158,7 @@ fn layout(
         .collect();
     let base = text.lines(&horizontal, f32::MAX)?;
     let mut out = Lines {
+        offsets: Vec::new(),
         glyphs: Vec::new(),
         runs: Vec::new(),
         boxes: Vec::new(),

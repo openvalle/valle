@@ -1,0 +1,60 @@
+<!doctype html><meta charset="utf-8" /><title>Inline alignment</title
+><style>
+  @font-face {
+    font-family: Test;
+    src: url("/tests/resources/NotoSans.ttf");
+    font-weight: 100 900;
+  }
+  body {
+    margin: 0;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  #canvas {
+    width: 720px;
+    height: 300px;
+    position: relative;
+    background: white;
+    font-family: Test;
+    color: #17365d;
+  }
+  .line {
+    position: absolute;
+    font-size: 32px;
+    line-height: 48px;
+    width: 220px;
+    height: 58px;
+  }
+  .small {
+    font-size: 20px;
+    line-height: 26px;
+    background: #ffebae;
+  }
+</style>
+<div id="canvas">
+  <!-- prettier-ignore -->
+  <div data-key="row0" class="line" style="left:12px;top:12px">A<span class="small" style="vertical-align:baseline">xy</span>B</div>
+  <!-- prettier-ignore -->
+  <div data-key="row1" class="line" style="left:252px;top:12px">A<span class="small" style="vertical-align:middle">xy</span>B</div>
+  <!-- prettier-ignore -->
+  <div data-key="row2" class="line" style="left:492px;top:12px">A<span class="small" style="vertical-align:sub">xy</span>B</div>
+  <!-- prettier-ignore -->
+  <div data-key="row3" class="line" style="left:12px;top:82px">A<span class="small" style="vertical-align:super">xy</span>B</div>
+  <!-- prettier-ignore -->
+  <div data-key="row4" class="line" style="left:252px;top:82px">A<span class="small" style="vertical-align:text-top">xy</span>B</div>
+  <!-- prettier-ignore -->
+  <div data-key="row5" class="line" style="left:492px;top:82px">A<span class="small" style="vertical-align:text-bottom">xy</span>B</div>
+  <!-- prettier-ignore -->
+  <div data-key="row6" class="line" style="left:12px;top:152px">A<span class="small" style="vertical-align:top">xy</span>B</div>
+  <!-- prettier-ignore -->
+  <div data-key="row7" class="line" style="left:252px;top:152px">A<span class="small" style="vertical-align:bottom">xy</span>B</div>
+  <!-- prettier-ignore -->
+  <div data-key="row8" class="line" style="left:492px;top:152px">A<span class="small" style="vertical-align:8px">xy</span>B</div>
+  <!-- prettier-ignore -->
+  <div data-key="row9" class="line" style="left:12px;top:222px">A<span class="small" style="vertical-align:-8px">xy</span>B</div>
+  <!-- prettier-ignore -->
+  <div data-key="row10" class="line" style="left:252px;top:222px">A<span class="small" style="vertical-align:25%">xy</span>B</div>
+  <!-- prettier-ignore -->
+  <div data-key="row11" class="line" style="left:492px;top:222px">A<span class="small" style="vertical-align:top">x<span style="vertical-align:super;font-size:12px;line-height:16px;background:#d6eaf8">2</span></span>B</div>
+</div>

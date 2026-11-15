@@ -460,6 +460,7 @@ fn subtree(
         .map(|leaf| font(&styles[leaf.node].font))
         .collect();
     let content = Content {
+        scopes: Vec::new(),
         font: &base,
         clamp: None,
         pieces: leaves

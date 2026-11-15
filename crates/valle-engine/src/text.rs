@@ -9,6 +9,7 @@
 //! lines again. Its line boxes stack as Chrome stacks them, each from the paragraph's own font
 //! (CSS's strut) and the runs of glyphs on it.
 
+pub mod align;
 mod bidi;
 mod caps;
 pub(crate) mod emphasis;
@@ -75,7 +76,9 @@ impl Face {
 /// A paragraph as written: the font of its box, which each line box starts from (CSS's strut)
 /// and which aligns its lines, its pieces of text in order, and how many lines it shows, if it
 /// is clamped.
+#[derive(Clone)]
 pub struct Content<'a> {
+    pub scopes: Vec<align::Scope<'a>>,
     pub font: &'a Font,
     pub pieces: Vec<Piece<'a>>,
     pub clamp: Option<usize>,
@@ -94,6 +97,7 @@ impl Content<'_> {
             return None;
         }
         Some(Content {
+            scopes: self.scopes.clone(),
             font: self.font,
             clamp: self.clamp,
             pieces: self
@@ -251,6 +255,8 @@ pub(crate) fn cjk_ranges(text: &str) -> Vec<Range<usize>> {
 /// A paragraph broken into lines at a width and aligned in it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lines {
+    /// Baseline displacements of inline scopes, indexed by node and line.
+    pub offsets: Vec<(u32, u32, f32)>,
     pub glyphs: Vec<Glyph>,
     pub runs: Vec<Run>,
     /// Each line box's top and height, and each line's baseline, from the top.
@@ -263,6 +269,15 @@ pub struct Lines {
     pub decorations: Vec<Stripe>,
     pub marks: Vec<emphasis::Mark>,
     pub fragments: Vec<crate::layout::inline::Fragment>,
+}
+
+impl Lines {
+    pub(crate) fn offset(&self, node: u32, line: u32) -> f32 {
+        self.offsets
+            .iter()
+            .find(|(n, l, _)| (*n, *l) == (node, line))
+            .map_or(0.0, |(_, _, v)| *v)
+    }
 }
 
 /// What shaping a piece and breaking it into lines depend on.
@@ -645,11 +660,12 @@ impl Text {
         width: Option<f32>,
         min: bool,
     ) -> Result<[f32; 2], Error> {
-        if content.font.writing != WritingMode::Horizontal {
+        if content.font.writing != WritingMode::Horizontal || align::needed(content) {
             let mut font = content.font.clone();
             font.align = TextAlign::Start;
             font.align_last = None;
             let measured = Content {
+                scopes: content.scopes.clone(),
                 font: &font,
                 pieces: content
                     .pieces
@@ -663,7 +679,7 @@ impl Text {
                     .collect(),
                 clamp: content.clamp,
             };
-            let lines = vertical::lines(self, &measured, width, min)?;
+            let lines = self.lines_inner(&measured, width, min)?;
             let shown = content.clamp.unwrap_or(usize::MAX).min(lines.boxes.len());
             let height = lines
                 .boxes
@@ -700,6 +716,9 @@ impl Text {
     /// The baseline of `content`'s first line from the top of its box, its lines broken to fit
     /// `width` px; empty text has no lines, and no baseline.
     pub fn baseline(&mut self, content: &Content, width: f32) -> Result<Option<f32>, Error> {
+        if align::needed(content) {
+            return Ok(self.lines(content, width)?.baselines.first().copied());
+        }
         if content.font.writing != WritingMode::Horizontal {
             return Ok(self
                 .lines(content, width)?
@@ -721,8 +740,19 @@ impl Text {
 
     /// `content` broken to fit `width` px and aligned in it.
     pub fn lines(&mut self, content: &Content, width: f32) -> Result<Lines, Error> {
+        self.lines_inner(content, Some(width), false)
+    }
+
+    fn lines_inner(
+        &mut self,
+        content: &Content,
+        width: Option<f32>,
+        min: bool,
+    ) -> Result<Lines, Error> {
         if content.font.writing != WritingMode::Horizontal {
-            return vertical::lines(self, content, Some(width), false);
+            let mut lines = vertical::lines(self, content, width, min)?;
+            align::apply(self, content, &mut lines)?;
+            return Ok(lines);
         }
         let alignment = |align| match align {
             TextAlign::Start => Alignment::Start,
@@ -735,7 +765,7 @@ impl Text {
         let marks = emphasis::shapes(self, content)?;
         let strut = self.strut(content.font)?;
         let edges = self.edge_struts(content)?;
-        let p = self.paragraph(content, Some(width), false)?;
+        let p = self.paragraph(content, width, min)?;
         let string = p.source.clone();
         if p.empty {
             return Ok(Lines {
@@ -748,6 +778,7 @@ impl Text {
                 decorations: Vec::new(),
                 marks: Vec::new(),
                 fragments: Vec::new(),
+                offsets: Vec::new(),
             });
         }
         p.layout.align(
@@ -881,8 +912,10 @@ impl Text {
             decorations: Vec::new(),
             marks: Vec::new(),
             fragments: Vec::new(),
+            offsets: Vec::new(),
         };
         emphasis::horizontal(&mut lines, content, &marks);
+        align::apply(self, content, &mut lines)?;
         Ok(lines)
     }
 
@@ -1964,6 +1997,7 @@ mod tests {
     /// `text`, all in its paragraph's own font.
     fn plain<'a>(text: &'a str, font: &'a Font) -> Content<'a> {
         Content {
+            scopes: Vec::new(),
             font,
             pieces: vec![Piece {
                 edge: None,
@@ -2455,6 +2489,7 @@ mod tests {
             font,
         };
         let content = Content {
+            scopes: Vec::new(),
             font: &normal,
             pieces: vec![
                 piece("Hi ", 0, &normal),
@@ -2477,6 +2512,7 @@ mod tests {
         assert_eq!(lines.glyphs[0].node, 0);
         // A line holds its paragraph's own font, even with only smaller text on it.
         let small = Content {
+            scopes: Vec::new(),
             font: &big,
             pieces: vec![piece("small", 1, &normal)],
             clamp: None,
@@ -2805,6 +2841,7 @@ mod tests {
         let [word, _] = t.measure(&plain("aaaa", &f), None).unwrap();
         let advance = t.ellipsis(&f).unwrap().advance;
         let clamped = |n| Content {
+            scopes: Vec::new(),
             clamp: Some(n),
             ..plain(words, &f)
         };

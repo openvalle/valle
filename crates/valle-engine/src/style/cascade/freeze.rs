@@ -206,6 +206,9 @@ pub(super) fn declaration(d: &mut Declared, u: Units) {
         v.freeze(u);
         *dashes = v.into();
     }
+    if let super::super::inline::Align::Offset(v) = &mut d.vertical_align {
+        v.freeze(u);
+    }
     if let crate::svg::text::Shift::Length(v) = &mut d.baseline_shift {
         v.freeze(u);
     }
