@@ -168,6 +168,8 @@ pub struct Style {
     pub non_scaling_stroke: bool,
     pub text_anchor: f64,
     pub dominant_baseline: crate::svg::text::Baseline,
+    pub alignment_baseline: Option<crate::svg::text::Baseline>,
+    pub baseline_shift: crate::svg::text::Shift<Calc>,
     /// A gradient stop's color, a color or `currentColor`, and its opacity.
     pub stop_color: Paint,
     pub stop_opacity: f64,
@@ -326,6 +328,8 @@ impl Style {
             non_scaling_stroke: _,
             text_anchor: _,
             dominant_baseline: _,
+            alignment_baseline: _,
+            baseline_shift: _,
             stop_color: _,
             stop_opacity: _,
             clip_ref: _,
@@ -780,6 +784,8 @@ pub(super) fn compute(
         dominant_baseline: d
             .dominant_baseline
             .unwrap_or(parent.map_or_default(|p| p.dominant_baseline)),
+        alignment_baseline: d.alignment_baseline,
+        baseline_shift: d.baseline_shift.map(|l| l.calc(u)),
         stop_color: d.stop_color.clone().unwrap_or(Paint::Color(color::BLACK)),
         stop_opacity: d.stop_opacity.unwrap_or(1.0),
         clip_ref: d.clip_ref.clone(),

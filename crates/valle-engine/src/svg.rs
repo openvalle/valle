@@ -56,6 +56,7 @@ pub enum Shape {
     Text {
         path: Path,
         bounds: [f64; 4],
+        decorations: Vec<text::Decoration>,
     },
     Path {
         path: Path,
@@ -242,7 +243,7 @@ pub struct Computed {
 
 /// Presentation attributes: style properties of the same name, which the element's style
 /// overrides. Every SVG element takes them.
-const PRESENTATION: [&str; 40] = [
+const PRESENTATION: [&str; 47] = [
     "fill",
     "fillOpacity",
     "fillRule",
@@ -262,6 +263,13 @@ const PRESENTATION: [&str; 40] = [
     "wordSpacing",
     "textAnchor",
     "dominantBaseline",
+    "alignmentBaseline",
+    "baselineShift",
+    "textDecoration",
+    "textDecorationLine",
+    "textDecorationStyle",
+    "textDecorationThickness",
+    "textUnderlineOffset",
     "whiteSpace",
     "strokeLinecap",
     "strokeLinejoin",

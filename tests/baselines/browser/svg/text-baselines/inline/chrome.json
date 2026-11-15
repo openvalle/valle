@@ -1,0 +1,11 @@
+{
+  "size": [480, 330],
+  "sources": {
+    "tests/baselines/browser/svg/text-baselines/inline/scene.html": "f994e6a3498d5c67ae5170c2ed67512887c787da6890a661edaaf62df7d3b78b",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

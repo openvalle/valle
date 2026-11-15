@@ -1,5 +1,7 @@
 //! SVG character positioning after shaping with the scene's fonts. The result is ordinary
 //! vector geometry, so text shares SVG paint servers, strokes, masks and transforms.
+mod decoration;
+
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Range;
@@ -22,6 +24,7 @@ pub enum Baseline {
     Middle,
     Central,
     Hanging,
+    Mathematical,
     Before,
     After,
 }
@@ -33,11 +36,41 @@ impl Baseline {
             "middle" => Self::Middle,
             "central" => Self::Central,
             "hanging" => Self::Hanging,
+            "mathematical" => Self::Mathematical,
             "text-before-edge" | "text-top" => Self::Before,
             "text-after-edge" | "text-bottom" | "ideographic" => Self::After,
             other => return Err(format!("dominant-baseline: {other} is not supported")),
         })
     }
+}
+
+/// A non-inherited baseline shift. Each text ancestor contributes its own shift once.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Shift<T> {
+    #[default]
+    Baseline,
+    Sub,
+    Super,
+    Length(T),
+}
+
+impl<T> Shift<T> {
+    pub fn map<U>(&self, f: impl FnOnce(&T) -> U) -> Shift<U> {
+        match self {
+            Self::Baseline => Shift::Baseline,
+            Self::Sub => Shift::Sub,
+            Self::Super => Shift::Super,
+            Self::Length(v) => Shift::Length(f(v)),
+        }
+    }
+}
+
+/// Decoration outlines keep their declaring paint and painting order separate from glyphs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Decoration {
+    pub path: Path,
+    pub by: usize,
+    pub through: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -138,6 +171,7 @@ struct Placed {
     at: [f64; 2],
     advance: f64,
     cell: [f64; 2],
+    baselines: Vec<(usize, f64)>,
     angle: f64,
     scale: f64,
     track: Option<usize>,
@@ -505,20 +539,40 @@ fn subtree(
             }
             let advance = f64::from(glyphs.get(k + 1).map_or(run.x[1], |g| g.x) - glyph.x);
             let font = &styles[node].font;
-            let baseline = match styles[node].dominant_baseline {
-                Baseline::Alphabetic => 0.0,
-                Baseline::Middle => f64::from(text.x_height(font)?) / 2.0,
-                other => {
-                    let [ascent, descent, _] = text.metrics(font)?.map(f64::from);
-                    match other {
-                        Baseline::Central => (ascent - descent) / 2.0,
-                        Baseline::Hanging => ascent * 0.8,
-                        Baseline::Before => ascent,
-                        Baseline::After => -descent,
-                        _ => 0.0,
-                    }
+            let mut baselines = Vec::new();
+            let mut baseline = 0.0;
+            for (k, &ancestor) in leaf.ancestors.iter().enumerate() {
+                let style = &styles[ancestor];
+                let align = style.alignment_baseline.unwrap_or(style.dominant_baseline);
+                let own = baseline_offset(text, &style.font, align)?;
+                if k == 0 {
+                    baseline = own;
+                } else {
+                    let parent = &styles[leaf.ancestors[k - 1]];
+                    baseline += own
+                        - baseline_offset(
+                            text,
+                            &parent.font,
+                            parent
+                                .alignment_baseline
+                                .unwrap_or(parent.dominant_baseline),
+                        )?;
+                    baseline -= match &style.baseline_shift {
+                        Shift::Baseline => 0.0,
+                        Shift::Length(v) => f64::from(v.resolve(style.font.size as f32)),
+                        Shift::Sub | Shift::Super => {
+                            let [a, d, _] = text.metrics(&style.font)?.map(f64::from);
+                            (a + d) / 2.0
+                                * if matches!(style.baseline_shift, Shift::Sub) {
+                                    -1.0
+                                } else {
+                                    1.0
+                                }
+                        }
+                    };
                 }
-            };
+                baselines.push((ancestor, baseline));
+            }
             let (em, contours) = slug::contours(&text.faces()[glyph.face as usize], glyph.id)?;
             let scale = font.size as f32 / em;
             let mut path = Path::default();
@@ -543,6 +597,7 @@ fn subtree(
                 ],
                 advance,
                 cell: [ascent, descent],
+                baselines,
                 angle,
                 scale: 1.0,
                 track,
@@ -610,6 +665,7 @@ fn subtree(
         .map(|leaf| (leaf.node, Path::default()))
         .collect();
     let mut cells: HashMap<usize, Vec<[f64; 4]>> = HashMap::new();
+    let mut decorations = decoration::outlines(&placed, styles, text, &tracks)?;
     for g in placed {
         let matrix = if let Some(n) = g.track {
             let Some((point, tangent)) = tracks[&n].point(g.at[0] + g.advance / 2.0) else {
@@ -658,9 +714,35 @@ fn subtree(
                 })
             })
             .unwrap_or([0.0; 4]);
-        c.element = Element::Shape(Shape::Text { path, bounds });
+        c.element = Element::Shape(Shape::Text {
+            path,
+            bounds,
+            decorations: decorations.remove(&node).unwrap_or_default(),
+        });
     }
     Ok(())
+}
+
+fn baseline_offset(
+    text: &mut Text,
+    font: &crate::style::Font,
+    baseline: Baseline,
+) -> Result<f64, String> {
+    Ok(match baseline {
+        Baseline::Alphabetic => 0.0,
+        Baseline::Middle => f64::from(text.x_height(font)?) / 2.0,
+        other => {
+            let [a, d, _] = text.metrics(font)?.map(f64::from);
+            match other {
+                Baseline::Central => (a - d) / 2.0,
+                Baseline::Mathematical => a / 2.0,
+                Baseline::Hanging => a * 0.8,
+                Baseline::Before => a,
+                Baseline::After => -d,
+                _ => 0.0,
+            }
+        }
+    })
 }
 
 #[cfg(test)]
@@ -669,6 +751,136 @@ mod tests {
     use crate::front::Inputs;
     use crate::scene::Scene;
     use crate::time::Tick;
+
+    #[test]
+    fn alignment_baseline_places_the_requested_typographic_edge() {
+        let source = indoc::indoc! {r#"
+          export const composition = { width: 200, height: 100, fps: 1, duration: 1 };
+          export default function Scene() { return <svg width={200} height={100}>
+            <text x={10} y={40} fontSize={30}><tspan alignmentBaseline="text-before-edge" fontSize={20}>A</tspan><tspan alignmentBaseline="text-after-edge" fontSize={20}>B</tspan></text>
+          </svg>; }
+        "#};
+        let mut scene = Scene::load(
+            "alignment.motion.tsx",
+            &|_| Some(source.as_bytes().to_vec()),
+            &Inputs::default(),
+            crate::testing::fonts(),
+        )
+        .unwrap();
+        let frame = scene.frame(Tick::ZERO).unwrap();
+        let bounds: Vec<_> = frame
+            .styles
+            .iter()
+            .filter_map(|s| match &s.svg.as_deref()?.element {
+                Element::Shape(Shape::Text { bounds, .. }) => Some(*bounds),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bounds.len(), 2);
+        // Typographic cells snap ascent/descent; the selected edge stays within half a pixel.
+        assert!((bounds[0][1] - 40.0).abs() < 0.5, "{bounds:?}");
+        assert!(
+            (bounds[1][1] + bounds[1][3] - 40.0).abs() < 0.5,
+            "{bounds:?}"
+        );
+    }
+
+    #[test]
+    fn baseline_shifts_accumulate_without_moving_following_characters() {
+        let source = indoc::indoc! {r#"
+          export const composition = { width: 250, height: 100, fps: 4, duration: 2 };
+          export default function Scene() { const { seconds } = useCurrentTime();
+            return <svg width={250} height={100}><text x={10} y={60} fontSize={20}>A<tspan baselineShift={10 + seconds * 4}>A<tspan baselineShift="25%">A</tspan></tspan>A</text></svg>;
+          }
+        "#};
+        let load = || {
+            Scene::load(
+                "baseline.motion.tsx",
+                &|_| Some(source.as_bytes().to_vec()),
+                &Inputs::default(),
+                crate::testing::fonts(),
+            )
+            .unwrap()
+        };
+        let mut scene = load();
+        let frame = scene.frame(Tick::ZERO).unwrap();
+        let ys: Vec<_> = frame
+            .styles
+            .iter()
+            .filter_map(|s| match &s.svg.as_deref()?.element {
+                Element::Shape(Shape::Text { path, .. }) => Some(super::super::bounds(path)[1]),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ys.len(), 4);
+        for (y, delta) in ys.iter().zip([0.0, -10.0, -15.0, 0.0]) {
+            assert!((y - ys[0] - delta).abs() < 1e-5, "{ys:?}");
+        }
+        for k in [5, 2, 7, 0] {
+            let at = Tick::from_seconds(k as f64 / 4.0).unwrap();
+            assert_eq!(
+                scene.frame(at).unwrap().items,
+                load().frame(at).unwrap().items
+            );
+        }
+    }
+
+    #[test]
+    fn decorations_keep_the_declaring_paint_and_leave_glyph_silhouettes_unchanged() {
+        let source = indoc::indoc! {r#"
+          export const composition = { width: 200, height: 100, fps: 1, duration: 1 };
+          export default function Scene() { return <svg width={200} height={100}>
+            <text id="owner" x={10} y={60} fill="blue" fontSize={30} textDecoration="underline"><tspan fill="red">A</tspan><tspan textDecoration="line-through">B</tspan></text>
+          </svg>; }
+        "#};
+        let load = |source: &str| {
+            Scene::load(
+                "decoration.motion.tsx",
+                &|_| Some(source.as_bytes().to_vec()),
+                &Inputs::default(),
+                crate::testing::fonts(),
+            )
+            .unwrap()
+            .frame(Tick::ZERO)
+            .unwrap()
+        };
+        let decorated = load(source);
+        let plain = load(
+            &source
+                .replace("textDecoration=\"underline\"", "")
+                .replace("textDecoration=\"line-through\"", ""),
+        );
+        let owner = decorated
+            .styles
+            .iter()
+            .position(|s| {
+                s.svg
+                    .as_deref()
+                    .is_some_and(|g| g.id.as_deref() == Some("owner"))
+            })
+            .unwrap();
+        let mut count = 0;
+        for (s, p) in decorated.styles.iter().zip(plain.styles.iter()) {
+            if let Some(Element::Shape(Shape::Text {
+                path, decorations, ..
+            })) = s.svg.as_deref().map(|s| &s.element)
+            {
+                let Some(Element::Shape(Shape::Text { path: clean, .. })) =
+                    p.svg.as_deref().map(|s| &s.element)
+                else {
+                    panic!("plain glyph");
+                };
+                assert_eq!(path, clean);
+                assert!(
+                    decorations
+                        .iter()
+                        .any(|d| d.by == owner && !d.through && !d.path.0.is_empty())
+                );
+                count += decorations.len();
+            }
+        }
+        assert_eq!(count, 3);
+    }
 
     #[test]
     fn use_text_shapes_with_the_instances_font() {

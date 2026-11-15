@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/text.html#TextDecoration",
+  "assertion": "SVG text applies cumulative baseline shifts and alignment; decorations use the declaring element paint, follow positioned text and paths, and contribute opaque geometry to clips independently of fill/stroke. Both direct and use-instance text are covered.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all three browsers and native/difference images. Chrome and WebKit agree on alignment-baseline; Firefox leaves top/bottom spans on the alphabetic baseline. All three include text decoration geometry in clips. Native positions, paint propagation, curve tracking and decoration bands agree with Chrome. Differences are text-edge rasterization, subpixel shaping and decoration antialiasing (8877 pixels, maximum 221); numeric tests separately assert cumulative shifts, typographic edges, clip geometry and backward seeks.",
+    "pixels": {
+      "maxDifference": 225,
+      "maxPixels": 9000
+    }
+  }
+}

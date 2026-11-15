@@ -233,6 +233,8 @@ pub(super) enum Field {
     VectorEffect,
     TextAnchor,
     DominantBaseline,
+    AlignmentBaseline,
+    BaselineShift,
     StrokeLinecap,
     StrokeLinejoin,
     StrokeMiterlimit,
@@ -320,7 +322,7 @@ pub(super) enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 266] = [
+const FIELDS: [(&str, Field); 268] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -632,6 +634,8 @@ const FIELDS: [(&str, Field); 266] = [
     ("vectorEffect", Field::VectorEffect),
     ("textAnchor", Field::TextAnchor),
     ("dominantBaseline", Field::DominantBaseline),
+    ("alignmentBaseline", Field::AlignmentBaseline),
+    ("baselineShift", Field::BaselineShift),
     ("strokeLinecap", Field::StrokeLinecap),
     ("strokeLinejoin", Field::StrokeLinejoin),
     ("strokeMiterlimit", Field::StrokeMiterlimit),
@@ -726,6 +730,13 @@ impl Field {
             self,
             Field::TextAnchor
                 | Field::DominantBaseline
+                | Field::AlignmentBaseline
+                | Field::BaselineShift
+                | Field::TextDecoration
+                | Field::TextDecorationLine
+                | Field::TextDecorationStyle
+                | Field::TextDecorationThickness
+                | Field::TextUnderlineOffset
                 | Field::FontSize
                 | Field::FontWeight
                 | Field::FontStretch

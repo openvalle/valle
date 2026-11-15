@@ -204,6 +204,78 @@ impl<'a> Drawing<'a> {
             .map(|p| p.mapped(|q| inverse.apply(q)))
     }
 
+    fn shape(
+        &self,
+        i: usize,
+        size: [f64; 2],
+        matrix: Matrix,
+        copy: Option<&Instance>,
+        (s, shape, path_length): (&Style, &svg::Shape, Option<f64>),
+    ) -> Vec<Item> {
+        let scale = matrix.radius_scale();
+        let mut items = Vec::new();
+
+        let Some(path) = svg::path(shape, size) else {
+            return Vec::new();
+        };
+        let bbox = if matches!(shape, svg::Shape::Text { .. }) {
+            self.text_bbox(i, size, copy)
+                .unwrap_or_else(|| svg::bounds(&path))
+        } else {
+            svg::bounds(&path)
+        };
+        let k = &s.stroke;
+        let [w, h] = size;
+        let diagonal = ((w * w + h * h) / 2.0).sqrt() as f32;
+        let length = |l: &Calc| f64::from(l.resolve(diagonal));
+        let width = length(&k.width);
+        let mut stroke = self
+            .paint(&k.paint, k.opacity, s, size, bbox, matrix)
+            .and_then(|paint| {
+                let pen = svg::Pen {
+                    width,
+                    cap: k.cap,
+                    join: k.join,
+                    miter_limit: k.miter_limit,
+                    dashes: k.dashes.iter().map(length).collect(),
+                    dash_offset: length(&k.dash_offset),
+                    path_length,
+                };
+                let outline = (pen.width > 0.0)
+                    .then(|| self.stroke(&path, &pen, matrix, s.non_scaling_stroke))
+                    .flatten()?;
+                let cover = svg::bounds(&outline);
+                painted(outline, false, paint, cover, scale)
+            });
+        let mut markers = self.markers(s, shape, &path, width, size, matrix);
+        let fill = self.paint(&s.fill, s.fill_opacity, s, size, bbox, matrix);
+        let mut fill = fill.and_then(|f| {
+            // Solid ellipses share one outline. Their center and radii belong to their
+            // transform, so a dot field does not encode a new path at every position.
+            if let Fill::Color(color) = &f
+                && let Some(([x, y], [rx, ry])) = svg::ellipse_geometry(shape, size)
+            {
+                return Some(Item::Transform {
+                    matrix: Matrix::affine([rx.into(), 0.0, 0.0, ry.into(), x.into(), y.into()]),
+                    items: vec![Item::Path {
+                        path: svg::ellipse([0.0; 2], [1.0; 2])?,
+                        even_odd: s.even_odd,
+                        color: *color,
+                    }],
+                });
+            }
+            painted(path, s.even_odd, f, bbox, scale)
+        });
+        for part in s.paint_order {
+            match part {
+                PaintPart::Fill => items.extend(fill.take()),
+                PaintPart::Stroke => items.extend(stroke.take()),
+                PaintPart::Markers => items.append(&mut markers),
+            }
+        }
+        items
+    }
+
     fn draw_element(
         &self,
         i: usize,
@@ -218,7 +290,6 @@ impl<'a> Drawing<'a> {
         }
         let local = self.local(i, s, c, size, copy);
         let matrix = local.map_or(matrix, |t| matrix.times(t));
-        let scale = matrix.radius_scale();
         let mut items = Vec::new();
         match &c.element {
             Element::Svg { .. } if !self.template.roots.contains(&(i as u32)) => {
@@ -282,69 +353,22 @@ impl<'a> Drawing<'a> {
                 }
             }
             Element::Shape(shape) if s.visible => {
-                let Some(path) = svg::path(shape, size) else {
-                    return;
+                let decorations = match shape {
+                    svg::Shape::Text { decorations, .. } => decorations.as_slice(),
+                    _ => &[],
                 };
-                let bbox = if matches!(shape, svg::Shape::Text { .. }) {
-                    self.text_bbox(i, size, copy)
-                        .unwrap_or_else(|| svg::bounds(&path))
-                } else {
-                    svg::bounds(&path)
-                };
-                let k = &s.stroke;
-                let [w, h] = size;
-                let diagonal = ((w * w + h * h) / 2.0).sqrt() as f32;
-                let length = |l: &Calc| f64::from(l.resolve(diagonal));
-                let width = length(&k.width);
-                let mut stroke = self
-                    .paint(&k.paint, k.opacity, s, size, bbox, matrix)
-                    .and_then(|paint| {
-                        let pen = svg::Pen {
-                            width,
-                            cap: k.cap,
-                            join: k.join,
-                            miter_limit: k.miter_limit,
-                            dashes: k.dashes.iter().map(length).collect(),
-                            dash_offset: length(&k.dash_offset),
-                            path_length: c.path_length,
-                        };
-                        let outline = (pen.width > 0.0)
-                            .then(|| self.stroke(&path, &pen, matrix, s.non_scaling_stroke))
-                            .flatten()?;
-                        let cover = svg::bounds(&outline);
-                        painted(outline, false, paint, cover, scale)
-                    });
-                let mut markers = self.markers(s, shape, &path, width, size, matrix);
-                let fill = self.paint(&s.fill, s.fill_opacity, s, size, bbox, matrix);
-                let mut fill = fill.and_then(|f| {
-                    // Solid ellipses share one outline. Their center and radii belong to their
-                    // transform, so a dot field does not encode a new path at every position.
-                    if let Fill::Color(color) = &f
-                        && let Some(([x, y], [rx, ry])) = svg::ellipse_geometry(shape, size)
-                    {
-                        return Some(Item::Transform {
-                            matrix: Matrix::affine([
-                                rx.into(),
-                                0.0,
-                                0.0,
-                                ry.into(),
-                                x.into(),
-                                y.into(),
-                            ]),
-                            items: vec![Item::Path {
-                                path: svg::ellipse([0.0; 2], [1.0; 2])?,
-                                even_odd: s.even_odd,
-                                color: *color,
-                            }],
-                        });
+                for through in [false, true] {
+                    if through {
+                        items.extend(self.shape(i, size, matrix, copy, (s, shape, c.path_length)));
                     }
-                    painted(path, s.even_odd, f, bbox, scale)
-                });
-                for part in s.paint_order {
-                    match part {
-                        PaintPart::Fill => items.extend(fill.take()),
-                        PaintPart::Stroke => items.extend(stroke.take()),
-                        PaintPart::Markers => items.append(&mut markers),
+                    for d in decorations.iter().filter(|d| d.through == through) {
+                        let owner = self.style(d.by, copy);
+                        let shape = svg::Shape::Text {
+                            path: d.path.clone(),
+                            bounds: self.bbox(d.by, size, copy).unwrap_or([0.0; 4]),
+                            decorations: Vec::new(),
+                        };
+                        items.extend(self.shape(d.by, size, matrix, copy, (owner, &shape, None)));
                     }
                 }
             }
@@ -557,6 +581,15 @@ impl<'a> Drawing<'a> {
 
     /// Text runs share the owning text element's typographic reference box.
     fn text_bbox(&self, mut i: usize, size: [f64; 2], copy: Option<&Instance>) -> Option<[f64; 4]> {
+        if matches!(
+            self.template.nodes[i].kind,
+            crate::template::Kind::Svg {
+                tag: crate::template::Tag::Text,
+                ..
+            }
+        ) {
+            return self.bbox(i, size, copy);
+        }
         while let Some((parent, _)) = self
             .template
             .nodes
@@ -732,6 +765,13 @@ impl<'a> Drawing<'a> {
                         even_odd: s.clip_even_odd,
                         color: [1.0; 4],
                     });
+                }
+                if let svg::Shape::Text { decorations, .. } = shape {
+                    items.extend(decorations.iter().map(|d| Item::Path {
+                        path: d.path.clone(),
+                        even_odd: false,
+                        color: [1.0; 4],
+                    }));
                 }
             }
             Element::Text(_) => {
@@ -1330,6 +1370,15 @@ mod tests {
             normal,
             render(
                 "fill=\"none\" stroke=\"blue\" strokeWidth={20} opacity={0}",
+                "32"
+            )
+        );
+        let decorated = render("textDecoration=\"underline\"", "32");
+        assert_ne!(normal, decorated);
+        assert_eq!(
+            decorated,
+            render(
+                "textDecoration=\"underline\" fill=\"none\" stroke=\"red\" strokeWidth={15} opacity={0}",
                 "32"
             )
         );

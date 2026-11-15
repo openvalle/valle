@@ -320,15 +320,35 @@ letter spacing. SVG text paints with `fill` and `stroke`, not CSS `color`.
 
 `textAnchor` is `start`, `middle` or `end`; it aligns each positioned text chunk
 using its advance width. `dominantBaseline` supports `auto`, `alphabetic`, `middle`,
-`central`, `hanging`, `text-before-edge` and `text-after-edge` (also `text-top`,
+`central`, `hanging`, `mathematical`, `text-before-edge` and `text-after-edge` (also `text-top`,
 `text-bottom` and `ideographic`). `textLength` sets the advance width; `lengthAdjust`
 is `spacing` (default) or `spacingAndGlyphs`.
 
 `textPath` reads a local `#id` and places shaped glyphs along that path. `startOffset`
 is in user units or a percentage of its length; glyphs outside the path are hidden.
 It supports `method="align"` and `side="left"`; stretching glyph outlines along the
-curve and text decorations are not implemented. All text
+curve is not implemented. All text
 is vector geometry in both inline SVG and SVG resources; no host fonts are read.
+
+`alignmentBaseline` selects a text span's alignment baseline; it accepts the same
+baseline names plus `baseline`. `baselineShift` on a `<tspan>` or `<textPath>` takes
+`baseline`, `sub`, `super`, a length or a percentage of that element's font size.
+Positive shifts raise the text; nested shifts accumulate without moving the cursor
+for following siblings. Both attributes can be animated.
+
+```tsx
+<text x={20} y={60} fontSize={32} textDecoration="underline" fill="royalblue">
+  H<tspan baselineShift="sub" fontSize={20}>2</tspan>O
+</text>
+```
+
+`textDecoration` supports underline, overline and line-through, with solid, double,
+dotted, dashed and wavy lines. `textDecorationLine`, `textDecorationStyle`,
+`textDecorationThickness` and `textUnderlineOffset` also work. The decoration uses
+the **fill, stroke and paint order of its declaring SVG text element**, including
+across differently colored tspans. Lines follow character positioning and textPath;
+underlines/overlines paint below glyphs and line-through paints above. A clipPath
+uses both glyph and decoration outlines as opaque geometry, independent of paint.
 
 `<clipPath>` accepts basic shapes, `<text>` (including its tspans and textPath),
 and `<use>` directly referencing a shape or text. They contribute glyph or shape

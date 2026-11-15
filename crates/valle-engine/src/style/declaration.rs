@@ -169,6 +169,8 @@ pub(super) struct Declared {
     pub(super) non_scaling_stroke: bool,
     pub(super) text_anchor: Option<f64>,
     pub(super) dominant_baseline: Option<crate::svg::text::Baseline>,
+    pub(super) alignment_baseline: Option<crate::svg::text::Baseline>,
+    pub(super) baseline_shift: crate::svg::text::Shift<Len>,
     pub(super) cap: Option<Cap>,
     pub(super) join: Option<Join>,
     pub(super) miter_limit: Option<f64>,
@@ -306,6 +308,8 @@ impl Default for Declared {
             non_scaling_stroke: false,
             text_anchor: None,
             dominant_baseline: None,
+            alignment_baseline: None,
+            baseline_shift: crate::svg::text::Shift::Baseline,
             cap: None,
             join: None,
             miter_limit: None,
@@ -1269,6 +1273,25 @@ pub(super) fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         }
         F::DominantBaseline => {
             d.dominant_baseline = Some(crate::svg::text::Baseline::parse(&text(v)?)?)
+        }
+        F::AlignmentBaseline => {
+            let s = text(v)?;
+            d.alignment_baseline = match s.trim() {
+                "auto" | "baseline" => None,
+                _ => Some(
+                    crate::svg::text::Baseline::parse(&s)
+                        .map_err(|e| e.replace("dominant-baseline", "alignment-baseline"))?,
+                ),
+            };
+        }
+        F::BaselineShift => {
+            use crate::svg::text::Shift;
+            d.baseline_shift = match v.text().trim() {
+                "baseline" => Shift::Baseline,
+                "sub" => Shift::Sub,
+                "super" => Shift::Super,
+                _ => Shift::Length(svg_length(v, true)?),
+            };
         }
         F::VectorEffect => {
             d.non_scaling_stroke = keyword(v, &[("none", false), ("non-scaling-stroke", true)])?
