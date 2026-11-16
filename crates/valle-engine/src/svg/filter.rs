@@ -639,6 +639,42 @@ mod tests {
     }
 
     #[test]
+    fn blend_modes_are_numbered_as_mix_blend_mode_numbers_them() {
+        // The shader takes feBlend's mode by the number the CSS property gives it, so each
+        // name must reach the same number by either path.
+        let modes = [
+            "normal",
+            "multiply",
+            "screen",
+            "overlay",
+            "darken",
+            "lighten",
+            "color-dodge",
+            "color-burn",
+            "hard-light",
+            "soft-light",
+            "difference",
+            "exclusion",
+            "hue",
+            "saturation",
+            "color",
+            "luminosity",
+        ];
+        for mode in modes {
+            let css = crate::testing::styles::one(&[(
+                "mixBlendMode",
+                crate::testing::styles::text(mode),
+            )])
+            .blend;
+            let v = V::Str(mode.into());
+            let p = primitive(Tag::FeBlend, &[("mode", &v)]).unwrap();
+            assert_eq!(p.op, Operation::Blend(css as u32), "{mode}");
+        }
+        let v = V::Str("plus-lighter".into());
+        assert!(primitive(Tag::FeBlend, &[("mode", &v)]).is_err());
+    }
+
+    #[test]
     fn named_branches_defaults_and_dynamic_parameters_survive_seeking() {
         let mut blur = svg(Tag::FeGaussianBlur, &[("result", "soft")], &[]);
         if let Kind::Svg { attributes, .. } = &mut blur.kind {

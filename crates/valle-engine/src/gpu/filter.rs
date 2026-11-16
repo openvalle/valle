@@ -875,4 +875,204 @@ mod tests {
         );
         assert_eq!(&pixels[(3 * 16 + 3) * 4..(3 * 16 + 3) * 4 + 4], &[0; 4]);
     }
+
+    /// A flood of straight sRGB `color`, in sRGB.
+    fn flood(color: [f64; 4]) -> Node {
+        let mut n = node(Operation::Flood, &[]);
+        n.flood = color;
+        n.linear = false;
+        n
+    }
+
+    /// Two floods, `in` then `in2`, and an operation of them both, in sRGB.
+    fn of_two(a: [f64; 4], b: [f64; 4], op: Operation) -> Vec<Node> {
+        let mut both = node(op, &[SOURCES, SOURCES + 1]);
+        both.linear = false;
+        vec![flood(a), flood(b), both]
+    }
+
+    #[test]
+    fn filter_graph_composites_and_blends_by_every_operator_and_mode() {
+        if !std::env::var("VALLE_TEST_LAYERS")
+            .unwrap_or_default()
+            .split(',')
+            .any(|v| v == "gpu")
+        {
+            return;
+        }
+        let gpu = valle_native::gpu::adapter(None)
+            .and_then(|a| Gpu::with(a.adapter))
+            .unwrap();
+        let mut renderer = Renderer::new(&gpu, 16, 16);
+        let mut draw = |nodes| {
+            renderer
+                .render(&[graph(nodes, vec![])], &[], &[], &[])
+                .unwrap()[..4]
+                .to_vec()
+        };
+        // Compositing 1's Porter-Duff operators with `in` over `in2`, and arithmetic's
+        // k1·i1·i2 + k2·i1 + k3·i2 + k4, all from premultiplied inputs. The alphas differ so
+        // that each operator gives a pixel no other one does: in and out, atop and xor agree
+        // when the second input's alpha is one half.
+        let (a, b) = ([1., 0.2, 0., 0.8], [0., 0.4, 1., 0.6]);
+        let operators = [
+            ("over", [222, 58, 33, 235]),
+            ("in", [255, 51, 0, 122]),
+            ("out", [255, 51, 0, 82]),
+            ("atop", [204, 61, 51, 153]),
+            ("xor", [185, 65, 70, 112]),
+            ("arithmetic", [77, 87, 142, 252]),
+        ];
+        for (operator, (name, want)) in operators.into_iter().enumerate() {
+            let op = Operation::Composite {
+                operator: operator as u32,
+                k: [0.5, 0.25, 0.75, 0.1],
+            };
+            let got = draw(of_two(a, b, op));
+            assert!(
+                got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 2),
+                "feComposite {name}: {got:?} != {want:?}"
+            );
+        }
+        // Every blend mode, in feBlend's order, with `in` the source and `in2` the backdrop.
+        // Opaque, so each pixel is the mode's own B(Cb, Cs); the colors are chosen so that no
+        // two modes give pixels within 29 of each other in every channel.
+        let (source, backdrop) = ([0.2, 0.8, 0.4, 1.], [0.5, 0.3, 0.7, 1.]);
+        let modes = [
+            ("normal", [51, 204, 102]),
+            ("multiply", [26, 61, 71]),
+            ("screen", [153, 219, 209]),
+            ("overlay", [51, 122, 163]),
+            ("darken", [51, 76, 102]),
+            ("lighten", [128, 204, 178]),
+            ("color-dodge", [159, 255, 255]),
+            ("color-burn", [0, 32, 64]),
+            ("hard-light", [51, 184, 143]),
+            ("soft-light", [89, 114, 168]),
+            ("difference", [76, 128, 76]),
+            ("exclusion", [127, 158, 138]),
+            ("hue", [39, 141, 73]),
+            ("saturation", [140, 63, 216]),
+            ("color", [7, 160, 58]),
+            ("luminosity", [171, 120, 222]),
+        ];
+        for (mode, (name, want)) in modes.into_iter().enumerate() {
+            let got = draw(of_two(source, backdrop, Operation::Blend(mode as u32)));
+            let want = [want[0], want[1], want[2], 255];
+            assert!(
+                got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 2),
+                "feBlend {name}: {got:?} != {want:?}"
+            );
+        }
+        // luminanceToAlpha: no color, and the luminance of the straight color as alpha.
+        let mut matrix = node(
+            Operation::Matrix([
+                0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.2125, 0.7154, 0.0721,
+                0., 0.,
+            ]),
+            &[SOURCES],
+        );
+        matrix.linear = false;
+        let got = draw(vec![flood([1., 0.2, 0., 0.8]), matrix]);
+        assert_eq!(got[..3], [0, 0, 0], "luminanceToAlpha leaves no color");
+        assert!(got[3].abs_diff(91) <= 2, "luminanceToAlpha: {got:?}");
+    }
+
+    #[test]
+    fn filter_graph_displaces_by_each_selected_channel() {
+        if !std::env::var("VALLE_TEST_LAYERS")
+            .unwrap_or_default()
+            .split(',')
+            .any(|v| v == "gpu")
+        {
+            return;
+        }
+        let gpu = valle_native::gpu::adapter(None)
+            .and_then(|a| Gpu::with(a.adapter))
+            .unwrap();
+        let mut renderer = Renderer::new(&gpu, 16, 16);
+        // A one-pixel column at x = 8, and a map whose straight channels are 0.75, 0.25, 1 and
+        // 0.875: at scale 8 each moves a pixel by (c - 0.5) · 8, so 2, -2, 4 and 3 px. A pixel
+        // shows what is that far from it, so the column shows that far the other way.
+        let column = Item::Rect {
+            rect: rect([8., 0., 1., 16.]),
+            radii: [[0.; 2]; 4],
+            color: work([0., 1., 0., 1.]),
+        };
+        let map = flood([0.75, 0.25, 1., 0.875]);
+        for (channel, name, moved) in [(0, "R", 2), (1, "G", -2), (2, "B", 4), (3, "A", 3)] {
+            let mut displace = node(
+                Operation::Displacement {
+                    scale: 8.,
+                    channels: [channel, 3],
+                },
+                &[0, SOURCES],
+            );
+            displace.linear = false;
+            let pixels = renderer
+                .render(
+                    &[graph(vec![map.clone(), displace], vec![column.clone()])],
+                    &[],
+                    &[],
+                    &[],
+                )
+                .unwrap();
+            // Row 8, away from the edges a vertical move by A's 3 px would clip.
+            let shown: Vec<i32> = (0..16)
+                .filter(|x| pixels[(8 * 16 + x) * 4 + 3] > 128)
+                .map(|x| x as i32)
+                .collect();
+            assert_eq!(shown, [8 - moved], "xChannelSelector {name}");
+        }
+    }
+
+    #[test]
+    fn filter_graph_morphology_erodes_and_dilates_by_each_radius() {
+        if !std::env::var("VALLE_TEST_LAYERS")
+            .unwrap_or_default()
+            .split(',')
+            .any(|v| v == "gpu")
+        {
+            return;
+        }
+        let gpu = valle_native::gpu::adapter(None)
+            .and_then(|a| Gpu::with(a.adapter))
+            .unwrap();
+        let mut renderer = Renderer::new(&gpu, 16, 16);
+        // An opaque square from (4, 4) to (12, 12).
+        let square = Item::Rect {
+            rect: rect([4., 4., 8., 8.]),
+            radii: [[0.; 2]; 4],
+            color: work([0., 0., 1., 1.]),
+        };
+        // Which of row 8's pixels are opaque, as columns.
+        let mut row = |dilate: bool, radius: [f64; 2]| -> (Vec<usize>, Vec<usize>) {
+            let n = node(Operation::Morphology { dilate, radius }, &[0]);
+            let pixels = renderer
+                .render(&[graph(vec![n], vec![square.clone()])], &[], &[], &[])
+                .unwrap();
+            let opaque = |y: usize| -> Vec<usize> {
+                (0..16)
+                    .filter(|x| pixels[(y * 16 + x) * 4 + 3] > 128)
+                    .collect()
+            };
+            // Along x on row 8, along y on column 8.
+            let column = (0..16)
+                .filter(|y| pixels[(y * 16 + 8) * 4 + 3] > 128)
+                .collect();
+            (opaque(8), column)
+        };
+        let span = |from: usize, to: usize| (from..to).collect::<Vec<_>>();
+        // Radii differ along x and y, so a swapped axis fails.
+        assert_eq!(
+            row(true, [1., 2.]),
+            (span(3, 13), span(2, 14)),
+            "dilate 1 2"
+        );
+        assert_eq!(
+            row(false, [1., 2.]),
+            (span(5, 11), span(6, 10)),
+            "erode 1 2"
+        );
+    }
 }
