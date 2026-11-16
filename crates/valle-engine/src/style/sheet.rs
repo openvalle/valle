@@ -1797,4 +1797,323 @@ mod tests {
         let tree = vec![view(&[], &[]), view(&[], &[0])];
         assert!(sheet(tree).err().unwrap().starts_with("engine bug"));
     }
+
+    /// The writing modes and directions a box's flow-relative properties resolve in: each with
+    /// the physical sides, top 0, right 1, bottom 2 and left 3, that its block axis and then its
+    /// inline axis run from and to, as CSS Writing Modes 4 defines them, written out here rather
+    /// than taken from the engine.
+    const FLOWS: [(&str, &str, [usize; 2], [usize; 2]); 6] = [
+        ("horizontal-tb", "ltr", [0, 2], [3, 1]),
+        ("horizontal-tb", "rtl", [0, 2], [1, 3]),
+        ("vertical-rl", "ltr", [1, 3], [0, 2]),
+        ("vertical-rl", "rtl", [1, 3], [2, 0]),
+        ("vertical-lr", "ltr", [3, 1], [0, 2]),
+        ("vertical-lr", "rtl", [3, 1], [2, 0]),
+    ];
+
+    /// The style of a box whose parent sets `writing` and `direction`, as a Text in a scene
+    /// would, so that the box inherits them and resolves `style` in them.
+    fn flowing(writing: &str, direction: &str, style: &[(&str, Prop)]) -> Style {
+        let parent = [
+            ("writingMode", text(writing)),
+            ("direction", text(direction)),
+        ];
+        styles(vec![view(&parent, &[1]), view(style, &[])], &[])
+            .unwrap()
+            .remove(1)
+    }
+
+    #[test]
+    fn flow_relative_sides_are_the_physical_ones_of_every_writing_mode_and_direction() {
+        // Four different lengths, so that each side shows which one reached it.
+        let [bs, be, is, ie] = [1.0, 2.0, 3.0, 4.0];
+        for (writing, direction, [b0, b1], [i0, i1]) in FLOWS {
+            let at = |sides: [f32; 4]| {
+                let mut want = [0.0; 4];
+                for (side, v) in [b0, b1, i0, i1].into_iter().zip(sides) {
+                    want[side] = v;
+                }
+                want
+            };
+            let want = at([bs, be, is, ie]);
+            let flow = format!("{writing} {direction}");
+            let longhands = |prefix: &str, suffix: &str| {
+                vec![
+                    (format!("{prefix}BlockStart{suffix}"), num(bs.into())),
+                    (format!("{prefix}BlockEnd{suffix}"), num(be.into())),
+                    (format!("{prefix}InlineStart{suffix}"), num(is.into())),
+                    (format!("{prefix}InlineEnd{suffix}"), num(ie.into())),
+                ]
+            };
+            let shorthands = |prefix: &str, suffix: &str| {
+                let pair = |a: f32, b: f32| text(&format!("{a}px {b}px"));
+                vec![
+                    (format!("{prefix}Block{suffix}"), pair(bs, be)),
+                    (format!("{prefix}Inline{suffix}"), pair(is, ie)),
+                ]
+            };
+            let style = |declared: &[(String, Prop)]| {
+                let declared: Vec<(&str, Prop)> = declared
+                    .iter()
+                    .map(|(k, p)| (k.as_str(), p.clone()))
+                    .collect();
+                flowing(writing, direction, &declared)
+            };
+            let sides = |r: taffy::Rect<taffy::LengthPercentage>| {
+                [r.top, r.right, r.bottom, r.left].map(|v| v.into_raw().value())
+            };
+            let insets = |r: taffy::Rect<taffy::LengthPercentageAuto>| {
+                [r.top, r.right, r.bottom, r.left].map(|v| v.into_raw().value())
+            };
+            for declared in [longhands("padding", ""), shorthands("padding", "")] {
+                let s = style(&declared);
+                assert_eq!(
+                    sides(s.layout.padding),
+                    want,
+                    "padding, {flow}: {declared:?}"
+                );
+            }
+            for declared in [longhands("margin", ""), shorthands("margin", "")] {
+                let s = style(&declared);
+                assert_eq!(
+                    insets(s.layout.margin),
+                    want,
+                    "margin, {flow}: {declared:?}"
+                );
+            }
+            for declared in [longhands("inset", ""), shorthands("inset", "")] {
+                let s = style(&declared);
+                assert_eq!(insets(s.layout.inset), want, "inset, {flow}: {declared:?}");
+            }
+            // Borders: each side's width, in both the longhand of a side and the shorthand of
+            // an axis, and in the `border-*` shorthand of a side that sets its width as well.
+            let solid = |w: f32| text(&format!("{w}px solid"));
+            let widths = [
+                longhands("border", "Width"),
+                shorthands("border", "Width"),
+                [
+                    ("borderBlockStart", solid(bs)),
+                    ("borderBlockEnd", solid(be)),
+                    ("borderInlineStart", solid(is)),
+                    ("borderInlineEnd", solid(ie)),
+                ]
+                .map(|(k, p)| (k.to_string(), p))
+                .to_vec(),
+            ];
+            for declared in &widths {
+                let mut declared = declared.clone();
+                declared.insert(0, ("borderStyle".into(), text("solid")));
+                let s = style(&declared);
+                let got = s.border.map(|w| w as f32);
+                assert_eq!(got, want, "border width, {flow}: {declared:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn flow_relative_and_physical_border_declarations_cascade_in_written_order() {
+        // vertical-rl rtl: block start is right, inline end is top.
+        let style = |declared: &[(&str, Prop)]| flowing("vertical-rl", "rtl", declared);
+        let red = color::parse("red").unwrap();
+        let blue = color::parse("blue").unwrap();
+        // A side's longhand after its axis's shorthand overrides only its own part of it.
+        let s = style(&[
+            ("borderBlock", text("3px solid red")),
+            ("borderBlockStartColor", text("blue")),
+            ("borderInline", text("5px dashed red")),
+            ("borderInlineEndWidth", num(7.0)),
+        ]);
+        assert_eq!(s.border, [7.0, 3.0, 5.0, 3.0]);
+        assert_eq!(s.border_colors, [red, blue, red, red]);
+        use BorderStyle::{Dashed, Solid};
+        assert_eq!(s.border_styles, [Dashed, Solid, Dashed, Solid]);
+        // A physical side and a logical one naming it: whichever is written last.
+        let right = |declared: &[(&str, Prop)]| style(declared).border_colors[1];
+        let physical_last = [
+            ("borderStyle", text("solid")),
+            ("borderBlockStartColor", text("red")),
+            ("borderRightColor", text("blue")),
+        ];
+        assert_eq!(right(&physical_last), blue);
+        let logical_last = [
+            ("borderStyle", text("solid")),
+            ("borderRightColor", text("blue")),
+            ("borderBlockStartColor", text("red")),
+        ];
+        assert_eq!(right(&logical_last), red);
+        // The same holds for widths reached through the whole-side shorthands.
+        let s = style(&[
+            ("borderRight", text("2px solid")),
+            ("borderBlockStartWidth", num(9.0)),
+            ("borderTopWidth", num(4.0)),
+            ("borderInlineEnd", text("6px solid")),
+        ]);
+        assert_eq!([s.border[0], s.border[1]], [6.0, 9.0]);
+    }
+
+    #[test]
+    fn physical_border_longhands_set_their_own_side() {
+        let sides = ["Top", "Right", "Bottom", "Left"];
+        let names = ["red", "green", "blue", "black"];
+        let lines = ["dotted", "dashed", "double", "groove"];
+        let mut declared: Vec<(String, Prop)> = Vec::new();
+        for (k, side) in sides.iter().enumerate() {
+            declared.push((format!("border{side}Width"), num((k + 1) as f64)));
+            declared.push((format!("border{side}Style"), text(lines[k])));
+            declared.push((format!("border{side}Color"), text(names[k])));
+        }
+        let declared: Vec<(&str, Prop)> = declared
+            .iter()
+            .map(|(k, p)| (k.as_str(), p.clone()))
+            .collect();
+        let s = one(&declared);
+        assert_eq!(s.border, [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(s.border_colors, names.map(|n| color::parse(n).unwrap()));
+        use BorderStyle::{Dashed, Dotted, Double, Groove};
+        assert_eq!(s.border_styles, [Dotted, Dashed, Double, Groove]);
+        // Each whole side, then its corner radii, top left clockwise.
+        for (k, side) in sides.iter().enumerate() {
+            let key = format!("border{side}");
+            let s = one(&[(key.as_str(), text("3px solid red"))]);
+            let mut widths = [0.0; 4];
+            widths[k] = 3.0;
+            assert_eq!(s.border, widths, "{key}");
+        }
+        let corners = [
+            "borderTopLeftRadius",
+            "borderTopRightRadius",
+            "borderBottomRightRadius",
+            "borderBottomLeftRadius",
+        ];
+        let declared: Vec<(&str, Prop)> = (corners.iter().enumerate())
+            .map(|(k, &c)| (c, num((k + 1) as f64)))
+            .collect();
+        let s = one(&declared);
+        for (k, corner) in corners.iter().enumerate() {
+            assert_eq!(s.radii[k][0].resolve(0.0), (k + 1) as f32, "{corner}");
+        }
+    }
+
+    #[test]
+    fn flow_relative_border_styles_and_colors_reach_their_physical_sides() {
+        let [bs, be, is, ie] = ["red", "green", "blue", "black"];
+        let lines = [
+            BorderStyle::Dotted,
+            BorderStyle::Dashed,
+            BorderStyle::Double,
+            BorderStyle::Groove,
+        ];
+        let names = ["dotted", "dashed", "double", "groove"];
+        for (writing, direction, [b0, b1], [i0, i1]) in FLOWS {
+            let flow = format!("{writing} {direction}");
+            let order = [b0, b1, i0, i1];
+            let mut colors = [[0.0; 4]; 4];
+            let mut styles_at = [BorderStyle::None; 4];
+            for (k, side) in order.into_iter().enumerate() {
+                colors[side] = color::parse([bs, be, is, ie][k]).unwrap();
+                styles_at[side] = lines[k];
+            }
+            let color = |k: &str, c: &str| (k.to_string(), text(c));
+            let longhands = vec![
+                color("borderBlockStartColor", bs),
+                color("borderBlockEndColor", be),
+                color("borderInlineStartColor", is),
+                color("borderInlineEndColor", ie),
+                color("borderBlockStartStyle", names[0]),
+                color("borderBlockEndStyle", names[1]),
+                color("borderInlineStartStyle", names[2]),
+                color("borderInlineEndStyle", names[3]),
+            ];
+            let shorthands = vec![
+                color("borderBlockColor", &format!("{bs} {be}")),
+                color("borderInlineColor", &format!("{is} {ie}")),
+                color("borderBlockStyle", &format!("{} {}", names[0], names[1])),
+                color("borderInlineStyle", &format!("{} {}", names[2], names[3])),
+            ];
+            for declared in [longhands, shorthands] {
+                let mut declared = declared;
+                declared.insert(0, ("borderWidth".into(), num(2.0)));
+                let declared: Vec<(&str, Prop)> = declared
+                    .iter()
+                    .map(|(k, p)| (k.as_str(), p.clone()))
+                    .collect();
+                let s = flowing(writing, direction, &declared);
+                assert_eq!(s.border_colors, colors, "colors, {flow}: {declared:?}");
+                assert_eq!(s.border_styles, styles_at, "styles, {flow}: {declared:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn flow_relative_sizes_overflow_and_corners_follow_the_writing_mode() {
+        for (writing, direction, [b0, b1], [i0, i1]) in FLOWS {
+            let flow = format!("{writing} {direction}");
+            let vertical = writing != "horizontal-tb";
+            let s = flowing(
+                writing,
+                direction,
+                &[
+                    ("inlineSize", num(10.0)),
+                    ("blockSize", num(20.0)),
+                    ("minInlineSize", num(1.0)),
+                    ("minBlockSize", num(2.0)),
+                    ("maxInlineSize", num(100.0)),
+                    ("maxBlockSize", num(200.0)),
+                    // Clip, not hidden: hidden on one axis makes the other hidden as well.
+                    ("overflowInline", text("clip")),
+                    ("overflowBlock", text("visible")),
+                ],
+            );
+            let l = &s.layout;
+            let size = |d: Dimension| d.into_raw().value();
+            let limit = |d: taffy::LengthPercentageAuto| d.into_raw().value();
+            let [(w, h), (min_w, min_h), (max_w, max_h)] = match vertical {
+                false => [(10.0, 20.0), (1.0, 2.0), (100.0, 200.0)],
+                true => [(20.0, 10.0), (2.0, 1.0), (200.0, 100.0)],
+            };
+            assert_eq!(
+                [size(l.size.width), size(l.size.height)],
+                [w, h],
+                "size, {flow}"
+            );
+            assert_eq!(
+                [limit(l.min_size.width), limit(l.min_size.height)],
+                [min_w, min_h],
+                "min size, {flow}"
+            );
+            assert_eq!(
+                [limit(l.max_size.width), limit(l.max_size.height)],
+                [max_w, max_h],
+                "max size, {flow}"
+            );
+            let clipped = match vertical {
+                false => [Overflow::Clip, Overflow::Visible],
+                true => [Overflow::Visible, Overflow::Clip],
+            };
+            assert_eq!([l.overflow.x, l.overflow.y], clipped, "overflow, {flow}");
+
+            // A corner is where its block side meets its inline side: top left 0, top right 1,
+            // bottom right 2, bottom left 3.
+            let corner = |block: usize, inline: usize| match (block.min(inline), block.max(inline))
+            {
+                (0, 3) => 0,
+                (0, 1) => 1,
+                (1, 2) => 2,
+                (2, 3) => 3,
+                other => unreachable!("sides {other:?} do not meet"),
+            };
+            let radii = [
+                ("borderStartStartRadius", corner(b0, i0), 1.0_f32),
+                ("borderStartEndRadius", corner(b0, i1), 2.0),
+                ("borderEndStartRadius", corner(b1, i0), 3.0),
+                ("borderEndEndRadius", corner(b1, i1), 4.0),
+            ];
+            let declared: Vec<(&str, Prop)> =
+                radii.iter().map(|&(k, _, r)| (k, num(r.into()))).collect();
+            let s = flowing(writing, direction, &declared);
+            for (k, at, r) in radii {
+                assert_eq!(s.radii[at][0].resolve(0.0), r, "{k}, {flow}");
+            }
+        }
+    }
 }
