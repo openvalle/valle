@@ -163,6 +163,10 @@ fn test(args: &[String]) -> Result<(), String> {
         Command::new("bun").args(["test", "./web"]),
         "bun test ./web",
     )?;
+    run(
+        Command::new("bun").args(["tests/tools/boxes.ts", "--check"]),
+        "verify generated layout cases",
+    )?;
     let command = ["test", "--locked", "--workspace"];
     run(
         Command::new(cargo_path())

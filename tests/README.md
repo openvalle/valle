@@ -49,6 +49,13 @@ text, compositing and dynamic batches and their explicitly bounded factors.
 
 ## CSS and SVG
 
+The [fixed-seed layout cases](cases/css/generated/README.md) retain 1,000 small
+trees and independent arithmetic expectations. `cargo xtask test` runs
+`bun tests/tools/boxes.ts --check` to detect drift in these generated inputs;
+it never updates expected images. To expand the grammar, regenerate the inputs,
+capture all three browsers, inspect differences and explicitly review any new
+baselines. Keep minimized failures as focused cases under the affected feature.
+
 Use the [CSS support and coverage inventory](../docs/css.md) to find existing
 evidence and missing value/combination checks. Update it when changing supported
 syntax or adding coverage; a property appearing in a scene is not itself an

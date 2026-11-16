@@ -22,6 +22,26 @@ const CASES: {
   nativeResources?: Record<string, string>;
   pixels?: { maxDifference: number; maxPixels: number };
 }[] = [
+  { entry: "tests/cases/css/generated/boxes-00/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-01/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-02/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-03/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-04/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-05/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-06/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-07/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-08/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-09/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-10/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-11/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-12/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-13/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-14/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-15/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-16/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-17/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-18/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/generated/boxes-19/scene.motion.tsx", frames: [0] },
   {
     entry: "tests/cases/svg/combinations/dynamic-file-effects/scene.motion.tsx",
     frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
