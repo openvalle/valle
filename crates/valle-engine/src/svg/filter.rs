@@ -877,6 +877,18 @@ mod tests {
             (Tag::FeMorphology, vec![("radius", "1 2 3")], "one or two"),
             (Tag::FeColorMatrix, vec![("values", "1 2")], "20 values"),
             (
+                Tag::FeColorMatrix,
+                vec![("type", "saturate"), ("values", "1 2")],
+                "needs one value",
+            ),
+            (Tag::FeColorMatrix, vec![("type", "sepia")], "not one of"),
+            (Tag::FeGaussianBlur, vec![("edgeMode", "wrap")], "only none"),
+            (Tag::FeOffset, vec![("dx", "1e999")], "finite"),
+            (Tag::FeOffset, vec![("dy", "one")], "expected a number"),
+            (Tag::FeComposite, vec![("operator", "plus")], "not one of"),
+            (Tag::FeFuncR, vec![("type", "sigmoid")], "not one of"),
+            (Tag::FeBlend, vec![("mode", "plus-lighter")], "not one of"),
+            (
                 Tag::FeDisplacementMap,
                 vec![("xChannelSelector", "Z")],
                 "not one of",
@@ -889,17 +901,101 @@ mod tests {
             let refs: Vec<_> = values.iter().map(|(k, v)| (*k, v)).collect();
             assert!(primitive(tag, &refs).unwrap_err().contains(message));
         }
+        let error = |primitives: Vec<Node>| {
+            let children: Vec<u32> = (2..2 + primitives.len() as u32).collect();
+            let mut tree = vec![svg(Tag::Svg, &[], &[1]), svg(Tag::Filter, &[], &children)];
+            tree.extend(primitives);
+            sheet(tree)
+                .unwrap()
+                .compute(&[], true, [100., 100.], &[])
+                .unwrap_err()
+        };
+        assert!(error(vec![svg(Tag::FeOffset, &[("in", "future")], &[])]).contains("future"));
+        assert!(
+            error(vec![svg(Tag::FeOffset, &[("in", "BackgroundImage")], &[])])
+                .contains("supports SourceGraphic")
+        );
+        assert!(error(vec![svg(Tag::FeFlood, &[("result", "")], &[])]).contains("not be empty"));
+        assert!(
+            definition(&[("filterUnits", &V::Str("pixels".into()))])
+                .unwrap_err()
+                .contains("userSpaceOnUse or objectBoundingBox")
+        );
+        assert!(primitive(Tag::FeMerge, &[]).is_ok());
+        assert!(
+            primitive(Tag::Rect, &[])
+                .unwrap_err()
+                .contains("not a filter primitive")
+        );
+    }
+
+    #[test]
+    fn paint_sources_are_drawn_out_to_what_each_reader_samples() {
+        // A paint source read by one primitive, in a filter region of [16, 16, 48, 48]: it is
+        // drawn over that region grown by what the primitive reads beyond each pixel, and a
+        // pixel more. Each operation reaches differently along x and y, so a swapped axis fails.
         let sheet = sheet(vec![
             svg(Tag::Svg, &[], &[1]),
             svg(Tag::Filter, &[], &[2]),
-            svg(Tag::FeOffset, &[("in", "future")], &[]),
+            svg(Tag::FeOffset, &[("in", "FillPaint")], &[]),
         ])
         .unwrap();
-        assert!(
-            sheet
-                .compute(&[], true, [100., 100.], &[])
-                .unwrap_err()
-                .contains("future")
-        );
+        let styles = sheet.compute(&[], true, [100., 100.], &[]).unwrap();
+        let base = (**styles[1].filter_graph.as_ref().unwrap()).clone();
+        let kernel = |unit| {
+            Operation::Convolve(convolve::Kernel {
+                order: [3, 5],
+                values: vec![0.; 15],
+                divisor: 1.,
+                bias: 0.,
+                target: [0, 1],
+                edge: 0,
+                unit,
+                preserve_alpha: false,
+            })
+        };
+        for (name, op, want) in [
+            // Read from 5 px left and 3 px below: the region moves the other way.
+            ("offset", Operation::Offset([5., -3.]), [10., 16., 54., 52.]),
+            (
+                "morphology",
+                Operation::Morphology {
+                    dilate: true,
+                    radius: [2., 4.],
+                },
+                [13., 11., 54., 58.],
+            ),
+            // Up to half the scale either way.
+            (
+                "displacement",
+                Operation::Displacement {
+                    scale: -10.,
+                    channels: [0, 1],
+                },
+                [10., 10., 60., 60.],
+            ),
+            // The offset either way and three standard deviations.
+            (
+                "drop shadow",
+                Operation::Shadow {
+                    offset: [3., -4.],
+                    sigma: [2., 1.],
+                },
+                [6., 8., 68., 64.],
+            ),
+            // The far side of the target: 2 columns and 3 rows, in pixels.
+            ("convolve", kernel(None), [13., 12., 54., 56.]),
+            // In kernel units of 2 and 0.5 px.
+            (
+                "convolve units",
+                kernel(Some([2., 0.5])),
+                [11., 13.5, 58., 53.],
+            ),
+        ] {
+            let mut graph = base.clone();
+            graph.nodes[0].op = op;
+            let region = graph.paint_region(2, [20., 20., 40., 40.], [100., 100.], [1.; 2]);
+            assert_eq!(region, want, "{name}");
+        }
     }
 }
