@@ -1099,7 +1099,19 @@ impl<'a> Drawing<'a> {
                 let Some(id) = s.markers[k].as_deref() else {
                     continue;
                 };
-                let made = drawn[k].get_or_insert_with(|| self.marker(id, width, size, matrix));
+                let fixed = s.non_scaling_stroke
+                    && self.ids.get(id).is_some_and(|&n| {
+                        matches!(self.styles[n].svg.as_deref().map(|s| &s.element),
+                            Some(Element::Marker(m)) if !m.user_space)
+                    });
+                let made = drawn[k].get_or_insert_with(|| {
+                    self.marker(
+                        id,
+                        width,
+                        size,
+                        if fixed { Matrix::IDENTITY } else { matrix },
+                    )
+                });
                 let Some((orient, base, item)) = made else {
                     continue;
                 };
@@ -1109,9 +1121,11 @@ impl<'a> Drawing<'a> {
                     svg::Orient::AutoStartReverse => angle,
                     svg::Orient::Angle(a) => a,
                 };
-                let at = Matrix::translate(f64::from(x), f64::from(y));
+                let Some(at) = marker_at(matrix, [x, y], turn, fixed) else {
+                    continue;
+                };
                 out.push(Item::Transform {
-                    matrix: at.times(Matrix::rotate(turn)).times(*base),
+                    matrix: at.times(*base),
                     items: vec![item.clone()],
                 });
             }
@@ -1459,6 +1473,26 @@ fn painted(path: Path, even_odd: bool, fill: Fill, cover: [f64; 4], scale: f64) 
             items: vec![gradient],
         }],
     })
+}
+
+// strokeWidth markers follow the painted stroke width, including non-scaling
+// strokes. Place these in viewport space, then cancel the enclosing transform.
+fn marker_at(matrix: Matrix, point: [f32; 2], turn: f64, fixed: bool) -> Option<Matrix> {
+    if !fixed {
+        return Some(
+            Matrix::translate(point[0].into(), point[1].into()).times(Matrix::rotate(turn)),
+        );
+    }
+    let inverse = matrix.inverse()?;
+    let [x, y] = matrix.apply(point);
+    let (sin, cos) = turn.to_radians().sin_cos();
+    let dx = matrix.0[0][0] * cos + matrix.0[0][1] * sin;
+    let dy = matrix.0[1][0] * cos + matrix.0[1][1] * sin;
+    Some(
+        inverse
+            .times(Matrix::translate(x.into(), y.into()))
+            .times(Matrix::rotate(dy.atan2(dx).to_degrees())),
+    )
 }
 
 #[cfg(test)]
@@ -1861,6 +1895,29 @@ mod tests {
                 .stroke(&path, &pen, Matrix::scale(0.0), true)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn non_scaling_marker_units_keep_viewport_size_and_tangent() {
+        for matrix in [
+            Matrix::scale(1.5),
+            Matrix::affine([3.0, 0.0, 1.0, 2.0, 5.0, 20.0]),
+        ] {
+            for fixed in [false, true] {
+                let at = marker_at(matrix, [10.0, 20.0], 45.0, fixed).unwrap();
+                let placed = matrix.times(at);
+                let origin = placed.apply([0.0, 0.0]);
+                assert_eq!(origin, matrix.apply([10.0, 20.0]));
+                let end = placed.apply([4.0, 0.0]);
+                let length = (end[0] - origin[0]).hypot(end[1] - origin[1]);
+                if fixed {
+                    assert!((length - 4.0).abs() < 1e-5);
+                } else {
+                    assert!(length > 5.9);
+                }
+            }
+        }
+        assert!(marker_at(Matrix::scale(0.0), [0.0; 2], 0.0, true).is_none());
     }
 
     #[test]

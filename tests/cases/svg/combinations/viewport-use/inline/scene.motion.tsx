@@ -1,0 +1,114 @@
+export const composition = { width: 784, height: 280, fps: 1, duration: 1 };
+
+export default function Scene() {
+  return (
+    <View style={{ width: 784, height: 280, background: "white" }}>
+      <svg width="784" height="280" viewBox="0 0 784 280">
+        <g transform="translate(8 8)">
+          <defs>
+            <symbol id="s0" viewBox="0 0 80 60" preserveAspectRatio="xMidYMid meet">
+              <rect x="-8" y="-8" width="100" height="76" fill="#e0b060" />
+              <circle cx="40" cy="30" r="32" fill="#2463a0" />
+              <path d="M0 0L80 60" stroke="#40a080" strokeWidth="5" />
+            </symbol>
+            <clipPath id="v0">
+              <rect x="20" y="20" width="120" height="70" />
+            </clipPath>
+          </defs>
+          <use clipPath="none" href="#s0" x="16" y="12" width="144" height="88" opacity=".8" />
+        </g>
+        <g transform="translate(200 8)">
+          <defs>
+            <symbol id="s1" viewBox="0 0 80 60" preserveAspectRatio="xMidYMid meet">
+              <rect x="-8" y="-8" width="100" height="76" fill="#e0b060" />
+              <circle cx="40" cy="30" r="32" fill="#2463a0" />
+              <path d="M0 0L80 60" stroke="#40a080" strokeWidth="5" />
+            </symbol>
+            <clipPath id="v1">
+              <rect x="20" y="20" width="120" height="70" />
+            </clipPath>
+          </defs>
+          <use clipPath="url(#v1)" href="#s1" x="16" y="12" width="144" height="88" opacity=".8" />
+        </g>
+        <g transform="translate(392 8)">
+          <defs>
+            <symbol id="s2" viewBox="10 0 80 60" preserveAspectRatio="xMidYMid meet">
+              <rect x="-8" y="-8" width="100" height="76" fill="#e0b060" />
+              <circle cx="40" cy="30" r="32" fill="#2463a0" />
+              <path d="M0 0L80 60" stroke="#40a080" strokeWidth="5" />
+            </symbol>
+            <clipPath id="v2">
+              <rect x="20" y="20" width="120" height="70" />
+            </clipPath>
+          </defs>
+          <use clipPath="none" href="#s2" x="16" y="12" width="144" height="88" opacity=".8" />
+        </g>
+        <g transform="translate(584 8)">
+          <defs>
+            <symbol id="s3" viewBox="10 0 80 60" preserveAspectRatio="xMidYMid meet">
+              <rect x="-8" y="-8" width="100" height="76" fill="#e0b060" />
+              <circle cx="40" cy="30" r="32" fill="#2463a0" />
+              <path d="M0 0L80 60" stroke="#40a080" strokeWidth="5" />
+            </symbol>
+            <clipPath id="v3">
+              <rect x="20" y="20" width="120" height="70" />
+            </clipPath>
+          </defs>
+          <use clipPath="url(#v3)" href="#s3" x="16" y="12" width="144" height="88" opacity=".8" />
+        </g>
+        <g transform="translate(8 140)">
+          <defs>
+            <symbol id="s4" viewBox="0 0 80 60" preserveAspectRatio="xMaxYMin slice">
+              <rect x="-8" y="-8" width="100" height="76" fill="#e0b060" />
+              <circle cx="40" cy="30" r="32" fill="#2463a0" />
+              <path d="M0 0L80 60" stroke="#40a080" strokeWidth="5" />
+            </symbol>
+            <clipPath id="v4">
+              <rect x="20" y="20" width="120" height="70" />
+            </clipPath>
+          </defs>
+          <use clipPath="none" href="#s4" x="16" y="12" width="144" height="88" opacity=".8" />
+        </g>
+        <g transform="translate(200 140)">
+          <defs>
+            <symbol id="s5" viewBox="0 0 80 60" preserveAspectRatio="xMaxYMin slice">
+              <rect x="-8" y="-8" width="100" height="76" fill="#e0b060" />
+              <circle cx="40" cy="30" r="32" fill="#2463a0" />
+              <path d="M0 0L80 60" stroke="#40a080" strokeWidth="5" />
+            </symbol>
+            <clipPath id="v5">
+              <rect x="20" y="20" width="120" height="70" />
+            </clipPath>
+          </defs>
+          <use clipPath="url(#v5)" href="#s5" x="16" y="12" width="144" height="88" opacity=".8" />
+        </g>
+        <g transform="translate(392 140)">
+          <defs>
+            <symbol id="s6" viewBox="10 0 80 60" preserveAspectRatio="xMaxYMin slice">
+              <rect x="-8" y="-8" width="100" height="76" fill="#e0b060" />
+              <circle cx="40" cy="30" r="32" fill="#2463a0" />
+              <path d="M0 0L80 60" stroke="#40a080" strokeWidth="5" />
+            </symbol>
+            <clipPath id="v6">
+              <rect x="20" y="20" width="120" height="70" />
+            </clipPath>
+          </defs>
+          <use clipPath="none" href="#s6" x="16" y="12" width="144" height="88" opacity=".8" />
+        </g>
+        <g transform="translate(584 140)">
+          <defs>
+            <symbol id="s7" viewBox="10 0 80 60" preserveAspectRatio="xMaxYMin slice">
+              <rect x="-8" y="-8" width="100" height="76" fill="#e0b060" />
+              <circle cx="40" cy="30" r="32" fill="#2463a0" />
+              <path d="M0 0L80 60" stroke="#40a080" strokeWidth="5" />
+            </symbol>
+            <clipPath id="v7">
+              <rect x="20" y="20" width="120" height="70" />
+            </clipPath>
+          </defs>
+          <use clipPath="url(#v7)" href="#s7" x="16" y="12" width="144" height="88" opacity=".8" />
+        </g>
+      </svg>
+    </View>
+  );
+}

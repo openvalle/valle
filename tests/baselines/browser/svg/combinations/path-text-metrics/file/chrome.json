@@ -1,0 +1,14 @@
+{
+  "size": [
+    784,
+    676
+  ],
+  "sources": {
+    "tests/baselines/browser/svg/combinations/path-text-metrics/file/scene.html": "163e47738a283d8dc3bf4e54b91e4675ce11940ac79cee23fa879637e8f0c147",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

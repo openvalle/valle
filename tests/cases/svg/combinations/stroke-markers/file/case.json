@@ -1,0 +1,17 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/painting.html",
+  "assertion": "16 combinations cross stroke width, scale, non-scaling stroke and paint order with curved dashes and markers. (file input).",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed curved dashes, all paint orders and both stroke scaling controls. After fixing strokeWidth marker sizing, Chrome agrees on marker size/orientation; remaining differences follow stroked/dashed edges. Numeric tests assert viewport marker size under uniform and nonuniform transforms.",
+    "pixels": {
+      "maxDifference": 120,
+      "maxPixels": 6200
+    }
+  },
+  "valle": {
+    "reason": "Reviewed curved dashes, all paint orders and both stroke scaling controls. After fixing strokeWidth marker sizing, Chrome agrees on marker size/orientation; remaining differences follow stroked/dashed edges. Numeric tests assert viewport marker size under uniform and nonuniform transforms.",
+    "maxDifference": 1
+  }
+}

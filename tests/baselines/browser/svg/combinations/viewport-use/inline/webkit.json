@@ -1,0 +1,13 @@
+{
+  "size": [
+    784,
+    280
+  ],
+  "sources": {
+    "tests/baselines/browser/svg/combinations/viewport-use/inline/scene.html": "29f5d8162a269f8de147d39a594a46b9d077c8ad3d3981ea2f821fb48cd8f099"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

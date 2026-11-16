@@ -22,6 +22,25 @@ const CASES: {
   nativeResources?: Record<string, string>;
   pixels?: { maxDifference: number; maxPixels: number };
 }[] = [
+  {
+    entry: "tests/cases/svg/combinations/dynamic-file-effects/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
+  {
+    entry: "tests/cases/svg/combinations/dynamic-stroke-markers/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
+  { entry: "tests/cases/svg/combinations/paint-clips-filters/file/scene.motion.tsx", frames: [0] },
+  {
+    entry: "tests/cases/svg/combinations/paint-clips-filters/inline/scene.motion.tsx",
+    frames: [0],
+  },
+  { entry: "tests/cases/svg/combinations/path-text-metrics/file/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/svg/combinations/path-text-metrics/inline/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/svg/combinations/stroke-markers/file/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/svg/combinations/stroke-markers/inline/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/svg/combinations/viewport-use/file/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/svg/combinations/viewport-use/inline/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/transform/order-clipping/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/transform/perspective-groups/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/transforms/path-extents/scene.motion.tsx", frames: [0] },

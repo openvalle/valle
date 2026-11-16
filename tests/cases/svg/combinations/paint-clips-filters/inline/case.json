@@ -1,0 +1,17 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/render.html#RenderingOrder",
+  "assertion": "16 combinations cross gradient coordinate systems, group opacity, clipping and a two-stage filter over patterned content. (inline input).",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all clipping, opacity, gradient-space and patterned filter controls. Chrome agrees in shape and color; remaining differences follow gradient quantization, pattern sampling and blur falloff. Strict product images protect the complete effect.",
+    "pixels": {
+      "maxDifference": 15,
+      "maxPixels": 74000
+    }
+  },
+  "valle": {
+    "reason": "Reviewed all clipping, opacity, gradient-space and patterned filter controls. Chrome agrees in shape and color; remaining differences follow gradient quantization, pattern sampling and blur falloff. Strict product images protect the complete effect.",
+    "maxDifference": 1
+  }
+}

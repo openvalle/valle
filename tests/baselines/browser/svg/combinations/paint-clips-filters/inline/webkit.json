@@ -1,0 +1,13 @@
+{
+  "size": [
+    784,
+    544
+  ],
+  "sources": {
+    "tests/baselines/browser/svg/combinations/paint-clips-filters/inline/scene.html": "b44e01806b3e04c3b9b26fee81c22b992e16aa12d457cd027eb3078ae769cadf"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

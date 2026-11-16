@@ -1,0 +1,17 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/coords.html#ViewBoxAttribute",
+  "assertion": "Eight symbol/use controls cross viewBox origin, preserveAspectRatio and an explicit clipPath with oversized child geometry. (file input).",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed translated viewBoxes, meet/slice fitting and explicit clipPath controls. Chrome geometry agrees; differences follow elliptical/polygon edges and opacity rounding. Inline/file results are pixel-identical.",
+    "pixels": {
+      "maxDifference": 25,
+      "maxPixels": 3400
+    }
+  },
+  "valle": {
+    "reason": "Reviewed translated viewBoxes, meet/slice fitting and explicit clipPath controls. Chrome geometry agrees; differences follow elliptical/polygon edges and opacity rounding. Inline/file results are pixel-identical.",
+    "maxDifference": 1
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "spec": "https://www.w3.org/TR/SVG2/text.html",
+  "assertion": "18 combinations cross text-anchor, dominant-baseline and lengthAdjust on a curved textPath with a fixed font and explicit textLength. (inline input).",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed text anchors, all three baselines and both length adjustments on the same curve. Chrome agrees on text span and baseline placement; differences follow glyph antialiasing, curve approximation and metrics rounding. Strict product images guard layout changes.",
+    "pixels": {
+      "maxDifference": 200,
+      "maxPixels": 12300
+    }
+  },
+  "valle": {
+    "reason": "Reviewed text anchors, all three baselines and both length adjustments on the same curve. Chrome agrees on text span and baseline placement; differences follow glyph antialiasing, curve approximation and metrics rounding. Strict product images guard layout changes.",
+    "maxDifference": 1
+  }
+}

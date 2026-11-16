@@ -1,0 +1,354 @@
+export const composition = { width: 784, height: 676, fps: 1, duration: 1 };
+export const controls = {
+  resources: { Test: resource({ kind: "font", default: "/tests/resources/NotoSans.ttf" }) },
+};
+export default function Scene() {
+  return (
+    <View style={{ width: 784, height: 676, background: "white" }}>
+      <svg width="784" height="676" viewBox="0 0 784 676">
+        <g transform="translate(8 8)">
+          <defs>
+            <path id="t0" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t0" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="start"
+            dominantBaseline="alphabetic"
+            textLength="70"
+            lengthAdjust="spacing"
+          >
+            <textPath href="#t0" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+        <g transform="translate(200 8)">
+          <defs>
+            <path id="t1" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t1" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="start"
+            dominantBaseline="alphabetic"
+            textLength="70"
+            lengthAdjust="spacingAndGlyphs"
+          >
+            <textPath href="#t1" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+        <g transform="translate(392 8)">
+          <defs>
+            <path id="t2" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t2" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="start"
+            dominantBaseline="middle"
+            textLength="70"
+            lengthAdjust="spacing"
+          >
+            <textPath href="#t2" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+        <g transform="translate(584 8)">
+          <defs>
+            <path id="t3" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t3" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="start"
+            dominantBaseline="middle"
+            textLength="70"
+            lengthAdjust="spacingAndGlyphs"
+          >
+            <textPath href="#t3" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+        <g transform="translate(8 140)">
+          <defs>
+            <path id="t4" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t4" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="start"
+            dominantBaseline="hanging"
+            textLength="70"
+            lengthAdjust="spacing"
+          >
+            <textPath href="#t4" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+        <g transform="translate(200 140)">
+          <defs>
+            <path id="t5" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t5" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="start"
+            dominantBaseline="hanging"
+            textLength="70"
+            lengthAdjust="spacingAndGlyphs"
+          >
+            <textPath href="#t5" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+        <g transform="translate(392 140)">
+          <defs>
+            <path id="t6" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t6" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="middle"
+            dominantBaseline="alphabetic"
+            textLength="70"
+            lengthAdjust="spacing"
+          >
+            <textPath href="#t6" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+        <g transform="translate(584 140)">
+          <defs>
+            <path id="t7" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t7" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="middle"
+            dominantBaseline="alphabetic"
+            textLength="70"
+            lengthAdjust="spacingAndGlyphs"
+          >
+            <textPath href="#t7" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+        <g transform="translate(8 272)">
+          <defs>
+            <path id="t8" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t8" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="middle"
+            dominantBaseline="middle"
+            textLength="70"
+            lengthAdjust="spacing"
+          >
+            <textPath href="#t8" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+        <g transform="translate(200 272)">
+          <defs>
+            <path id="t9" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t9" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="middle"
+            dominantBaseline="middle"
+            textLength="70"
+            lengthAdjust="spacingAndGlyphs"
+          >
+            <textPath href="#t9" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+        <g transform="translate(392 272)">
+          <defs>
+            <path id="t10" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t10" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="middle"
+            dominantBaseline="hanging"
+            textLength="70"
+            lengthAdjust="spacing"
+          >
+            <textPath href="#t10" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+        <g transform="translate(584 272)">
+          <defs>
+            <path id="t11" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t11" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="middle"
+            dominantBaseline="hanging"
+            textLength="70"
+            lengthAdjust="spacingAndGlyphs"
+          >
+            <textPath href="#t11" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+        <g transform="translate(8 404)">
+          <defs>
+            <path id="t12" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t12" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="end"
+            dominantBaseline="alphabetic"
+            textLength="70"
+            lengthAdjust="spacing"
+          >
+            <textPath href="#t12" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+        <g transform="translate(200 404)">
+          <defs>
+            <path id="t13" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t13" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="end"
+            dominantBaseline="alphabetic"
+            textLength="70"
+            lengthAdjust="spacingAndGlyphs"
+          >
+            <textPath href="#t13" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+        <g transform="translate(392 404)">
+          <defs>
+            <path id="t14" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t14" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="end"
+            dominantBaseline="middle"
+            textLength="70"
+            lengthAdjust="spacing"
+          >
+            <textPath href="#t14" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+        <g transform="translate(584 404)">
+          <defs>
+            <path id="t15" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t15" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="end"
+            dominantBaseline="middle"
+            textLength="70"
+            lengthAdjust="spacingAndGlyphs"
+          >
+            <textPath href="#t15" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+        <g transform="translate(8 536)">
+          <defs>
+            <path id="t16" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t16" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="end"
+            dominantBaseline="hanging"
+            textLength="70"
+            lengthAdjust="spacing"
+          >
+            <textPath href="#t16" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+        <g transform="translate(200 536)">
+          <defs>
+            <path id="t17" d="M8 66 Q84 4 168 66" />
+          </defs>
+          <use href="#t17" fill="none" stroke="#cccccc" />
+          <text
+            fill="#2463a0"
+            fontFamily="Test"
+            fontSize="20"
+            textAnchor="end"
+            dominantBaseline="hanging"
+            textLength="70"
+            lengthAdjust="spacingAndGlyphs"
+          >
+            <textPath href="#t17" startOffset="50%">
+              Ab 012
+            </textPath>
+          </text>
+        </g>
+      </svg>
+    </View>
+  );
+}

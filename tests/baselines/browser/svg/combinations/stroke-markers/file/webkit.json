@@ -1,0 +1,13 @@
+{
+  "size": [
+    784,
+    544
+  ],
+  "sources": {
+    "tests/baselines/browser/svg/combinations/stroke-markers/file/scene.html": "4cd1cf346029d53b9b13dbd7ca49ed5c00f7851e6fb724c3633f30ce8172a452"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}
