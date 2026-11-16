@@ -1,0 +1,3116 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/compositing/filter-blend-matrix</title
+  ><style>
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 948px;
+      height: 756px;
+      background: white;
+    }
+  </style>
+  <div id="canvas">
+    <div
+      data-key="c0"
+      style="
+        position: absolute;
+        left: 12px;
+        top: 12px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: none;
+          mix-blend-mode: normal;
+          opacity: 0;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c1"
+      style="
+        position: absolute;
+        left: 168px;
+        top: 12px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: none;
+          mix-blend-mode: normal;
+          opacity: 0.5;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c2"
+      style="
+        position: absolute;
+        left: 324px;
+        top: 12px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: none;
+          mix-blend-mode: normal;
+          opacity: 1;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c3"
+      style="
+        position: absolute;
+        left: 480px;
+        top: 12px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: none;
+          mix-blend-mode: multiply;
+          opacity: 0;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c4"
+      style="
+        position: absolute;
+        left: 636px;
+        top: 12px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: none;
+          mix-blend-mode: multiply;
+          opacity: 0.5;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c5"
+      style="
+        position: absolute;
+        left: 792px;
+        top: 12px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: none;
+          mix-blend-mode: multiply;
+          opacity: 1;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c6"
+      style="
+        position: absolute;
+        left: 12px;
+        top: 136px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: none;
+          mix-blend-mode: screen;
+          opacity: 0;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c7"
+      style="
+        position: absolute;
+        left: 168px;
+        top: 136px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: none;
+          mix-blend-mode: screen;
+          opacity: 0.5;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c8"
+      style="
+        position: absolute;
+        left: 324px;
+        top: 136px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: none;
+          mix-blend-mode: screen;
+          opacity: 1;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c9"
+      style="
+        position: absolute;
+        left: 480px;
+        top: 136px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: invert(1);
+          mix-blend-mode: normal;
+          opacity: 0;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c10"
+      style="
+        position: absolute;
+        left: 636px;
+        top: 136px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: invert(1);
+          mix-blend-mode: normal;
+          opacity: 0.5;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c11"
+      style="
+        position: absolute;
+        left: 792px;
+        top: 136px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: invert(1);
+          mix-blend-mode: normal;
+          opacity: 1;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c12"
+      style="
+        position: absolute;
+        left: 12px;
+        top: 260px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: invert(1);
+          mix-blend-mode: multiply;
+          opacity: 0;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c13"
+      style="
+        position: absolute;
+        left: 168px;
+        top: 260px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: invert(1);
+          mix-blend-mode: multiply;
+          opacity: 0.5;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c14"
+      style="
+        position: absolute;
+        left: 324px;
+        top: 260px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: invert(1);
+          mix-blend-mode: multiply;
+          opacity: 1;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c15"
+      style="
+        position: absolute;
+        left: 480px;
+        top: 260px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: invert(1);
+          mix-blend-mode: screen;
+          opacity: 0;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c16"
+      style="
+        position: absolute;
+        left: 636px;
+        top: 260px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: invert(1);
+          mix-blend-mode: screen;
+          opacity: 0.5;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c17"
+      style="
+        position: absolute;
+        left: 792px;
+        top: 260px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: invert(1);
+          mix-blend-mode: screen;
+          opacity: 1;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c18"
+      style="
+        position: absolute;
+        left: 12px;
+        top: 384px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: brightness(0.5);
+          mix-blend-mode: normal;
+          opacity: 0;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c19"
+      style="
+        position: absolute;
+        left: 168px;
+        top: 384px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: brightness(0.5);
+          mix-blend-mode: normal;
+          opacity: 0.5;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c20"
+      style="
+        position: absolute;
+        left: 324px;
+        top: 384px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: brightness(0.5);
+          mix-blend-mode: normal;
+          opacity: 1;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c21"
+      style="
+        position: absolute;
+        left: 480px;
+        top: 384px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: brightness(0.5);
+          mix-blend-mode: multiply;
+          opacity: 0;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c22"
+      style="
+        position: absolute;
+        left: 636px;
+        top: 384px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: brightness(0.5);
+          mix-blend-mode: multiply;
+          opacity: 0.5;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c23"
+      style="
+        position: absolute;
+        left: 792px;
+        top: 384px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: brightness(0.5);
+          mix-blend-mode: multiply;
+          opacity: 1;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c24"
+      style="
+        position: absolute;
+        left: 12px;
+        top: 508px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: brightness(0.5);
+          mix-blend-mode: screen;
+          opacity: 0;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c25"
+      style="
+        position: absolute;
+        left: 168px;
+        top: 508px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: brightness(0.5);
+          mix-blend-mode: screen;
+          opacity: 0.5;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c26"
+      style="
+        position: absolute;
+        left: 324px;
+        top: 508px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: brightness(0.5);
+          mix-blend-mode: screen;
+          opacity: 1;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c27"
+      style="
+        position: absolute;
+        left: 480px;
+        top: 508px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: blur(3px);
+          mix-blend-mode: normal;
+          opacity: 0;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c28"
+      style="
+        position: absolute;
+        left: 636px;
+        top: 508px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: blur(3px);
+          mix-blend-mode: normal;
+          opacity: 0.5;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c29"
+      style="
+        position: absolute;
+        left: 792px;
+        top: 508px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: blur(3px);
+          mix-blend-mode: normal;
+          opacity: 1;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c30"
+      style="
+        position: absolute;
+        left: 12px;
+        top: 632px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: blur(3px);
+          mix-blend-mode: multiply;
+          opacity: 0;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c31"
+      style="
+        position: absolute;
+        left: 168px;
+        top: 632px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: blur(3px);
+          mix-blend-mode: multiply;
+          opacity: 0.5;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c32"
+      style="
+        position: absolute;
+        left: 324px;
+        top: 632px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: blur(3px);
+          mix-blend-mode: multiply;
+          opacity: 1;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c33"
+      style="
+        position: absolute;
+        left: 480px;
+        top: 632px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: blur(3px);
+          mix-blend-mode: screen;
+          opacity: 0;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c34"
+      style="
+        position: absolute;
+        left: 636px;
+        top: 632px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: blur(3px);
+          mix-blend-mode: screen;
+          opacity: 0.5;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      data-key="c35"
+      style="
+        position: absolute;
+        left: 792px;
+        top: 632px;
+        width: 140px;
+        height: 108px;
+        background: #4080c0;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 0px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 28px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 56px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 84px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 112px;
+          top: 0px;
+          width: 14px;
+          height: 108px;
+          background: #e0b060;
+        "
+      ></div>
+      <div
+        style="
+          position: absolute;
+          left: 16px;
+          top: 16px;
+          width: 108px;
+          height: 76px;
+          background: rgb(128 192 64 / 50%);
+          backdrop-filter: blur(3px);
+          mix-blend-mode: screen;
+          opacity: 1;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 24px;
+            top: 16px;
+            width: 48px;
+            height: 32px;
+            background: #d040a0;
+          "
+        ></div>
+      </div>
+    </div>
+  </div>
+</html>

@@ -1,0 +1,393 @@
+{
+  "spec": "https://www.w3.org/TR/filter-effects-1/#FilterProperty",
+  "assertion": "18 combinations: 3 filters \u00d7 3 transforms \u00d7 ancestor overflow. Blur and shadow bounds extend beyond the source and must be clipped after the child transform by the rounded ancestor.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed blur falloff, shadow placement and transformed clip edges in all three browsers. Native/Chrome difference is 35827 pixels, max 33, limited to filter falloff and edge coverage; removed filters are rejected by mutation tests.",
+    "pixels": {
+      "maxDifference": 35,
+      "maxPixels": 36500
+    }
+  },
+  "layout": [
+    {
+      "key": "c0",
+      "border": {
+        "x": 12,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 12,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 12,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c1",
+      "border": {
+        "x": 168,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 168,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 168,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c2",
+      "border": {
+        "x": 324,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 324,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 324,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c3",
+      "border": {
+        "x": 480,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 480,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 480,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c4",
+      "border": {
+        "x": 636,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 636,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 636,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c5",
+      "border": {
+        "x": 792,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 792,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 792,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c6",
+      "border": {
+        "x": 12,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 12,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 12,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c7",
+      "border": {
+        "x": 168,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 168,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 168,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c8",
+      "border": {
+        "x": 324,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 324,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 324,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c9",
+      "border": {
+        "x": 480,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 480,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 480,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c10",
+      "border": {
+        "x": 636,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 636,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 636,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c11",
+      "border": {
+        "x": 792,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 792,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 792,
+        "y": 136,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c12",
+      "border": {
+        "x": 12,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 12,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 12,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c13",
+      "border": {
+        "x": 168,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 168,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 168,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c14",
+      "border": {
+        "x": 324,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 324,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 324,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c15",
+      "border": {
+        "x": 480,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 480,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 480,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c16",
+      "border": {
+        "x": 636,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 636,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 636,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c17",
+      "border": {
+        "x": 792,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 792,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 792,
+        "y": 260,
+        "width": 140,
+        "height": 108
+      }
+    }
+  ]
+}

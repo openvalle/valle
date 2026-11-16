@@ -1,0 +1,141 @@
+{
+  "spec": "https://www.w3.org/TR/CSS2/visufx.html#visibility",
+  "assertion": "Six controls distinguish visible, zero opacity, inherited hidden, display:none and explicitly visible children of a hidden filtered box, with normal and multiply blending. A hidden box must not paint its backdrop; visible descendants still paint.",
+  "at": [0],
+  "browser": {
+    "selected": "firefox",
+    "reason": "CSS2 visibility hides the box while allowing descendants to restore visibility. Firefox matches that interpretation: the hidden box contributes neither background nor backdrop, and its visible child blends with the page. Chrome still blends that child against an inverted backdrop; WebKit differs again. FXTF issue 455 explicitly tracks this disagreement; choosing its proposed background-like behavior is a recorded interop choice, not three-browser consensus or a settled filter rule. Native differs from Firefox by one output level on 640 pixels.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 640
+    }
+  },
+  "layout": [
+    {
+      "key": "c0",
+      "border": {
+        "x": 12,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 12,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 12,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c1",
+      "border": {
+        "x": 168,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 168,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 168,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c2",
+      "border": {
+        "x": 324,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 324,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 324,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c3",
+      "border": {
+        "x": 480,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 480,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 480,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c4",
+      "border": {
+        "x": 636,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 636,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 636,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      }
+    },
+    {
+      "key": "c5",
+      "border": {
+        "x": 792,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "padding": {
+        "x": 792,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      },
+      "content": {
+        "x": 792,
+        "y": 12,
+        "width": 140,
+        "height": 108
+      }
+    }
+  ]
+}

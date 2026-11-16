@@ -1279,7 +1279,7 @@ impl Painter<'_> {
     fn over_backdrop(&self, d: usize, items: Vec<Item>) -> (Vec<Item>, Blend) {
         let s = &self.styles[d];
         let rect = snap(self.layout.boxes[d].border);
-        if s.backdrop.is_empty() {
+        if s.backdrop.is_empty() || !s.visible {
             return (items, s.blend);
         }
         let backdrop = (rect.width > 0.0 && rect.height > 0.0).then(|| Item::Backdrop {
@@ -2433,7 +2433,7 @@ fn group(opacity: f32, blend: Blend, items: Vec<Item>) -> Option<Item> {
                     items,
                 },
             ],
-        ) => Item::Group {
+        ) if !reads_backdrop(&items) => Item::Group {
             opacity: o * opacity,
             blend,
             items,
@@ -2451,6 +2451,28 @@ fn group(opacity: f32, blend: Blend, items: Vec<Item>) -> Option<Item> {
     })
 }
 
+/// Removing a group boundary changes which image a descendant backdrop reads.
+fn reads_backdrop(items: &[Item]) -> bool {
+    items.iter().any(|item| match item {
+        Item::Backdrop { .. } => true,
+        Item::Shader {
+            program, layers, ..
+        } => program.reads("backdrop") || layers.iter().any(|(_, items)| reads_backdrop(items)),
+        Item::Group { items, .. }
+        | Item::Pattern { items, .. }
+        | Item::Transform { items, .. }
+        | Item::Filter { items, .. }
+        | Item::Cut { items, .. }
+        | Item::Clip { items, .. }
+        | Item::Shadow { items, .. } => reads_backdrop(items),
+        Item::Mask { mask, items } => reads_backdrop(mask) || reads_backdrop(items),
+        Item::FilterGraph { images, items, .. } => {
+            reads_backdrop(items) || images.iter().any(|(_, items)| reads_backdrop(items))
+        }
+        _ => false,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2460,6 +2482,46 @@ mod tests {
     use crate::testing::{mask, node, text, text_node, view};
 
     use crate::testing::paint::{names, paint_of, painted};
+
+    #[test]
+    fn nested_opacity_keeps_a_descendant_backdrop_boundary() {
+        let inner = Item::Group {
+            opacity: 1.0,
+            blend: Blend::Normal,
+            items: vec![Item::Backdrop {
+                filters: vec![Filter::Blur(2.0)],
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 40.0,
+                    height: 40.0,
+                },
+                radii: SQUARE,
+            }],
+        };
+        let outer = group(0.5, Blend::Normal, vec![inner.clone()]).unwrap();
+        assert_eq!(
+            outer,
+            Item::Group {
+                opacity: 0.5,
+                blend: Blend::Normal,
+                items: vec![inner],
+            }
+        );
+        let plain = Item::Group {
+            opacity: 0.5,
+            blend: Blend::Normal,
+            items: Vec::new(),
+        };
+        assert_eq!(
+            group(0.5, Blend::Normal, vec![plain]),
+            Some(Item::Group {
+                opacity: 0.25,
+                blend: Blend::Normal,
+                items: Vec::new(),
+            })
+        );
+    }
 
     #[test]
     fn blocks_paint_backgrounds_then_text_then_positioned_boxes() {
