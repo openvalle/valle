@@ -466,6 +466,11 @@ fn combination_allowances_reject_missing_effects() {
             .unwrap();
         for (name, from, to) in [
             (
+                "css/backgrounds/svg-image",
+                "backgroundRepeat: \"round\"",
+                "backgroundRepeat: \"repeat\"",
+            ),
+            (
                 "css/text/breaking-products",
                 "whiteSpace: c.white",
                 "whiteSpace: \"nowrap\"",
@@ -615,10 +620,10 @@ fn combination_allowances_reject_missing_effects() {
                 &|path| {
                     if path == "probe.motion.tsx" {
                         Some(changed.as_bytes().to_vec())
+                    } else if let Some(name) = path.strip_prefix("/tests/resources/") {
+                        std::fs::read(root.join("tests/resources").join(name)).ok()
                     } else {
-                        path.strip_prefix("/tests/resources/").and_then(|name| {
-                            std::fs::read(root.join("tests/resources").join(name)).ok()
-                        })
+                        std::fs::read(dir.join(path)).ok()
                     }
                 },
                 &valle_engine::front::Inputs::default(),

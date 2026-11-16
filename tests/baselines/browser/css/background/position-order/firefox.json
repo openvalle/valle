@@ -1,8 +1,5 @@
 {
-  "size": [
-    768,
-    248
-  ],
+  "size": [768, 248],
   "sources": {
     "tests/baselines/browser/css/background/position-order/scene.html": "584a7cab698fc6a269a26a3e56159d32a0622963c8491723f1f086aa24922891"
   },

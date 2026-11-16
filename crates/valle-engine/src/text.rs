@@ -899,6 +899,11 @@ impl Text {
                     }
                     x += g.advance;
                 }
+                // Control-only runs carry bidi levels, not authored content. In
+                // particular, an atomic inline's placeholder is not another box.
+                if glyphs.is_empty() && piece.edge.is_none() {
+                    continue;
+                }
                 runs.push(Run {
                     edge: piece
                         .edge

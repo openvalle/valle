@@ -1,8 +1,5 @@
 {
-  "size": [
-    592,
-    352
-  ],
+  "size": [592, 352],
   "sources": {
     "tests/baselines/browser/css/background/fractional-repeat/scene.html": "6ccfce9d2b0f8937049ffb8b54e882689e9f07188eb7aa57155db049db5bd940"
   },

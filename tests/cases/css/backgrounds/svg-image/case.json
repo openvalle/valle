@@ -3,11 +3,15 @@
   "assertion": "SVG background images preserve their intrinsic aspect ratio, scale to the requested size and use the same positioning, clipping and tiling rules as raster images.",
   "at": [0],
   "browser": {
-    "selected": "chrome",
-    "reason": "Reviewed all three browsers and the native difference image. Tile positions and solid regions agree with Chrome. Remaining differences are rounded-corner and fractional tile rasterization edges (928 pixels, maximum channel delta 6).",
+    "selected": "firefox",
+    "reason": "Reviewed all three captures and the difference images after correcting round positioning. Firefox positions the 100/3 px round tiles from their resized width, as CSS Backgrounds requires. Chrome/WebKit retain the old 40px positioning offset in the last control. Remaining Firefox differences are SVG tile seams and rounded-edge rasterization (1570 pixels, maximum channel delta 71), guarded by a strict Valle baseline.",
     "pixels": {
-      "maxDifference": 6,
-      "maxPixels": 950
+      "maxDifference": 72,
+      "maxPixels": 1600
     }
+  },
+  "valle": {
+    "reason": "Reviewed against the resized-tile formula and Firefox geometry; retain the full six-control image to catch positioning, scaling, clipping or tiling changes independently of browser rasterization allowances.",
+    "maxDifference": 1
   }
 }

@@ -55,8 +55,16 @@ const CASES: {
     entry: "tests/cases/svg/combinations/paint-clips-filters/inline/scene.motion.tsx",
     frames: [0],
   },
-  { entry: "tests/cases/svg/combinations/path-text-metrics/file/scene.motion.tsx", frames: [0] },
-  { entry: "tests/cases/svg/combinations/path-text-metrics/inline/scene.motion.tsx", frames: [0] },
+  {
+    entry: "tests/cases/svg/combinations/path-text-metrics/file/scene.motion.tsx",
+    nativeResources: { Test: "tests/resources/NotoSans.ttf" },
+    frames: [0],
+  },
+  {
+    entry: "tests/cases/svg/combinations/path-text-metrics/inline/scene.motion.tsx",
+    nativeResources: { Test: "tests/resources/NotoSans.ttf" },
+    frames: [0],
+  },
   { entry: "tests/cases/svg/combinations/stroke-markers/file/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/combinations/stroke-markers/inline/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/svg/combinations/viewport-use/file/scene.motion.tsx", frames: [0] },
@@ -87,35 +95,111 @@ const CASES: {
     entry: "tests/cases/css/mask/dynamic-three-layers/scene.motion.tsx",
     frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
   },
-  { entry: "tests/cases/css/text/font-features/scene.motion.tsx", frames: [0] },
-  { entry: "tests/cases/css/text/axes-synthesis/scene.motion.tsx", frames: [0] },
-  { entry: "tests/cases/css/text/relative-inheritance/scene.motion.tsx", frames: [0] },
-  { entry: "tests/cases/css/text/bidi-inline-atoms/scene.motion.tsx", frames: [0] },
-  { entry: "tests/cases/css/text/breaking-products/scene.motion.tsx", frames: [0] },
-  { entry: "tests/cases/css/text/nested-decorations/scene.motion.tsx", frames: [0] },
+  {
+    entry: "tests/cases/css/text/font-features/scene.motion.tsx",
+    nativeResources: {
+      Test: "tests/resources/NotoSans.ttf",
+      Han: "tests/resources/NotoSansSC.ttf",
+      Hebrew: "tests/resources/NotoSansHebrew.ttf",
+    },
+    frames: [0],
+  },
+  {
+    entry: "tests/cases/css/text/axes-synthesis/scene.motion.tsx",
+    nativeResources: {
+      Test: "tests/resources/NotoSans.ttf",
+      Han: "tests/resources/NotoSansSC.ttf",
+      Hebrew: "tests/resources/NotoSansHebrew.ttf",
+    },
+    frames: [0],
+  },
+  {
+    entry: "tests/cases/css/text/relative-inheritance/scene.motion.tsx",
+    nativeResources: {
+      Test: "tests/resources/NotoSans.ttf",
+      Han: "tests/resources/NotoSansSC.ttf",
+      Hebrew: "tests/resources/NotoSansHebrew.ttf",
+    },
+    frames: [0],
+  },
+  {
+    entry: "tests/cases/css/text/bidi-inline-atoms/scene.motion.tsx",
+    nativeResources: {
+      Test: "tests/resources/NotoSans.ttf",
+      Han: "tests/resources/NotoSansSC.ttf",
+      Hebrew: "tests/resources/NotoSansHebrew.ttf",
+    },
+    frames: [0],
+  },
+  {
+    entry: "tests/cases/css/text/breaking-products/scene.motion.tsx",
+    nativeResources: {
+      Test: "tests/resources/NotoSans.ttf",
+      Han: "tests/resources/NotoSansSC.ttf",
+      Hebrew: "tests/resources/NotoSansHebrew.ttf",
+    },
+    frames: [0],
+  },
+  {
+    entry: "tests/cases/css/text/nested-decorations/scene.motion.tsx",
+    nativeResources: {
+      Test: "tests/resources/NotoSans.ttf",
+      Han: "tests/resources/NotoSansSC.ttf",
+      Hebrew: "tests/resources/NotoSansHebrew.ttf",
+    },
+    frames: [0],
+  },
   {
     entry: "tests/cases/css/text/dynamic-axes/scene.motion.tsx",
+    nativeResources: {
+      Test: "tests/resources/NotoSans.ttf",
+      Han: "tests/resources/NotoSansSC.ttf",
+      Hebrew: "tests/resources/NotoSansHebrew.ttf",
+    },
     frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
   },
   {
     entry: "tests/cases/css/text/dynamic-bidi-atoms/scene.motion.tsx",
+    nativeResources: {
+      Test: "tests/resources/NotoSans.ttf",
+      Han: "tests/resources/NotoSansSC.ttf",
+      Hebrew: "tests/resources/NotoSansHebrew.ttf",
+    },
     frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
   },
   {
     entry: "tests/cases/css/text/dynamic-breaking/scene.motion.tsx",
+    nativeResources: {
+      Test: "tests/resources/NotoSans.ttf",
+      Han: "tests/resources/NotoSansSC.ttf",
+      Hebrew: "tests/resources/NotoSansHebrew.ttf",
+    },
     frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
   },
   {
     entry: "tests/cases/css/text/dynamic-nested-decorations/scene.motion.tsx",
+    nativeResources: {
+      Test: "tests/resources/NotoSans.ttf",
+      Han: "tests/resources/NotoSansSC.ttf",
+      Hebrew: "tests/resources/NotoSansHebrew.ttf",
+    },
     frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
   },
   { entry: "tests/cases/css/background/layer-lists/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/background/fractional-repeat/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/background/rounded-position/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/background/position-order/scene.motion.tsx", frames: [0] },
-  { entry: "tests/cases/css/background/text-effects/scene.motion.tsx", frames: [0] },
+  {
+    entry: "tests/cases/css/background/text-effects/scene.motion.tsx",
+    nativeResources: { Test: "tests/resources/NotoSans.ttf" },
+    frames: [0],
+  },
   { entry: "tests/cases/css/color/spaces-opacity/scene.motion.tsx", frames: [0] },
-  { entry: "tests/cases/css/images/fit-extremes/scene.motion.tsx", frames: [0] },
+  {
+    entry: "tests/cases/css/images/fit-extremes/scene.motion.tsx",
+    nativeResources: { picture: "tests/resources/photo.png" },
+    frames: [0],
+  },
   {
     entry: "tests/cases/css/background/dynamic-rounded-position/scene.motion.tsx",
     frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
@@ -126,6 +210,7 @@ const CASES: {
   },
   {
     entry: "tests/cases/css/images/dynamic-fit-extremes/scene.motion.tsx",
+    nativeResources: { picture: "tests/resources/photo.png" },
     frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
   },
   {

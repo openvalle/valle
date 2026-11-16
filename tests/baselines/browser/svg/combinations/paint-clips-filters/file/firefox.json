@@ -1,8 +1,5 @@
 {
-  "size": [
-    784,
-    544
-  ],
+  "size": [784, 544],
   "sources": {
     "tests/baselines/browser/svg/combinations/paint-clips-filters/file/scene.html": "442a3706d3c853d7bbeb6aee887ba4795c3707914fee7072344cc6fe6a9db664"
   },

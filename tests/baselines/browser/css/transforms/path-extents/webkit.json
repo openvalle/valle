@@ -1,8 +1,5 @@
 {
-  "size": [
-    768,
-    576
-  ],
+  "size": [768, 576],
   "sources": {
     "tests/baselines/browser/css/transforms/path-extents/scene.html": "037f986e6180b0974894182ec188820928c1d4f4f392a4f74788c771c76c8304"
   },

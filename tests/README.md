@@ -47,6 +47,11 @@ text, compositing and dynamic batches and their explicitly bounded factors.
   baseline. Extend the GPU mutation test in `crates/valle-engine/tests/cases/pixels.rs` to prove that
   deleting a relevant effect cannot pass that allowance.
 
+The expanded CSS/SVG captures record their shared environment and exact case
+scope in `baselines/browser/coverage-environment.json`. The older
+`environment.json` describes the earlier capture set. Updating a subset must
+not imply that every stored image was captured with the new browser versions.
+
 ## CSS and SVG
 
 The [fixed-seed layout cases](cases/css/generated/README.md) retain 1,000 small

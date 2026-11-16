@@ -1,8 +1,5 @@
 {
-  "size": [
-    1216,
-    556
-  ],
+  "size": [1216, 556],
   "sources": {
     "tests/baselines/browser/css/transform/order-clipping/scene.html": "6fe65e1f17cad0b310e52bbe6f5ebb998c75d426c3378d7d11093be6e2f8fbb9"
   },

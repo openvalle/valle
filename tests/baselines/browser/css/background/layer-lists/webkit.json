@@ -1,8 +1,5 @@
 {
-  "size": [
-    768,
-    248
-  ],
+  "size": [768, 248],
   "sources": {
     "tests/baselines/browser/css/background/layer-lists/scene.html": "eb1a30a730fa6956aa523bd3088a71d05fb35ed2f7aa54d01bf4a0fa576a0237"
   },

@@ -1,8 +1,5 @@
 {
-  "size": [
-    388,
-    216
-  ],
+  "size": [388, 216],
   "sources": {
     "tests/baselines/browser/css/background/rounded-position/scene.html": "f27d4c786b59f00aeb2f1429a439c1f00055b768a1e651a9dbc61a627a38e827"
   },

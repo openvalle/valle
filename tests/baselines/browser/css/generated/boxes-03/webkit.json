@@ -1,8 +1,5 @@
 {
-  "size": [
-    1600,
-    736
-  ],
+  "size": [1600, 736],
   "sources": {
     "tests/baselines/browser/css/generated/boxes-03/scene.html": "a1738ae357f6d446a98f620e17a2e96eb54788d9fefe8f66289c1045a15ec80d"
   },

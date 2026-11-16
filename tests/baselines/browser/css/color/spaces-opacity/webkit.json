@@ -1,8 +1,5 @@
 {
-  "size": [
-    768,
-    712
-  ],
+  "size": [768, 712],
   "sources": {
     "tests/baselines/browser/css/color/spaces-opacity/scene.html": "969efe08da4947a0be1cc89fa5e3c3bcebd131bacd6655bb9a616b281f7f7b9e"
   },

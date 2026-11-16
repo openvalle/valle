@@ -5,20 +5,20 @@ authoring syntax and to find missing tests. [Motion](motion.md#styles) explains 
 to write scenes; [Writing tests](../tests/README.md) explains how to add evidence.
 
 Property inventory audited against `cd645114`; combination coverage expanded on
-2026-11-16. The complete native CSS suite passes on macOS Metal: 112 scenes and
-9,526 layout/line scalar assertions. All 17 new combination fixtures also pass
-Native/Chromium WebGPU comparison, with at most one output-channel level of
-difference. This is not a claim of full CSS conformance or runtime validation on
-Linux/Windows.
+2026-11-16. The CSS suite contains **176 scenes** with **128,518 explicit
+layout/line assertions** across their sampled frames. Validation results and
+platform boundaries are recorded below. This is not a claim of full CSS
+conformance.
 
 - The [property table](../crates/valle-engine/src/style/property.rs) has 286 names:
   **284 CSS/SVG style names**, plus Valle's `motionBlur` and XML's `xmlSpace`.
   Shorthands, logical properties and aliases count separately. All 284 names are
   listed below; a group of names does not imply identical applicability.
-- The CSS suite has **109 static browser cases and 3 dynamic cases**. Of the
-  browser cases, 76 have layout expectations for 745 elements, and 10 have line
-  expectations for 46 text objects. The latter groups overlap; these are not counts of individual
-  scalar assertions or independent CSS features.
+- There are **156 static browser cases and 20 dynamic cases**. Layout expectations
+  cover 10,664 elements in 110 fixtures; line expectations cover 46 text objects
+  in 10 fixtures. These groups overlap. Of the boxes, 9,742 belong to the bounded
+  fixed-seed generator, so the larger count does not imply proportionally broader
+  CSS coverage.
 - Parser/computed-style unit tests, SVG cases, Tailwind cases and dynamic Motion
   cases provide additional evidence. None makes an untested value or combination
   automatically covered.
@@ -63,12 +63,15 @@ Implementation: [units](../crates/valle-engine/src/style/units.rs),
 The `color()` RGB/XYZ spaces are srgb, srgb-linear, display-p3, a98-rgb,
 prophoto-rgb, rec2020, xyz/xyz-d65 and xyz-d50. The color-mix parser also supports
 lab, oklab, hsl, hwb, lch and oklch with the implemented hue interpolation modes.
-These are accepted input forms; independent browser image coverage is currently
-concentrated on the sRGB/alpha and currentColor cases, with broader numeric tests.
+These are accepted input forms. The [color-space/opacity matrix][css/color/spaces-opacity]
+adds 24 browser controls and a dynamic companion to the sRGB/alpha and
+currentColor cases; numeric tests cover additional conversion boundaries.
 
-Gaps: a rendered unit matrix across layout, transforms, text and masks; inherited
-units under changing parent fonts; percentage bases under nested writing modes.
-Existing unit tests cover parts of these, not their full cross-product.
+Coverage: [inherited units][css/values/inherited-units] crosses px/em/rem/% with
+three writing modes and parent font sizes; its dynamic companion changes the
+inherited basis. [Logical order][css/cascade/logical-order] crosses both directions
+and both declaration orders. These are bounded value matrices, not every unit
+at every consuming property.
 
 ## Boxes, positioning and overflow
 
@@ -80,7 +83,7 @@ Implementation: [declarations](../crates/valle-engine/src/style/declaration.rs),
 | Properties                                                                                                        | Implemented scope and restrictions                                                                                                                                                                                                                                              | Existing evidence                                                                                                                                                    |
 | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `display`                                                                                                         | `block`, `flex`, `grid`, `none`, `inline-block`, `inline-flex`, `inline-grid`, context-dependent `inline`, and `-webkit-box` for line clamp. Inline Views belong in Text/Span; flex/grid children blockify. No table/list-item/contents/flow-root modes or arbitrary HTML flow. | [block flow][css/layout/block-flow], [inline boxes][css/text/inline-boxes], `inline_displays_blockify_in_flex_and_grid_containers`                                   |
-| `position`                                                                                                        | `static`, `relative`, `absolute`, `fixed`; no sticky. Out-of-flow boxes directly in a paragraph are rejected.                                                                                                                                                                   | [absolute/relative][css/position/absolute-relative], [containing block][css/position/absolute-padding]; fixed-specific browser case not mapped                       |
+| `position`                                                                                                        | `static`, `relative`, `absolute`, `fixed`; no sticky. Out-of-flow boxes directly in a paragraph are rejected.                                                                                                                                                                   | [absolute/relative][css/position/absolute-relative], [containing block][css/position/absolute-padding]; fixed containing-block unit tests                       |
 | `inset`, `top`, `right`, `bottom`, `left`                                                                         | Signed length/percentage or `auto`; inset takes 1–4 values. Positioning uses the applicable containing block.                                                                                                                                                                   | [absolute padding][css/position/absolute-padding], [vertical positioning][css/layout/vertical-position]                                                              |
 | `insetInline`, `insetBlock`, `insetInlineStart`, `insetInlineEnd`, `insetBlockStart`, `insetBlockEnd`             | Logical counterparts; pair shorthands take 1–2 values and resolve with writing mode/direction.                                                                                                                                                                                  | [vertical positioning][css/layout/vertical-position]                                                                                                                 |
 | `width`, `height`, `inlineSize`, `blockSize`                                                                      | Nonnegative length/percentage, `auto`, `min-content`, `max-content`, `fit-content`, `stretch`. `fit-content()` is only accepted for grid tracks. Span text runs are not independent sized boxes.                                                                                | [intrinsic width][css/sizing/intrinsic-width], [vertical block][css/layout/vertical-block], [inline writing][css/text/inline-writing]; `sizing_keywords_go_to_taffy` |
@@ -97,10 +100,12 @@ Implementation: [declarations](../crates/valle-engine/src/style/declaration.rs),
 | `zIndex`                                                                                                          | `auto` or signed integer, subject to stacking-context boundaries.                                                                                                                                                                                                               | [stacking/opacity][css/compositing/stacking-opacity]; `z_index_is_auto_or_an_integer`                                                                                |
 | `visibility`                                                                                                      | `visible`, `hidden`, `collapse`; collapse is implemented as hidden, not flex/table collapse layout.                                                                                                                                                                             | [Tailwind sizing](../tests/cases/tailwind/sizing/case.json); collapse-specific geometry not mapped                                                                   |
 
-Gaps: browser references for fixed positioning with transformed ancestors (layout
-unit tests already cover containing blocks); all min/max and intrinsic
-size interactions in both axes; mixed physical/logical declaration order in
-every writing direction; visibility overrides through nested hidden parents.
+Coverage: [indefinite percentages][css/sizing/indefinite-percentages] crosses
+block/Flex/Grid with auto/definite heights and min/max constraints;
+[intrinsic constraints][css/sizing/intrinsic-constraints] crosses the three size
+keywords with two limits and both axes. Existing logical containing-block and
+visibility controls remain complementary; fixed descendants of transformed
+ancestors still have unit-level rather than independent rendered evidence.
 
 ## Flex, Grid and alignment
 
@@ -128,10 +133,11 @@ adapter to Taffy. Unit tests include `the_flex_shorthand_follows_css`,
 | `gridAutoRows`, `gridAutoColumns`, `gridAutoFlow`                                                     | Implicit track lists; row/column with optional dense placement.                                                                                                                                                  | [dense placement][css/grid/auto-placement-dense], [implicit lines][css/grid/named-lines-implicit]                                       |
 | `gridRow`, `gridColumn`, `gridRowStart`, `gridRowEnd`, `gridColumnStart`, `gridColumnEnd`, `gridArea` | Auto, signed line numbers, named lines/areas and span forms; row/column/area shorthands.                                                                                                                         | [placement][css/grid/placement], [named lines][css/grid/named-lines-implicit], [named areas][css/grid/named-areas]                      |
 
-Gaps: a measured pairwise matrix across display, direction, wrap, size/basis,
-min/max, gap and alignment. Existing [grid inside flex][css/flex/grid-child] and
-[flex inside grid][css/grid/flex-child] are controls for particular nested cases,
-not coverage of every nested layout combination.
+Coverage: the retained constraint/wrap matrices below and
+[1,000 generated trees](../tests/cases/css/generated/README.md) combine nested
+block/Flex/Grid, direction, alignment, gaps and box models. The generator omits
+intrinsic text, wrapping and flex growth; the hand-authored matrices cover those
+separately. No global pairwise coverage metric is claimed.
 
 ## Backgrounds and images
 
@@ -155,9 +161,13 @@ origins, clips and blend modes; `gradient.rs` tests stop/hint handling and error
 | `objectPosition`                                                   | Position keywords and signed lengths/percentages within the replaced-content box.                                                                                                                  | [object position][css/images/object-position] checks left/center/right; remaining edge forms need controls                                                                               |
 | `imageRendering`                                                   | `auto`, `pixelated`; no crisp-edges.                                                                                                                                                               | [object fit][css/images/object-fit], [embedded SVG images](../tests/cases/svg/embedded-image/file/case.json)                                                                             |
 
-Gaps: multiple backgrounds with unequal list lengths, independent position
-longhands, repeat round/space with nonintegral tiles, text clipping combined with
-filters and transforms, object-fit none/scale-down at both smaller/larger sizes.
+Coverage: [layer lists][css/background/layer-lists],
+[fractional tiling][css/background/fractional-repeat],
+[rounded positioning][css/background/rounded-position],
+[position order][css/background/position-order],
+[text effects][css/background/text-effects] and
+[image fit][css/images/fit-extremes] retain independent browser controls.
+Dynamic cases exercise list replacement, changed image constraints and tile sizes.
 
 ## Borders, corners, outlines and shadows
 
@@ -181,10 +191,12 @@ Unit tests include `borders_take_lines_widths_styles_and_colors`,
 | `outlineOffset`                                                                                                                                                                                                                        | Signed length, no percentage.                                                                                                               | Outline unit tests; [Tailwind borders](../tests/cases/tailwind/borders/case.json)                                                                 |
 | `boxShadow`                                                                                                                                                                                                                            | none or comma-separated shadows with x/y offsets, optional nonnegative blur, signed spread, color/currentColor and inset.                   | [outer/inset][css/shadow/outer-inset], [blur][css/shadow/blur], [rounded clip][css/shadow/rounded-clip]                                           |
 
-Gaps: unequal border widths × mixed styles × asymmetric corners, all eight
-visible border styles, logical corner mapping, outline with clip/transform, and
-multiple inner/outer shadows. Existing pictures do not establish an exhaustive
-dashed/dotted phase or corner-join matrix.
+Coverage: [unequal corners][css/border/unequal-corners],
+[mixed joins][css/border/mixed-joins], [logical corners][css/border/logical-corners]
+and [outline layers][css/shadow/outline-layers] cover mixed widths/styles,
+logical mapping, clipping, transforms and inner/outer shadows. Dynamic controls
+change the same nodes. Dash phase and edge antialiasing allowances are documented
+per case and paired with strict Valle images; arbitrary widths are not exhausted.
 
 ## Compositing, filters and masks
 
@@ -227,10 +239,12 @@ filter/backdropFilter. [Motion](motion.md#valle-filters) documents their paramet
 `motionBlur` is a separate Valle-only property; `xmlSpace` belongs to SVG/XML.
 Neither is included in the 284-name inventory.
 
-Gaps: the backdrop/blend regressions verify selected invert/multiply controls,
-not all filter/blend pairs. Add blur × blend × fractional opacity, translucent
-masks, nested isolation, and filter bounds after transforms. Do not substitute a
-matching Native/Web output for an independent compositing oracle.
+Coverage: [blend families][css/compositing/blend-families] checks all 16 blend
+modes against absent/inverted backdrops; [backdrop roots][css/compositing/backdrop-roots]
+checks nested opacity/filter/mask/isolation controls; and
+[three-layer masks][css/mask/three-layer-composites] crosses all four operators
+with alpha/luminance masks. Existing blur and transformed-bound controls remain
+in place. Matching Native/Web pixels do not replace these independent oracles.
 
 ## Transforms and motion paths
 
@@ -251,9 +265,12 @@ order and path longhands. These are not all browser-rendered combinations.
 | `offsetDistance`, `offsetRotate`       | Signed length/percentage along the route; auto/reverse with optional angle, or a fixed angle.                                                     | [shape path][css/transforms/shape-path], motion-path unit tests                                                                                                                                   |
 | `offsetAnchor`, `offsetPosition`       | Anchor auto/position; route start normal/auto/position.                                                                                           | Motion-path unit tests; independent rendered anchor/start matrix not mapped                                                                                                                       |
 
-Gaps: perspective × transform-origin × clipping, flat/preserve-3d changes around
-grouping effects, individual/list transforms with negative scales, and each
-motion-path family with start/anchor/distance and changing reference sizes.
+Coverage: [order and clipping][css/transform/order-clipping],
+[perspective groups][css/transform/perspective-groups] and
+[path extents][css/transforms/path-extents] cross origins, negative scales,
+transform order, flattening, anchors and out-of-range distances. Each has a
+changing-state companion. These do not exhaust every motion-path shape or
+perspective depth.
 
 ## Fonts
 
@@ -266,26 +283,29 @@ accepting a feature tag does not create glyphs missing from that font.
 | Properties                                     | Implemented scope and restrictions                                                                                                                                                            | Existing evidence                                                                                                                                                                 |
 | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `font`                                         | Size and family with supported style, small-caps, weight, stretch and optional line-height; omitted longhands reset. No system-font keywords.                                                 | [shorthand][css/text/font-shorthand]; `font_shorthand_sets_and_resets_its_longhands`                                                                                              |
-| `fontFamily`                                   | Ordered declared font-family names and built-in sans-serif, serif, monospace, emoji. Other browser/system generic families are rejected. No discovery of arbitrary installed fonts.           | [mixed runs][css/text/mixed-runs], font-family parsing/shaping tests; targeted fallback sequence case not mapped                                                                  |
+| `fontFamily`                                   | Ordered declared font-family names and built-in sans-serif, serif, monospace, emoji. Other browser/system generic families are rejected. No discovery of arbitrary installed fonts.           | [mixed runs][css/text/mixed-runs], font-family parsing/shaping tests; [mixed-script breaking][css/text/breaking-products]                                                                  |
 | `fontSize`                                     | Nonnegative length/percentage; xx-small=9px, x-small=10px, small=13px, medium=16px, large=18px, x-large=24px, xx-large=32px; larger/smaller multiply/divide parent size by 1.2. No xxx-large. | [keywords][css/text/font-size-keywords]; `size_keywords_resolve_before_relative_units_and_shorthand`                                                                              |
 | `fontSizeAdjust`                               | none or nonnegative x-height/em ratio; adjusts glyphs/ex, not computed fontSize/em.                                                                                                           | [size adjust][css/text/font-size-adjust]; `size_adjust_inherits_and_font_shorthand_resets_it`                                                                                     |
-| `fontWeight`                                   | 1–1000, normal/bold/bolder/lighter; font matching and synthesis follow available faces.                                                                                                       | [mixed runs][css/text/mixed-runs], [synthesis][css/text/font-synthesis], [Tailwind text](../tests/cases/tailwind/text/case.json); complete relative-weight transitions not mapped |
+| `fontWeight`                                   | 1–1000, normal/bold/bolder/lighter; font matching and synthesis follow available faces.                                                                                                       | [mixed runs][css/text/mixed-runs], [synthesis][css/text/font-synthesis], [Tailwind text](../tests/cases/tailwind/text/case.json); [relative inheritance][css/text/relative-inheritance] |
 | `fontStretch`                                  | Nine width keywords from ultra-condensed to ultra-expanded, or nonnegative percentage.                                                                                                        | `font_stretch_is_a_keyword_or_a_percentage`; [Tailwind text](../tests/cases/tailwind/text/case.json)                                                                              |
 | `fontStyle`                                    | normal, italic, oblique with optional angle in −90deg…90deg; default oblique is 14deg.                                                                                                        | [mixed runs][css/text/mixed-runs], [synthesis][css/text/font-synthesis]; `font_style_is_italic_or_oblique_by_an_angle`                                                            |
 | `fontSynthesis`                                | none, weight, style, or weight style. Controls simulated bold/italic; does not disable native faces or variable axes.                                                                         | [synthesis][css/text/font-synthesis]; `synthesis_accepts_only_css_fonts_three_permissions`                                                                                        |
-| `fontKerning`                                  | normal, auto, none; normal resets the longhand's feature override.                                                                                                                            | `font_variants_set_their_features_one_longhand_at_a_time`; targeted kerning image controls not mapped                                                                             |
+| `fontKerning`                                  | normal, auto, none; normal resets the longhand's feature override.                                                                                                                            | `font_variants_set_their_features_one_longhand_at_a_time`; [paired features][css/text/font-features]                                                                             |
 | `fontFeatureSettings`, `fontVariationSettings` | normal or quoted 4-character OpenType tags; nonnegative integer/on/off feature values, numeric variation-axis values.                                                                         | `font_features_are_quoted_tags_with_their_values`, `font_variations_are_quoted_axes_with_numbers`; [ex/weight axis][css/values/font-ex]                                           |
 | `fontVariant`                                  | normal/none or supported longhand keyword combinations; not arbitrary feature-value functions.                                                                                                | Font-variant unit tests; [caps][css/text/caps], [font position][css/text/font-position]                                                                                           |
-| `fontVariantLigatures`                         | normal/none; common, discretionary, historical and contextual enable/disable keywords.                                                                                                        | Font-variant unit tests; per-feature rendered controls not mapped                                                                                                                 |
+| `fontVariantLigatures`                         | normal/none; common, discretionary, historical and contextual enable/disable keywords.                                                                                                        | Font-variant unit tests; [paired feature controls][css/text/font-features]                                                                                                                 |
 | `fontVariantCaps`                              | normal, small-caps, all-small-caps, petite-caps, all-petite-caps, unicase, titling-caps. Native forms, supported fallback forms, then synthesized small capitals where needed.                | [caps][css/text/caps]; synthetic/caseless shaping unit tests                                                                                                                      |
-| `fontVariantNumeric`                           | normal; lining/oldstyle, proportional/tabular, diagonal/stacked fractions, ordinal, slashed-zero.                                                                                             | Font-variant unit tests; [Tailwind text](../tests/cases/tailwind/text/case.json); per-feature browser controls not mapped                                                         |
-| `fontVariantEastAsian`                         | normal; jis78/83/90/04, simplified/traditional, full-width/proportional-width, ruby.                                                                                                          | Font-variant unit tests; independent rendering for each keyword not mapped                                                                                                        |
+| `fontVariantNumeric`                           | normal; lining/oldstyle, proportional/tabular, diagonal/stacked fractions, ordinal, slashed-zero.                                                                                             | Font-variant unit tests; [Tailwind text](../tests/cases/tailwind/text/case.json); [paired browser controls][css/text/font-features]                                                         |
+| `fontVariantEastAsian`                         | normal; jis78/83/90/04, simplified/traditional, full-width/proportional-width, ruby.                                                                                                          | Font-variant unit tests; [keyword controls][css/text/font-features] (actual substitutions depend on the pinned font)                                                                                                        |
 | `fontVariantAlternates`                        | normal, historical-forms. Feature-value functions such as stylistic()/styleset() are not supported.                                                                                           | Font-variant unit tests; targeted rendering not mapped                                                                                                                            |
 | `fontVariantPosition`                          | normal, sub, super; synthesize a run when the font lacks the complete native variant. Separate from verticalAlign, which moves inline boxes.                                                  | [font position][css/text/font-position], font/text unit tests                                                                                                                     |
 
-Gaps: pinned fonts that independently demonstrate each OpenType feature;
-native/missing-feature controls; variable axes × synthesis × size adjustment;
-relative weight and size inheritance through mixed runs and inline boxes.
+Coverage: [feature controls][css/text/font-features] pairs 44 accepted keyword
+settings with default-font controls; [axes and synthesis][css/text/axes-synthesis]
+and [relative inheritance][css/text/relative-inheritance] cover variable axes,
+size adjustment and nested runs. Missing substitutions are explicitly distinct
+from unsupported CSS. The pinned fonts do not prove every OpenType feature on
+every font; whole-run missing-feature fallback also has direct shaping tests.
 
 ## Text layout and decoration
 
@@ -328,9 +348,12 @@ including nested/empty spans; it is not a separate width/height/margin box.
 `boxDecorationBreak` is not a supported property. Inline View/Image/SVG boxes are
 separate atomic items and use the paragraph's placement rules.
 
-Gaps: line-break thresholds under mixed fonts, decorations across nested runs,
-all overflow-wrap/word-break/white-space interactions, bidi × inline atoms ×
-vertical alignment, and inherited style changes that invalidate text caches.
+Coverage: [breaking products][css/text/breaking-products] checks 108 selected
+white-space/word-break/overflow-wrap combinations; [bidi atoms][css/text/bidi-inline-atoms]
+crosses directions, writing modes and inline alignment; and
+[nested decorations][css/text/nested-decorations] checks inherited and local
+lines through nested runs. Dynamic fixtures revisit prior states to detect stale
+shaping/layout caches. Arbitrary scripts and all Unicode break classes are not exhausted.
 
 ## SVG presentation styles
 
@@ -365,10 +388,12 @@ text-before-edge/text-top, text-after-edge/text-bottom and ideographic.
 AlignmentBaseline additionally accepts baseline; auto/baseline clear its override.
 BaselineShift takes baseline, sub, super or a signed SVG length/percentage.
 
-Gaps: independent assertions for every primitive color property; marker paint ×
-dash/cap × non-scaling transforms; baseline tables and nested shifts with all
-writing directions. Inline/file parity and Native/Web parity remain separate
-checks even where the rendered picture is intended to match.
+Coverage: [SVG combinations](../tests/cases/svg/combinations/) retains matching
+inline/file inputs for marker strokes and paint order, gradient/clip/filter
+chains, text paths and baseline shifts, and viewports/use references. All four
+families have independent browser captures; two changing fixtures check marker
+styles and file-image placement. Input-path, Native/Web and specification checks
+remain distinct evidence.
 
 ## Deliberately excluded and currently limited behavior
 
@@ -431,12 +456,62 @@ Browser cases use `at: [0]`; dynamic cases do not pretend to be live browser
 oracles. Their browser controls and numerical checks establish semantics, while
 fresh/seek and Native/Web checks establish consistency.
 
-Remaining work includes unequal border widths/styles/radii, broader intrinsic
-and indefinite percentage sizing, mixed-script font fallback, multiple backdrop
-roots, SVG cross-family combinations and native backend coverage on other
-platforms. Fixed-seed generated trees can explore additional combinations;
-minimized failures should become permanent cases, never automatically accepted
-screenshots. No global pairwise coverage or code-coverage percentage is claimed.
+The follow-up coverage adds **482 CSS combinations**, **58 SVG combinations
+through two input paths**, and **152 dynamic samples**. It retains **74 new
+fixtures** in total, including the 20 generated-tree fixtures.
+
+| Follow-up batch | Static combinations | Dynamic samples | Evidence |
+| --- | ---: | ---: | --- |
+| Units and sizing | 60 | 16 | Independent box arithmetic, three browsers, intrinsic/percentage regression tests |
+| Borders and shadows | 66 | 16 | Three browsers, reviewed strict Valle images, missing-effect mutations |
+| Backgrounds, images and colors | 74 | 32 | Three browsers, tile arithmetic and independent positioning expectations |
+| Fonts and text | 190 | 32 | Pinned fonts, paired feature controls, shaping/geometry regressions and reviewed images |
+| Nested compositing | 52 | 16 | All blend modes, backdrop-root controls and alpha/luminance mask operators |
+| Transforms and paths | 40 | 24 | Three browsers, origin/order/clipping controls and changing states |
+| SVG cross-module inputs | 58 × 2 paths | 16 | Inline/file equality, three browsers and marker-unit geometry regression |
+| Generated layout trees | 1,000 trees | — | 9,742 boxes; 116,904 scalar assertions; exact three-browser geometry and images |
+
+The new regressions fixed indefinite percentage heights, intrinsic width
+constraints, rounded-background positioning, bidi order around inline boxes and
+vertical line breaking, and non-scaling marker sizes. Seek comparisons now
+resolve font handles to font content and variation settings: allocation order
+is not an observable rendering change, while glyph data and pixels still compare.
+The full regression suite also exposed control-only bidi runs being counted as
+extra atoms in box-only vertical paragraphs. Those runs are now excluded, with
+three writing modes and both directions checked explicitly.
+
+The existing [SVG background case][css/backgrounds/svg-image] now selects the
+retained Firefox capture for round positioning after a specification review.
+Its README records the resized-tile arithmetic and the Chrome/WebKit offset;
+a strict Valle image and a missing-round mutation protect against geometric
+regressions. Its original browser captures have not been rewritten.
+
+Capture metadata for these new static references is retained once in
+[coverage-environment.json](../tests/baselines/browser/coverage-environment.json),
+with an explicit fixture list. Older references retain their original metadata;
+they are not represented as recaptured with the newer browsers.
+
+### Runtime validation
+
+All 74 new fixtures are registered in the existing Native/Chromium WebGPU
+comparison. Dynamic ones revisit frames in the order `0,7,1,6,2,5,3,4,0`;
+the native runner also checks fresh, forward, reverse and alternating visits.
+On macOS with Apple M2 Pro / Metal, `cargo xtask test` passes: **776 Rust test
+functions**, **333 scene cases**, **50 Bun tests**, **201 Native/WebGPU fixtures
+with 538 frame visits**, and the browser playback/export and Studio checks.
+The 74 new fixtures account for 226 of those visits; their largest native/web
+channel difference is 1. All 20 generated-tree images match exactly across the
+two runtimes. `cargo xtask lint` and `cargo xtask fmt --check` also pass.
+
+These counts describe different layers, not quantities to add together. A
+passed Rust case-runner function contains many scenes and numerical assertions.
+
+The existing CI already runs native cases on Linux and Windows with the pinned
+Lavapipe, and native plus browser tests on macOS. This local, unpushed change
+has not been executed on Linux or Windows. No new platform pass is claimed.
+Fixed-seed trees explore a declared grammar, not all possible CSS combinations;
+minimized failures must become permanent regressions rather than automatically
+accepted screenshots.
 
 ## Keeping this inventory current
 
@@ -447,8 +522,9 @@ under the feature they exercise, following the existing cases directory layout.
 
 The CSS case index below is a snapshot of the checked-in `case.json` definitions.
 Its box/text counts describe explicit expectations; its browser choice records
-the reviewed baseline, not a fresh run. Native/Web means that `player.ts` lists
-the scene; it does not mean that test was executed during this audit.
+the reviewed baseline, not a fresh browser capture. Native/Web means that
+`player.ts` lists the scene. Actual execution results are recorded under Runtime
+validation above; registration alone is not a passing result.
 
 <!-- CSS case index follows. Keep this in sync when cases are added or removed. -->
 
@@ -459,120 +535,184 @@ the fixture is registered in `web/tests/player.ts`; it is not evidence that ever
 browser implements WebGPU. Static browser cases sample frame 0; dynamic rows
 retain the listed number of sampled frames and run seek checks automatically.
 
-| Case                                                                                   | Frames | Boxes / text objects | Native/Web entry | Assertion                                                                                                                                                                                                                                                                                                                                                        |
-| -------------------------------------------------------------------------------------- | ------ | -------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [background/gradients][css/background/gradients]                                       | 1      | 0 / 0                | Not listed       | Continuous, hard-stop, repeating and radial gradients preserve stop positions and sRGB interpolation.                                                                                                                                                                                                                                                            |
-| [background/origin-clip][css/background/origin-clip]                                   | 1      | 3 / 0                | Not listed       | The same bottom-right 40x30 tile is positioned against three different origin boxes, then cropped to the content box. The border and content dimensions stay fixed.                                                                                                                                                                                              |
-| [backgrounds/svg-image][css/backgrounds/svg-image]                                     | 1      | 0 / 0                | Not listed       | SVG background images preserve their intrinsic aspect ratio, scale to the requested size and use the same positioning, clipping and tiling rules as raster images.                                                                                                                                                                                               |
-| [border/styles-radius][css/border/styles-radius]                                       | 1      | 0 / 0                | Not listed       | Solid/double/dashed/dotted borders and elliptical/asymmetric rounded corners use the declared widths and outer shapes.                                                                                                                                                                                                                                           |
-| [box-model/border-box][css/box-model/border-box]                                       | 1      | 2 / 0                | Not listed       | The 120x100 border box includes 8px of border and 20px of padding; the 80x60 content box expands to 108x88.                                                                                                                                                                                                                                                      |
-| [box-model/content-box][css/box-model/content-box]                                     | 1      | 1 / 0                | Not listed       | Fixed content-box width and height exclude padding and borders, which extend outside the content box.                                                                                                                                                                                                                                                            |
-| [box-model/percentage-padding][css/box-model/percentage-padding]                       | 1      | 2 / 0                | Not listed       | Child percentage width/height use the parent content box. All four percentage paddings use its 220px inline size, so each is 22px even in the shorter vertical axis.                                                                                                                                                                                             |
-| [cascade/wide-keywords][css/cascade/wide-keywords]                                     | 1      | 2 / 0                | Listed           | CSS-wide keywords copy computed parent values, reset initial values and resolve unset by inheritance, at the declaration's place in shorthand and longhand order.                                                                                                                                                                                                |
-| [color/current-mix][css/color/current-mix]                                             | 1      | 0 / 0                | Listed           | currentColor mixtures resolve on the consuming element through CSS gradients, shadows, inherited text and SVG paints, including nested mixtures and compact SVG instance rows.                                                                                                                                                                                   |
-| [color/srgb-alpha][css/color/srgb-alpha]                                               | 1      | 0 / 0                | Not listed       | Hex, rgb, hsl and color(srgb) produce their sRGB colors; straight-alpha black/red composite over white, including fully transparent input.                                                                                                                                                                                                                       |
-| [compositing/backdrop-blend/basic][css/compositing/backdrop-blend/basic]               | 1      | 0 / 0                | Not listed       | Backdrop invert, multiply and opacity must preserve their compositing order. Controls use full, half and zero opacity; the final box has no foreground content and must not multiply the filtered page by the original page again.                                                                                                                               |
-| [compositing/backdrop-blend/clips][css/compositing/backdrop-blend/clips]               | 1      | 0 / 0                | Not listed       | Foreground blending happens against the filtered backdrop before clip, alpha mask and group opacity. Full/half/zero opacity controls retain identical clip boundaries.                                                                                                                                                                                           |
-| [compositing/backdrop-blend/controls][css/compositing/backdrop-blend/controls]         | 1      | 0 / 0                | Not listed       | Isolated controls for the backdrop/blend combination: invert alone filters the page before normal source-over content, while multiply alone blends foreground content with the original page.                                                                                                                                                                    |
-| [compositing/backdrop-blend/empty-bounds][css/compositing/backdrop-blend/empty-bounds] | 1      | 0 / 0                | Not listed       | A zero-width backdrop has no pixels to filter but still isolates its overflowing foreground. The multiply-only control sees the blue page, while the filtered control keeps the original green.                                                                                                                                                                  |
-| [compositing/backdrop-blend/nested][css/compositing/backdrop-blend/nested]             | 1      | 0 / 0                | Not listed       | A filtered child reads its isolated parent background. Parent opacity is applied after the child blend; the last control also applies child opacity, so parent opacity must not be folded into the backdrop twice.                                                                                                                                               |
-| [compositing/backdrop-blend/overflow][css/compositing/backdrop-blend/overflow]         | 1      | 0 / 0                | Not listed       | An ancestor overflow clip applies after the descendant backdrop/content blend. The visible control retains the protruding filter; the hidden control cuts both backdrop and foreground at the ancestor boundary.                                                                                                                                                 |
-| [compositing/backdrop-blend/planes][css/compositing/backdrop-blend/planes]             | 1      | 0 / 0                | Not listed       | A preserve-3d parent isolates its planes from the page. Unlike the 2D control, a plane over a transparent scene backdrop retains its foreground colors. Half opacity composites the complete plane result once.                                                                                                                                                  |
-| [compositing/clip-mask-matrix][css/compositing/clip-mask-matrix]                       | 1      | 36 / 0               | Listed           | 36 combinations: 3 masks × 3 clips × 2 transforms × 2 opacities. An overflowing child distinguishes clipping the group from clipping only its background.                                                                                                                                                                                                        |
-| [compositing/dynamic-layers][css/compositing/dynamic-layers]                           | 8      | 1 / 0                | Listed           | Eight states change opacity, filter, transform, clip, mask, display and visibility around nested backdrop/blend layers. Zero opacity, display:none and visibility:hidden must produce identical background-only frames.                                                                                                                                          |
-| [compositing/filter-blend-matrix][css/compositing/filter-blend-matrix]                 | 1      | 36 / 0               | Listed           | 36 combinations: 4 backdrop filters × 3 blend modes × 3 opacities. Each filter has normal-blend and zero-opacity controls; translucent content leaves the filtered backdrop visible.                                                                                                                                                                             |
-| [compositing/group-opacity][css/compositing/group-opacity]                             | 1      | 0 / 0                | Not listed       | Group opacity applies once after opaque children overlap; per-child alpha blends twice in the overlap and therefore gives a different color.                                                                                                                                                                                                                     |
-| [compositing/isolation-blend][css/compositing/isolation-blend]                         | 1      | 0 / 0                | Not listed       | Without isolation, cyan/magenta multiply with the yellow page; an isolated group blends children against its transparent group backdrop, then composites the group normally.                                                                                                                                                                                     |
-| [compositing/nested-matrix][css/compositing/nested-matrix]                             | 1      | 32 / 0               | Listed           | 32 combinations: isolation × parent opacity × overflow × empty/content × inner blend. Nested backdrop regions extend outside the parent so grouping, clipping and empty layers remain observable.                                                                                                                                                                |
-| [compositing/rounded-blend][css/compositing/rounded-blend]                             | 1      | 1 / 0                | Not listed       | The oversized yellow child is clipped to rounded corners and multiplied with the aqua parent inside an isolated group: lime inside, aqua in the corners, white outside the parent.                                                                                                                                                                               |
-| [compositing/scene-blend-isolation][css/compositing/scene-blend-isolation]             | 1      | 0 / 0                | Not listed       | A preserve-3d scene establishes an isolated stacking context. Its blending planes see the scene background and previously painted planes, not the page outside it. The two-plane overlap is blue; a transparent scene keeps cyan instead of multiplying it by the yellow page.                                                                                   |
-| [compositing/stacking-opacity][css/compositing/stacking-opacity]                       | 1      | 0 / 0                | Not listed       | An opacity group traps its high-z-index descendant below a later sibling stacking context. The opaque positioned control lets that descendant participate in the outer context.                                                                                                                                                                                  |
-| [compositing/visibility-backdrop][css/compositing/visibility-backdrop]                 | 1      | 6 / 0                | Listed           | Six controls distinguish visible, zero opacity, inherited hidden, display:none and explicitly visible children of a hidden filtered box, with normal and multiply blending. A hidden box must not paint its backdrop; visible descendants still paint.                                                                                                           |
-| [filter/blur-overflow][css/filter/blur-overflow]                                       | 1      | 0 / 0                | Not listed       | Blur extends beyond child geometry. The ancestor overflow clip truncates the filtered pixels at its padding box, while the visible control preserves them.                                                                                                                                                                                                       |
-| [filter/opacity][css/filter/opacity]                                                   | 1      | 0 / 0                | Not listed       | Children composite before their parent invert filter and group opacity. A translucent child changes the overlap before filtering, rather than applying parent opacity twice.                                                                                                                                                                                     |
-| [filter/order][css/filter/order]                                                       | 1      | 0 / 0                | Not listed       | Filter functions apply in authored order to the complete group, including its child: invert then brightness is observably different from brightness then invert.                                                                                                                                                                                                 |
-| [filter/transformed-bounds][css/filter/transformed-bounds]                             | 1      | 18 / 0               | Listed           | 18 combinations: 3 filters × 3 transforms × ancestor overflow. Blur and shadow bounds extend beyond the source and must be clipped after the child transform by the rounded ancestor.                                                                                                                                                                            |
-| [flex/alignment-order][css/flex/alignment-order]                                       | 1      | 3 / 0                | Not listed       | Order rearranges items to widths 60/80/40; 120px remaining width forms two 60px gaps. align-self overrides the centered cross-axis alignment.                                                                                                                                                                                                                    |
-| [flex/automatic-minimum][css/flex/automatic-minimum]                                   | 1      | 4 / 0                | Not listed       | The automatic minimum keeps the first item at its 180px min-content width, overflowing the 220px row beside an 80px sibling. min-width:0 permits 140px instead.                                                                                                                                                                                                  |
-| [flex/column-minimum][css/flex/column-minimum]                                         | 1      | 6 / 0                | Not listed       | A column flex item keeps its 120px content minimum unless min-height: 0 is explicit. The latter shrinks to 90px after the 80px footer and 10px gap.                                                                                                                                                                                                              |
-| [flex/constrained-growth][css/flex/constrained-growth]                                 | 1      | 3 / 0                | Not listed       | Equal growth first proposes 100px each; freezing the first item at max-width 80px redistributes the remaining 220px as 110/110.                                                                                                                                                                                                                                  |
-| [flex/constraints-matrix][css/flex/constraints-matrix]                                 | 1      | 72 / 0               | Listed           | 24 combinations cross parent width, gap, box-sizing and row direction. Equal percentage bases shrink equally until the first item hits its min/max; the unfrozen second item takes the remaining space.                                                                                                                                                          |
-| [flex/dynamic-constraints][css/flex/dynamic-constraints]                               | 8      | 1 / 0                | Listed           | Widths cross the exact 120px flex wrapping threshold in both directions; a flex/grid parent alternates while nested percentage sizing remains min-constrained.                                                                                                                                                                                                   |
-| [flex/grid-child][css/flex/grid-child]                                                 | 1      | 7 / 0                | Not listed       | A growing grid inside a padded flex row receives the remaining 280px. Its 260 by 160 content box resolves fractional tracks after gaps.                                                                                                                                                                                                                          |
-| [flex/grow-shrink][css/flex/grow-shrink]                                               | 1      | 4 / 0                | Not listed       | After a 12px gap, 288px free width grows 1:2 to 96/192. A 300px basis shrinks to 240 proportionally to 160/80.                                                                                                                                                                                                                                                   |
-| [flex/percentage-basis][css/flex/percentage-basis]                                     | 1      | 6 / 0                | Not listed       | Percentage bases resolve against the 300px inner main size before the 20px gap. Shrinking makes two 140px items; with shrink disabled both remain 150px and overflow.                                                                                                                                                                                            |
-| [flex/reverse-auto-margins][css/flex/reverse-auto-margins]                             | 1      | 8 / 0                | Not listed       | Reversed axes place the first item against the main-start edge on the right/bottom; an auto main-axis margin absorbs free width.                                                                                                                                                                                                                                 |
-| [flex/wrap-gap][css/flex/wrap-gap]                                                     | 1      | 4 / 0                | Not listed       | Two 100px items and a 20px column gap fill each 220px line; the next line starts after 40px height plus 12px row gap.                                                                                                                                                                                                                                            |
-| [flex/wrap-thresholds][css/flex/wrap-thresholds]                                       | 1      | 108 / 0              | Listed           | 36 combinations cross widths just below/at/above the fit threshold, gap, wrap mode and row direction. Only the below-threshold wrapping cases gain a line; nowrap shrinks both items to 59px.                                                                                                                                                                    |
-| [grid/auto-placement-dense][css/grid/auto-placement-dense]                             | 1      | 6 / 0                | Not listed       | Sparse row placement leaves the first-row hole after two-column items; dense placement puts the final one-column item back into that hole.                                                                                                                                                                                                                       |
-| [grid/auto-repeat][css/grid/auto-repeat]                                               | 1      | 4 / 0                | Not listed       | auto-fill retains three 100px tracks after gaps; auto-fit collapses the unoccupied third track and gap, producing two 155px tracks.                                                                                                                                                                                                                              |
-| [grid/flex-child][css/grid/flex-child]                                                 | 1      | 7 / 0                | Not listed       | Explicit grid tracks become the containing width for nested flex layout. Padding and gaps are deducted once; cross-axis centering is relative to each cell.                                                                                                                                                                                                      |
-| [grid/named-areas][css/grid/named-areas]                                               | 1      | 4 / 0                | Not listed       | Named areas span the authored cells: head and foot span both columns; side and main occupy the middle row.                                                                                                                                                                                                                                                       |
-| [grid/named-lines-implicit][css/grid/named-lines-implicit]                             | 1      | 2 / 0                | Not listed       | Named column lines delimit a 190px span. Placement in row 3 creates implicit rows of 30px then 50px, separated by 10px gaps.                                                                                                                                                                                                                                     |
-| [grid/placement][css/grid/placement]                                                   | 1      | 3 / 0                | Not listed       | Explicit grid lines place a two-column span and a two-row span; self alignment centers a 40x20 item inside an 80x50 cell.                                                                                                                                                                                                                                        |
-| [grid/tracks][css/grid/tracks]                                                         | 1      | 6 / 0                | Not listed       | After 80px fixed track and 20px gaps, 240px is split into 80px and 160px fractional tracks. Explicit rows retain 40px and 60px heights.                                                                                                                                                                                                                          |
-| [images/object-fit][css/images/object-fit]                                             | 1      | 3 / 0                | Not listed       | A 2:1 image is contained, covered or filled in a 100x100 box. Integer scaling and pixelated sampling expose fit/crop boundaries without interpolation noise.                                                                                                                                                                                                     |
-| [images/object-position][css/images/object-position]                                   | 1      | 3 / 0                | Not listed       | A 2:1 image covers a square, cropping horizontally. Left, center and right object positions select different 2-color windows of the 4-color source.                                                                                                                                                                                                              |
-| [layout/block-flow][css/layout/block-flow]                                             | 1      | 4 / 0                | Not listed       | Block children fill the 256px content width, stack vertically and split horizontal auto margins equally.                                                                                                                                                                                                                                                         |
-| [layout/nested-sizing][css/layout/nested-sizing]                                       | 1      | 32 / 0               | Listed           | Eight combinations cross outer/inner Flex/Grid with definite percentage constraints or max-content sizing. The inner content is 50+10+70=130px; its border box is 146px and the intrinsic outer box is 158px.                                                                                                                                                    |
-| [layout/vertical-block][css/layout/vertical-block]                                     | 1      | 22 / 0               | Listed           | Vertical block flow, auto inline stretch, logical margins, orthogonal intrinsic sizing and opposite nested block directions.                                                                                                                                                                                                                                     |
-| [layout/vertical-flex][css/layout/vertical-flex]                                       | 1      | 20 / 0               | Listed           | Flex main/cross axes follow writing-mode, including row/column reverse, wrapping, gaps and RTL inline progression.                                                                                                                                                                                                                                               |
-| [layout/vertical-grid][css/layout/vertical-grid]                                       | 1      | 20 / 0               | Listed           | Grid columns follow the inline axis and rows the block axis, with spanning, fractions, gaps, RTL and an orthogonal aspect-ratio item.                                                                                                                                                                                                                            |
-| [layout/vertical-position][css/layout/vertical-position]                               | 1      | 20 / 0               | Listed           | Physical and logical absolute insets, percentage padding and static-position hoisting through an orthogonal flow.                                                                                                                                                                                                                                                |
-| [mask/backdrop][css/mask/backdrop]                                                     | 1      | 0 / 0                | Not listed       | A clip and binary alpha mask limit both the filtered backdrop and foreground content; the control at half opacity reveals the unfiltered page beneath.                                                                                                                                                                                                           |
-| [mask/clip][css/mask/clip]                                                             | 1      | 0 / 0                | Not listed       | Clip and alpha mask intersect over the whole group before group opacity. The right half is removed even where a child extends beyond the remaining area.                                                                                                                                                                                                         |
-| [mask/composite][css/mask/composite]                                                   | 1      | 0 / 0                | Not listed       | Two binary alpha masks combine by add, subtract, intersect or exclude. The first mask is the source and the lower mask the destination; compositing changes the child with its parent.                                                                                                                                                                           |
-| [mask/shape][css/mask/shape]                                                           | 1      | 5 / 0                | Listed           | CSS shape() resolves responsive lengths, relative and absolute curves, reflected controls, arcs and evenodd subpaths in the selected reference box before transforms.                                                                                                                                                                                            |
-| [overflow/clipping][css/overflow/clipping]                                             | 1      | 2 / 0                | Not listed       | The first oversized child is clipped to its 120px padding box; the second extends 20px outside both edges.                                                                                                                                                                                                                                                       |
-| [position/absolute-padding][css/position/absolute-padding]                             | 1      | 3 / 0                | Not listed       | A static intermediate box does not become the containing block. Absolute percentage sizes and right/bottom offsets use the positioned ancestor padding box (232 by 152).                                                                                                                                                                                         |
-| [position/absolute-relative][css/position/absolute-relative]                           | 1      | 3 / 0                | Not listed       | Absolute insets use the parent padding box and do not consume flow space; relative offsets move painting without moving the following block.                                                                                                                                                                                                                     |
-| [position/logical-containing-block][css/position/logical-containing-block]             | 1      | 24 / 0               | Listed           | 12 combinations cross writing mode, direction and absolute/fixed positioning. An identity transform establishes the containing block through a static intermediate; logical insets resolve against its padding box.                                                                                                                                              |
-| [shadow/blur][css/shadow/blur]                                                         | 1      | 0 / 0                | Not listed       | Outer and inset shadows blur an offset silhouette while retaining the solid box and clipping the inset shadow to its interior.                                                                                                                                                                                                                                   |
-| [shadow/outer-inset][css/shadow/outer-inset]                                           | 1      | 0 / 0                | Not listed       | An 8x10 offset and 4px spread shadow expands outside one box and clips inside the other; zero blur makes boundaries exact.                                                                                                                                                                                                                                       |
-| [shadow/rounded-clip][css/shadow/rounded-clip]                                         | 1      | 0 / 0                | Not listed       | A rounded overflow clip contains a translated child, including its opacity group, while the parent outer shadow remains outside the clip.                                                                                                                                                                                                                        |
-| [sizing/aspect-ratio][css/sizing/aspect-ratio]                                         | 1      | 2 / 0                | Not listed       | A definite width determines auto height at 2:1, and a definite height determines auto width at 1:1.                                                                                                                                                                                                                                                              |
-| [sizing/auto-height-limits][css/sizing/auto-height-limits]                             | 1      | 3 / 0                | Not listed       | Auto height is 20+30+16+4=70px. min-height raises it to 100px; max-height lowers it to 48px and overflow clips the children.                                                                                                                                                                                                                                     |
-| [sizing/intrinsic-width][css/sizing/intrinsic-width]                                   | 1      | 2 / 0                | Not listed       | A wrapping flex container has min-content width 100px (widest item) and max-content width 170px (60+10+100). At the minimum it has two 30px lines and one 10px gap.                                                                                                                                                                                              |
-| [sizing/percentage-min-max][css/sizing/percentage-min-max]                             | 1      | 4 / 0                | Not listed       | Percentages resolve against the 320px containing block, then max/min clamp 240 to 200 and 80 to 120. calc(50% - 20px) is 140px.                                                                                                                                                                                                                                  |
-| [text/alignment][css/text/alignment]                                                   | 1      | 1 / 1                | Not listed       | Two preformatted lines align their right edge to x=260, while baselines remain separated by 32px.                                                                                                                                                                                                                                                                |
-| [text/alignment-matrix][css/text/alignment-matrix]                                     | 1      | 12 / 0               | Listed           | 12 independent display/alignment combinations place empty atomic inline boxes beside nested smaller superscript text; display mode is not coupled to alignment choice.                                                                                                                                                                                           |
-| [text/bidi][css/text/bidi]                                                             | 1      | 0 / 0                | Listed           | Direction sets paragraph alignment, mixed-script ordering, flex order and logical box sides. CSS embedding, overrides, isolates and plaintext preserve source indices and scope boundaries.                                                                                                                                                                      |
-| [text/caps][css/text/caps]                                                             | 1      | 0 / 0                | Listed           | Petite/all-petite/unicase use native small-cap fallbacks where present. Each row matches its explicit OpenType-feature control. Synthetic casing, caseless characters and byte indices are covered by text unit tests.                                                                                                                                           |
-| [text/combine][css/text/combine]                                                       | 1      | 0 / 0                | Listed           | Combined text remains horizontal in one vertical 1em cell, including fullwidth digits, compression, both column directions, underline and one emphasis mark for the whole cell.                                                                                                                                                                                  |
-| [text/decoration-cjk][css/text/decoration-cjk]                                         | 1      | 10 / 10              | Not listed       | Auto ink skipping keeps CJK glyphs and punctuation continuously decorated, while Latin descenders still make gaps. Solid, double, dotted, dashed and wavy underlines share this rule; an explicit offset moves the line without changing text layout. Transparent glyph fill isolates the decoration pixels without removing the glyph ink used to compute gaps. |
-| [text/decoration-matrix][css/text/decoration-matrix]                                   | 1      | 30 / 0               | Listed           | 30 combinations cross five underline styles, three writing modes and two group opacities on mixed-color text with centered stroke and a sharp shadow.                                                                                                                                                                                                            |
-| [text/dynamic-inheritance][css/text/dynamic-inheritance]                               | 8      | 1 / 0                | Listed           | Inherited font size, line height and color change alongside the wrap threshold, RTL ellipsis and mixed-size vertical writing. Repeated seek restores glyph positions, line counts and paragraph direction.                                                                                                                                                       |
-| [text/ellipsis][css/text/ellipsis]                                                     | 1      | 2 / 0                | Not listed       | A non-wrapping overflowing line is either clipped or ends in an ellipsis; neither mode draws outside its padding box.                                                                                                                                                                                                                                            |
-| [text/emphasis][css/text/emphasis]                                                     | 1      | 0 / 0                | Listed           | Emphasis marks are centered on typographic units, skip spaces and punctuation, honor custom glyphs, colors and horizontal/vertical placement.                                                                                                                                                                                                                    |
-| [text/font-position][css/text/font-position]                                           | 1      | 4 / 0                | Listed           | Native numeral variants remain native; incomplete runs synthesize all glyphs without changing line metrics, including adjusted sizes and caps.                                                                                                                                                                                                                   |
-| [text/font-shorthand][css/text/font-shorthand]                                         | 1      | 2 / 0                | Not listed       | Font shorthand assigns weight, size, line height and family and resets omitted italic and weight declarations.                                                                                                                                                                                                                                                   |
-| [text/font-size-adjust][css/text/font-size-adjust]                                     | 1      | 1 / 0                | Listed           | Adjusted 24px Noto Sans with aspect 1.072 matches a 48px control, including a Span override. The box uses 31.25px computed size: em stays 31.25px while ex becomes 33.5px.                                                                                                                                                                                       |
-| [text/font-size-keywords][css/text/font-size-keywords]                                 | 1      | 8 / 0                | Listed           | A fixed 16px medium size table resolves em widths; smaller in the font shorthand resolves against the parent computed size.                                                                                                                                                                                                                                      |
-| [text/font-synthesis][css/text/font-synthesis]                                         | 1      | 0 / 0                | Listed           | A regular-only font demonstrates weight/style permissions independently. none disables synthesis, and weight does not allow a synthetic italic.                                                                                                                                                                                                                  |
-| [text/inline-box][css/text/inline-box]                                                 | 1      | 3 / 0                | Listed           | Inline padding and borders participate in line breaking; backgrounds and borders slice continuously across wrapped fragments, including nested and empty spans.                                                                                                                                                                                                  |
-| [text/inline-boxes][css/text/inline-boxes]                                             | 1      | 3 / 0                | Listed           | Replaced content and inline block, flex and grid boxes wrap with text, use their margins and appropriate baselines, and retain nested content and Span alignment.                                                                                                                                                                                                |
-| [text/inline-directions][css/text/inline-directions]                                   | 1      | 2 / 0                | Listed           | Inline decorations follow RTL order and the vertical inline axis, preserving sliced edges and the physical gradient direction on wrapped spans.                                                                                                                                                                                                                  |
-| [text/inline-writing][css/text/inline-writing]                                         | 1      | 3 / 0                | Listed           | Inline boxes retain independent writing modes while their margin boxes participate in vertical and RTL paragraphs, including nested inline alignment and backgrounds.                                                                                                                                                                                            |
-| [text/mixed-runs][css/text/mixed-runs]                                                 | 1      | 1 / 0                | Not listed       | Normal, bold larger and italic runs share one baseline; their sizes and shapes remain distinct inside a 48px line.                                                                                                                                                                                                                                               |
-| [text/mixed-size-matrix][css/text/mixed-size-matrix]                                   | 1      | 12 / 0               | Listed           | 12 combinations cross three writing modes, two orientations and two child sizes. Mixed vertical text aligns on the central baseline; sideways retains alphabetic alignment.                                                                                                                                                                                      |
-| [text/overflow-wrap][css/text/overflow-wrap]                                           | 1      | 1 / 1                | Not listed       | overflow-wrap:anywhere breaks an otherwise unbreakable word into two four-glyph lines inside a 100px content width.                                                                                                                                                                                                                                              |
-| [text/paint-order][css/text/paint-order]                                               | 1      | 1 / 1                | Not listed       | Text inherits paint-order. Painting the centered stroke before the opaque fill preserves the interiors of CJK and Latin glyphs without changing line layout.                                                                                                                                                                                                     |
-| [text/paragraph][css/text/paragraph]                                                   | 1      | 5 / 5                | Listed           | Last-line alignment applies at soft and forced paragraph ends; pretty avoids a final orphan without adding a line; anywhere breaks even no-break spaces and keep-all; strict and loose differ at small kana.                                                                                                                                                     |
-| [text/preserved-spaces][css/text/preserved-spaces]                                     | 1      | 1 / 1                | Not listed       | white-space: pre preserves doubled spaces and the explicit line break, with a 32px line height and the same pinned Noto Sans font in every renderer.                                                                                                                                                                                                             |
-| [text/spacing-indent][css/text/spacing-indent]                                         | 1      | 1 / 1                | Not listed       | Letter spacing adds 2px per glyph slot and word spacing adds 4px to the preserved space. The 20px indent applies to the first line only.                                                                                                                                                                                                                         |
-| [text/truncation-matrix][css/text/truncation-matrix]                                   | 1      | 12 / 0               | Listed           | Eight width/overflow/direction combinations check clip versus ellipsis; four font-size/line-clamp combinations check one and two visible lines with independently expected 32px and 64px auto heights.                                                                                                                                                           |
-| [text/underline-position][css/text/underline-position]                                 | 1      | 0 / 0                | Listed           | Underline position places horizontal lines below descenders and vertical lines on the chosen physical side, with inherited values, mixed sizes and explicit offsets.                                                                                                                                                                                             |
-| [text/vertical][css/text/vertical]                                                     | 1      | 4 / 0                | Listed           | Vertical Text lays out columns in both directions, uses upright CJK and vertical punctuation with sideways Latin, supports upright and sideways overrides, and preserves styled text and decorations.                                                                                                                                                            |
-| [text/vertical-align][css/text/vertical-align]                                         | 1      | 12 / 0               | Listed           | Inline alignment positions child line boxes relative to the parent or whole line, with nested scopes, percentages and signed lengths. Span backgrounds follow their own baselines.                                                                                                                                                                               |
-| [text/vertical-container][css/text/vertical-container]                                 | 1      | 8 / 0                | Listed           | Inherited vertical text and percentage inline padding coexist with a horizontal paragraph and an aspect-ratio SVG in vertical flex containers.                                                                                                                                                                                                                   |
-| [text/word-wrap][css/text/word-wrap]                                                   | 1      | 1 / 1                | Not listed       | Normal white-space wraps at the word boundary after beta; words remain whole and baselines are 32px apart.                                                                                                                                                                                                                                                       |
-| [text/wrap-matrix][css/text/wrap-matrix]                                               | 1      | 24 / 24              | Listed           | 24 combinations cross width around four M advances, white-space, word-break and overflow-wrap. Noto Sans M advances 907/1000 em: 86px fits three at 24px, 88px fits four; nowrap disables emergency wrapping.                                                                                                                                                    |
-| [text/wrapping][css/text/wrapping]                                                     | 1      | 1 / 1                | Not listed       | At 24px Noto Sans, four M glyphs fit in 100px and five do not. break-all wraps twelve glyphs into three lines at a 32px line height.                                                                                                                                                                                                                             |
-| [transform/clip][css/transform/clip]                                                   | 1      | 0 / 0                | Not listed       | A child clip rotates with its element while the ancestor overflow clip stays in ancestor space. Nested child content obeys both clips.                                                                                                                                                                                                                           |
-| [transform/origin-order][css/transform/origin-order]                                   | 1      | 0 / 0                | Not listed       | Translation moves a box by 20/40px; top-left scaling doubles both axes; a 90-degree rotation swaps extents around the top-left origin.                                                                                                                                                                                                                           |
-| [transforms/shape-path][css/transforms/shape-path]                                     | 1      | 2 / 0                | Listed           | Responsive shape motion paths use the containing reference box, follow curve tangents and clamp open ends.                                                                                                                                                                                                                                                       |
-| [values/absolute-units][css/values/absolute-units]                                     | 1      | 6 / 0                | Listed           | Absolute units resolve to CSS reference pixels, including mixed-unit calc; each left bar equals its independently sized pixel control.                                                                                                                                                                                                                           |
-| [values/font-ex][css/values/font-ex]                                                   | 1      | 4 / 0                | Listed           | ex uses the selected font x-height. Pinned Noto Sans has 536/1000 units/em at weight 400 and 546/1000 at weight 700. Checks calc, inherited font size and font variation against pixel controls.                                                                                                                                                                 |
+| Case | Frames | Boxes / text objects | Native/Web entry | Assertion |
+| --- | ---: | ---: | --- | --- |
+| [background/dynamic-layer-lists][css/background/dynamic-layer-lists] | 8 | 0 / 0 | Listed | State changes and restoration for css/background/layer-lists. The eight states reuse the independently reviewed static combinations. |
+| [background/dynamic-rounded-position][css/background/dynamic-rounded-position] | 8 | 0 / 0 | Listed | State changes and restoration for css/background/rounded-position. The eight states reuse the independently reviewed static combinations. |
+| [background/fractional-repeat][css/background/fractional-repeat] | 1 | 12 / 0 | Listed | 12 combinations cross fractional tile sizes, round/space repeat and the positioning area. Rounded tile counts and distributed gaps must use the selected origin. |
+| [background/gradients][css/background/gradients] | 1 | 0 / 0 | Not listed | Continuous, hard-stop, repeating and radial gradients preserve stop positions and sRGB interpolation. |
+| [background/layer-lists][css/background/layer-lists] | 1 | 8 / 0 | Listed | Eight combinations verify repeated and independently specified size, repeat and position lists across two background images. |
+| [background/origin-clip][css/background/origin-clip] | 1 | 3 / 0 | Not listed | The same bottom-right 40x30 tile is positioned against three different origin boxes, then cropped to the content box. The border and content dimensions stay fixed. |
+| [background/position-order][css/background/position-order] | 1 | 8 / 0 | Listed | Eight controls cross background-position shorthand order with independent X/Y lists of different lengths. Later declarations win on each axis and shorter lists repeat. |
+| [background/rounded-position][css/background/rounded-position] | 1 | 6 / 0 | Listed | Six controls position round-resized tiles using their final size, with explicit left/center/right and top/center/bottom positions. |
+| [background/text-effects][css/background/text-effects] | 1 | 0 / 0 | Listed | Eight combinations verify text-clipped repeated gradients with background positioning, blur and rotation. |
+| [backgrounds/svg-image][css/backgrounds/svg-image] | 1 | 0 / 0 | Not listed | SVG background images preserve their intrinsic aspect ratio, scale to the requested size and use the same positioning, clipping and tiling rules as raster images. |
+| [border/dynamic-corners][css/border/dynamic-corners] | 8 | 0 / 0 | Listed | State changes and restoration for css/border/unequal-corners. The eight states reuse the independently reviewed static combinations. |
+| [border/logical-corners][css/border/logical-corners] | 1 | 0 / 0 | Listed | Six writing mode/direction combinations map four distinct logical radii to physical corners. |
+| [border/mixed-joins][css/border/mixed-joins] | 1 | 0 / 0 | Listed | 16 mixed-style corner combinations cross the top edge style, unequal widths and asymmetric radii. Neighboring styles must not leave geometric holes. |
+| [border/styles-radius][css/border/styles-radius] | 1 | 0 / 0 | Not listed | Solid/double/dashed/dotted borders and elliptical/asymmetric rounded corners use the declared widths and outer shapes. |
+| [border/unequal-corners][css/border/unequal-corners] | 1 | 0 / 0 | Listed | 32 combinations cross all eight visible border styles, equal/unequal widths and square/asymmetric corners. Different edge colors expose joins and clipping. |
+| [box-model/border-box][css/box-model/border-box] | 1 | 2 / 0 | Not listed | The 120x100 border box includes 8px of border and 20px of padding; the 80x60 content box expands to 108x88. |
+| [box-model/content-box][css/box-model/content-box] | 1 | 1 / 0 | Not listed | Fixed content-box width and height exclude padding and borders, which extend outside the content box. |
+| [box-model/percentage-padding][css/box-model/percentage-padding] | 1 | 2 / 0 | Not listed | Child percentage width/height use the parent content box. All four percentage paddings use its 220px inline size, so each is 22px even in the shorter vertical axis. |
+| [cascade/logical-order][css/cascade/logical-order] | 1 | 12 / 0 | Listed | 12 combinations verify declaration order when logical and physical padding target the same edge in three writing modes and both directions. |
+| [cascade/wide-keywords][css/cascade/wide-keywords] | 1 | 2 / 0 | Listed | CSS-wide keywords copy computed parent values, reset initial values and resolve unset by inheritance, at the declaration's place in shorthand and longhand order. |
+| [color/current-mix][css/color/current-mix] | 1 | 0 / 0 | Listed | currentColor mixtures resolve on the consuming element through CSS gradients, shadows, inherited text and SVG paints, including nested mixtures and compact SVG instance rows. |
+| [color/dynamic-spaces-opacity][css/color/dynamic-spaces-opacity] | 8 | 0 / 0 | Listed | State changes and restoration for css/color/spaces-opacity. The eight states reuse the independently reviewed static combinations. |
+| [color/spaces-opacity][css/color/spaces-opacity] | 1 | 24 / 0 | Listed | 24 solid-region controls cross all supported color() RGB/XYZ spaces and Lab-family colors with full/half opacity in SDR output. |
+| [color/srgb-alpha][css/color/srgb-alpha] | 1 | 0 / 0 | Not listed | Hex, rgb, hsl and color(srgb) produce their sRGB colors; straight-alpha black/red composite over white, including fully transparent input. |
+| [compositing/backdrop-blend/basic][css/compositing/backdrop-blend/basic] | 1 | 0 / 0 | Not listed | Backdrop invert, multiply and opacity must preserve their compositing order. Controls use full, half and zero opacity; the final box has no foreground content and must not multiply the filtered page by the original page again. |
+| [compositing/backdrop-blend/clips][css/compositing/backdrop-blend/clips] | 1 | 0 / 0 | Not listed | Foreground blending happens against the filtered backdrop before clip, alpha mask and group opacity. Full/half/zero opacity controls retain identical clip boundaries. |
+| [compositing/backdrop-blend/controls][css/compositing/backdrop-blend/controls] | 1 | 0 / 0 | Not listed | Isolated controls for the backdrop/blend combination: invert alone filters the page before normal source-over content, while multiply alone blends foreground content with the original page. |
+| [compositing/backdrop-blend/empty-bounds][css/compositing/backdrop-blend/empty-bounds] | 1 | 0 / 0 | Not listed | A zero-width backdrop has no pixels to filter but still isolates its overflowing foreground. The multiply-only control sees the blue page, while the filtered control keeps the original green. |
+| [compositing/backdrop-blend/nested][css/compositing/backdrop-blend/nested] | 1 | 0 / 0 | Not listed | A filtered child reads its isolated parent background. Parent opacity is applied after the child blend; the last control also applies child opacity, so parent opacity must not be folded into the backdrop twice. |
+| [compositing/backdrop-blend/overflow][css/compositing/backdrop-blend/overflow] | 1 | 0 / 0 | Not listed | An ancestor overflow clip applies after the descendant backdrop/content blend. The visible control retains the protruding filter; the hidden control cuts both backdrop and foreground at the ancestor boundary. |
+| [compositing/backdrop-blend/planes][css/compositing/backdrop-blend/planes] | 1 | 0 / 0 | Not listed | A preserve-3d parent isolates its planes from the page. Unlike the 2D control, a plane over a transparent scene backdrop retains its foreground colors. Half opacity composites the complete plane result once. |
+| [compositing/backdrop-roots][css/compositing/backdrop-roots] | 1 | 0 / 0 | Listed | Twelve nested backdrop controls cross root-forming properties with a second backdrop read. Transparent group content exposes whether sampling leaks through an ancestor root. |
+| [compositing/blend-families][css/compositing/blend-families] | 1 | 0 / 0 | Listed | 32 controls cross every supported CSS blend mode with absent/inverted backdrop and a translucent child. Solid regions separate compositing formulas from edge antialiasing. |
+| [compositing/clip-mask-matrix][css/compositing/clip-mask-matrix] | 1 | 36 / 0 | Listed | 36 combinations: 3 masks × 3 clips × 2 transforms × 2 opacities. An overflowing child distinguishes clipping the group from clipping only its background. |
+| [compositing/dynamic-backdrop-roots][css/compositing/dynamic-backdrop-roots] | 8 | 0 / 0 | Listed | State changes and restoration for css/compositing/backdrop-roots. The eight states reuse the independently reviewed static combinations. |
+| [compositing/dynamic-layers][css/compositing/dynamic-layers] | 8 | 1 / 0 | Listed | Eight states change opacity, filter, transform, clip, mask, display and visibility around nested backdrop/blend layers. Zero opacity, display:none and visibility:hidden must produce identical background-only frames. |
+| [compositing/filter-blend-matrix][css/compositing/filter-blend-matrix] | 1 | 36 / 0 | Listed | 36 combinations: 4 backdrop filters × 3 blend modes × 3 opacities. Each filter has normal-blend and zero-opacity controls; translucent content leaves the filtered backdrop visible. |
+| [compositing/group-opacity][css/compositing/group-opacity] | 1 | 0 / 0 | Not listed | Group opacity applies once after opaque children overlap; per-child alpha blends twice in the overlap and therefore gives a different color. |
+| [compositing/isolation-blend][css/compositing/isolation-blend] | 1 | 0 / 0 | Not listed | Without isolation, cyan/magenta multiply with the yellow page; an isolated group blends children against its transparent group backdrop, then composites the group normally. |
+| [compositing/nested-matrix][css/compositing/nested-matrix] | 1 | 32 / 0 | Listed | 32 combinations: isolation × parent opacity × overflow × empty/content × inner blend. Nested backdrop regions extend outside the parent so grouping, clipping and empty layers remain observable. |
+| [compositing/rounded-blend][css/compositing/rounded-blend] | 1 | 1 / 0 | Not listed | The oversized yellow child is clipped to rounded corners and multiplied with the aqua parent inside an isolated group: lime inside, aqua in the corners, white outside the parent. |
+| [compositing/scene-blend-isolation][css/compositing/scene-blend-isolation] | 1 | 0 / 0 | Not listed | A preserve-3d scene establishes an isolated stacking context. Its blending planes see the scene background and previously painted planes, not the page outside it. The two-plane overlap is blue; a transparent scene keeps cyan instead of multiplying it by the yellow page. |
+| [compositing/stacking-opacity][css/compositing/stacking-opacity] | 1 | 0 / 0 | Not listed | An opacity group traps its high-z-index descendant below a later sibling stacking context. The opaque positioned control lets that descendant participate in the outer context. |
+| [compositing/visibility-backdrop][css/compositing/visibility-backdrop] | 1 | 6 / 0 | Listed | Six controls distinguish visible, zero opacity, inherited hidden, display:none and explicitly visible children of a hidden filtered box, with normal and multiply blending. A hidden box must not paint its backdrop; visible descendants still paint. |
+| [filter/blur-overflow][css/filter/blur-overflow] | 1 | 0 / 0 | Not listed | Blur extends beyond child geometry. The ancestor overflow clip truncates the filtered pixels at its padding box, while the visible control preserves them. |
+| [filter/opacity][css/filter/opacity] | 1 | 0 / 0 | Not listed | Children composite before their parent invert filter and group opacity. A translucent child changes the overlap before filtering, rather than applying parent opacity twice. |
+| [filter/order][css/filter/order] | 1 | 0 / 0 | Not listed | Filter functions apply in authored order to the complete group, including its child: invert then brightness is observably different from brightness then invert. |
+| [filter/transformed-bounds][css/filter/transformed-bounds] | 1 | 18 / 0 | Listed | 18 combinations: 3 filters × 3 transforms × ancestor overflow. Blur and shadow bounds extend beyond the source and must be clipped after the child transform by the rounded ancestor. |
+| [flex/alignment-order][css/flex/alignment-order] | 1 | 3 / 0 | Not listed | Order rearranges items to widths 60/80/40; 120px remaining width forms two 60px gaps. align-self overrides the centered cross-axis alignment. |
+| [flex/automatic-minimum][css/flex/automatic-minimum] | 1 | 4 / 0 | Not listed | The automatic minimum keeps the first item at its 180px min-content width, overflowing the 220px row beside an 80px sibling. min-width:0 permits 140px instead. |
+| [flex/column-minimum][css/flex/column-minimum] | 1 | 6 / 0 | Not listed | A column flex item keeps its 120px content minimum unless min-height: 0 is explicit. The latter shrinks to 90px after the 80px footer and 10px gap. |
+| [flex/constrained-growth][css/flex/constrained-growth] | 1 | 3 / 0 | Not listed | Equal growth first proposes 100px each; freezing the first item at max-width 80px redistributes the remaining 220px as 110/110. |
+| [flex/constraints-matrix][css/flex/constraints-matrix] | 1 | 72 / 0 | Listed | 24 combinations cross parent width, gap, box-sizing and row direction. Equal percentage bases shrink equally until the first item hits its min/max; the unfrozen second item takes the remaining space. |
+| [flex/dynamic-constraints][css/flex/dynamic-constraints] | 8 | 1 / 0 | Listed | Widths cross the exact 120px flex wrapping threshold in both directions; a flex/grid parent alternates while nested percentage sizing remains min-constrained. |
+| [flex/grid-child][css/flex/grid-child] | 1 | 7 / 0 | Not listed | A growing grid inside a padded flex row receives the remaining 280px. Its 260 by 160 content box resolves fractional tracks after gaps. |
+| [flex/grow-shrink][css/flex/grow-shrink] | 1 | 4 / 0 | Not listed | After a 12px gap, 288px free width grows 1:2 to 96/192. A 300px basis shrinks to 240 proportionally to 160/80. |
+| [flex/percentage-basis][css/flex/percentage-basis] | 1 | 6 / 0 | Not listed | Percentage bases resolve against the 300px inner main size before the 20px gap. Shrinking makes two 140px items; with shrink disabled both remain 150px and overflow. |
+| [flex/reverse-auto-margins][css/flex/reverse-auto-margins] | 1 | 8 / 0 | Not listed | Reversed axes place the first item against the main-start edge on the right/bottom; an auto main-axis margin absorbs free width. |
+| [flex/wrap-gap][css/flex/wrap-gap] | 1 | 4 / 0 | Not listed | Two 100px items and a 20px column gap fill each 220px line; the next line starts after 40px height plus 12px row gap. |
+| [flex/wrap-thresholds][css/flex/wrap-thresholds] | 1 | 108 / 0 | Listed | 36 combinations cross widths just below/at/above the fit threshold, gap, wrap mode and row direction. Only the below-threshold wrapping cases gain a line; nowrap shrinks both items to 59px. |
+| [generated/boxes-00][css/generated/boxes-00] | 1 | 494 / 0 | Listed | 50 fixed-seed trees (1990270464–1990270513) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-01][css/generated/boxes-01] | 1 | 484 / 0 | Listed | 50 fixed-seed trees (1990270514–1990270563) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-02][css/generated/boxes-02] | 1 | 486 / 0 | Listed | 50 fixed-seed trees (1990270564–1990270613) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-03][css/generated/boxes-03] | 1 | 488 / 0 | Listed | 50 fixed-seed trees (1990270614–1990270663) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-04][css/generated/boxes-04] | 1 | 502 / 0 | Listed | 50 fixed-seed trees (1990270664–1990270713) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-05][css/generated/boxes-05] | 1 | 488 / 0 | Listed | 50 fixed-seed trees (1990270714–1990270763) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-06][css/generated/boxes-06] | 1 | 496 / 0 | Listed | 50 fixed-seed trees (1990270764–1990270813) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-07][css/generated/boxes-07] | 1 | 480 / 0 | Listed | 50 fixed-seed trees (1990270814–1990270863) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-08][css/generated/boxes-08] | 1 | 494 / 0 | Listed | 50 fixed-seed trees (1990270864–1990270913) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-09][css/generated/boxes-09] | 1 | 474 / 0 | Listed | 50 fixed-seed trees (1990270914–1990270963) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-10][css/generated/boxes-10] | 1 | 476 / 0 | Listed | 50 fixed-seed trees (1990270964–1990271013) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-11][css/generated/boxes-11] | 1 | 500 / 0 | Listed | 50 fixed-seed trees (1990271014–1990271063) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-12][css/generated/boxes-12] | 1 | 496 / 0 | Listed | 50 fixed-seed trees (1990271064–1990271113) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-13][css/generated/boxes-13] | 1 | 490 / 0 | Listed | 50 fixed-seed trees (1990271114–1990271163) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-14][css/generated/boxes-14] | 1 | 484 / 0 | Listed | 50 fixed-seed trees (1990271164–1990271213) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-15][css/generated/boxes-15] | 1 | 480 / 0 | Listed | 50 fixed-seed trees (1990271214–1990271263) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-16][css/generated/boxes-16] | 1 | 482 / 0 | Listed | 50 fixed-seed trees (1990271264–1990271313) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-17][css/generated/boxes-17] | 1 | 486 / 0 | Listed | 50 fixed-seed trees (1990271314–1990271363) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-18][css/generated/boxes-18] | 1 | 472 / 0 | Listed | 50 fixed-seed trees (1990271364–1990271413) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [generated/boxes-19][css/generated/boxes-19] | 1 | 490 / 0 | Listed | 50 fixed-seed trees (1990271414–1990271463) cross nested block/flex/grid, direction, gaps, alignment, percentage/calc sizes and box models. Expected boxes come from the generator's independent arithmetic model. |
+| [grid/auto-placement-dense][css/grid/auto-placement-dense] | 1 | 6 / 0 | Not listed | Sparse row placement leaves the first-row hole after two-column items; dense placement puts the final one-column item back into that hole. |
+| [grid/auto-repeat][css/grid/auto-repeat] | 1 | 4 / 0 | Not listed | auto-fill retains three 100px tracks after gaps; auto-fit collapses the unoccupied third track and gap, producing two 155px tracks. |
+| [grid/flex-child][css/grid/flex-child] | 1 | 7 / 0 | Not listed | Explicit grid tracks become the containing width for nested flex layout. Padding and gaps are deducted once; cross-axis centering is relative to each cell. |
+| [grid/named-areas][css/grid/named-areas] | 1 | 4 / 0 | Not listed | Named areas span the authored cells: head and foot span both columns; side and main occupy the middle row. |
+| [grid/named-lines-implicit][css/grid/named-lines-implicit] | 1 | 2 / 0 | Not listed | Named column lines delimit a 190px span. Placement in row 3 creates implicit rows of 30px then 50px, separated by 10px gaps. |
+| [grid/placement][css/grid/placement] | 1 | 3 / 0 | Not listed | Explicit grid lines place a two-column span and a two-row span; self alignment centers a 40x20 item inside an 80x50 cell. |
+| [grid/tracks][css/grid/tracks] | 1 | 6 / 0 | Not listed | After 80px fixed track and 20px gaps, 240px is split into 80px and 160px fractional tracks. Explicit rows retain 40px and 60px heights. |
+| [images/dynamic-fit-extremes][css/images/dynamic-fit-extremes] | 8 | 0 / 0 | Listed | State changes and restoration for css/images/fit-extremes. The eight states reuse the independently reviewed static combinations. |
+| [images/fit-extremes][css/images/fit-extremes] | 1 | 8 / 0 | Listed | Eight combinations verify none/scale-down with boxes smaller and larger than the image and opposite object positions. Scale-down never enlarges the intrinsic image. |
+| [images/object-fit][css/images/object-fit] | 1 | 3 / 0 | Not listed | A 2:1 image is contained, covered or filled in a 100x100 box. Integer scaling and pixelated sampling expose fit/crop boundaries without interpolation noise. |
+| [images/object-position][css/images/object-position] | 1 | 3 / 0 | Not listed | A 2:1 image covers a square, cropping horizontally. Left, center and right object positions select different 2-color windows of the 4-color source. |
+| [layout/block-flow][css/layout/block-flow] | 1 | 4 / 0 | Not listed | Block children fill the 256px content width, stack vertically and split horizontal auto margins equally. |
+| [layout/nested-sizing][css/layout/nested-sizing] | 1 | 32 / 0 | Listed | Eight combinations cross outer/inner Flex/Grid with definite percentage constraints or max-content sizing. The inner content is 50+10+70=130px; its border box is 146px and the intrinsic outer box is 158px. |
+| [layout/vertical-block][css/layout/vertical-block] | 1 | 22 / 0 | Listed | Vertical block flow, auto inline stretch, logical margins, orthogonal intrinsic sizing and opposite nested block directions. |
+| [layout/vertical-flex][css/layout/vertical-flex] | 1 | 20 / 0 | Listed | Flex main/cross axes follow writing-mode, including row/column reverse, wrapping, gaps and RTL inline progression. |
+| [layout/vertical-grid][css/layout/vertical-grid] | 1 | 20 / 0 | Listed | Grid columns follow the inline axis and rows the block axis, with spanning, fractions, gaps, RTL and an orthogonal aspect-ratio item. |
+| [layout/vertical-position][css/layout/vertical-position] | 1 | 20 / 0 | Listed | Physical and logical absolute insets, percentage padding and static-position hoisting through an orthogonal flow. |
+| [mask/backdrop][css/mask/backdrop] | 1 | 0 / 0 | Not listed | A clip and binary alpha mask limit both the filtered backdrop and foreground content; the control at half opacity reveals the unfiltered page beneath. |
+| [mask/clip][css/mask/clip] | 1 | 0 / 0 | Not listed | Clip and alpha mask intersect over the whole group before group opacity. The right half is removed even where a child extends beyond the remaining area. |
+| [mask/composite][css/mask/composite] | 1 | 0 / 0 | Not listed | Two binary alpha masks combine by add, subtract, intersect or exclude. The first mask is the source and the lower mask the destination; compositing changes the child with its parent. |
+| [mask/dynamic-three-layers][css/mask/dynamic-three-layers] | 8 | 0 / 0 | Listed | State changes and restoration for css/mask/three-layer-composites. The eight states reuse the independently reviewed static combinations. |
+| [mask/shape][css/mask/shape] | 1 | 5 / 0 | Listed | CSS shape() resolves responsive lengths, relative and absolute curves, reflected controls, arcs and evenodd subpaths in the selected reference box before transforms. |
+| [mask/three-layer-composites][css/mask/three-layer-composites] | 1 | 0 / 0 | Listed | Eight controls cross all four mask-composite operators with alpha/luminance for three asymmetric layers, exposing list repetition, composition order and mask interpretation. |
+| [overflow/clipping][css/overflow/clipping] | 1 | 2 / 0 | Not listed | The first oversized child is clipped to its 120px padding box; the second extends 20px outside both edges. |
+| [position/absolute-padding][css/position/absolute-padding] | 1 | 3 / 0 | Not listed | A static intermediate box does not become the containing block. Absolute percentage sizes and right/bottom offsets use the positioned ancestor padding box (232 by 152). |
+| [position/absolute-relative][css/position/absolute-relative] | 1 | 3 / 0 | Not listed | Absolute insets use the parent padding box and do not consume flow space; relative offsets move painting without moving the following block. |
+| [position/logical-containing-block][css/position/logical-containing-block] | 1 | 24 / 0 | Listed | 12 combinations cross writing mode, direction and absolute/fixed positioning. An identity transform establishes the containing block through a static intermediate; logical insets resolve against its padding box. |
+| [shadow/blur][css/shadow/blur] | 1 | 0 / 0 | Not listed | Outer and inset shadows blur an offset silhouette while retaining the solid box and clipping the inset shadow to its interior. |
+| [shadow/dynamic-outline][css/shadow/dynamic-outline] | 8 | 0 / 0 | Listed | State changes and restoration for css/shadow/outline-layers. The eight states reuse the independently reviewed static combinations. |
+| [shadow/outer-inset][css/shadow/outer-inset] | 1 | 0 / 0 | Not listed | An 8x10 offset and 4px spread shadow expands outside one box and clips inside the other; zero blur makes boundaries exact. |
+| [shadow/outline-layers][css/shadow/outline-layers] | 1 | 12 / 0 | Listed | 12 combinations cross clipping, rotation and multiple inner/outer shadows with an offset outline. Rounded clipping applies to the complete transformed child. |
+| [shadow/rounded-clip][css/shadow/rounded-clip] | 1 | 0 / 0 | Not listed | A rounded overflow clip contains a translated child, including its opacity group, while the parent outer shadow remains outside the clip. |
+| [sizing/aspect-ratio][css/sizing/aspect-ratio] | 1 | 2 / 0 | Not listed | A definite width determines auto height at 2:1, and a definite height determines auto width at 1:1. |
+| [sizing/auto-height-limits][css/sizing/auto-height-limits] | 1 | 3 / 0 | Not listed | Auto height is 20+30+16+4=70px. min-height raises it to 100px; max-height lowers it to 48px and overflow clips the children. |
+| [sizing/dynamic-percentages][css/sizing/dynamic-percentages] | 8 | 0 / 0 | Listed | State changes and restoration for css/sizing/indefinite-percentages. The eight states reuse the independently reviewed static combinations. |
+| [sizing/indefinite-percentages][css/sizing/indefinite-percentages] | 1 | 24 / 0 | Listed | 12 combinations cross Block/Flex/Grid, definite/indefinite parent height and child minimum height. Percentage width clamps to 90px; cyclic percentage height resolves through intrinsic content. |
+| [sizing/intrinsic-constraints][css/sizing/intrinsic-constraints] | 1 | 12 / 0 | Listed | 12 combinations cross intrinsic size keywords, maximum size and row/column layout. Controls expose clamping and wrapping independently on both physical axes. |
+| [sizing/intrinsic-width][css/sizing/intrinsic-width] | 1 | 2 / 0 | Not listed | A wrapping flex container has min-content width 100px (widest item) and max-content width 170px (60+10+100). At the minimum it has two 30px lines and one 10px gap. |
+| [sizing/percentage-min-max][css/sizing/percentage-min-max] | 1 | 4 / 0 | Not listed | Percentages resolve against the 320px containing block, then max/min clamp 240 to 200 and 80 to 120. calc(50% - 20px) is 140px. |
+| [text/alignment][css/text/alignment] | 1 | 1 / 1 | Not listed | Two preformatted lines align their right edge to x=260, while baselines remain separated by 32px. |
+| [text/alignment-matrix][css/text/alignment-matrix] | 1 | 12 / 0 | Listed | 12 independent display/alignment combinations place empty atomic inline boxes beside nested smaller superscript text; display mode is not coupled to alignment choice. |
+| [text/axes-synthesis][css/text/axes-synthesis] | 1 | 0 / 0 | Listed | Eight combinations cross variable axes, synthesis permission and x-height adjustment through a smaller/bolder nested run. Native variable axes remain active when synthesis is disabled. |
+| [text/bidi][css/text/bidi] | 1 | 0 / 0 | Listed | Direction sets paragraph alignment, mixed-script ordering, flex order and logical box sides. CSS embedding, overrides, isolates and plaintext preserve source indices and scope boundaries. |
+| [text/bidi-inline-atoms][css/text/bidi-inline-atoms] | 1 | 0 / 0 | Listed | 18 combinations cross bidi direction, writing mode and atomic inline alignment with explicitly declared Latin, Hebrew and Han fonts and a decorated smaller run. |
+| [text/breaking-products][css/text/breaking-products] | 1 | 0 / 0 | Listed | 108 combinations exhaust the selected white-space × word-break × overflow-wrap values at two nearby widths, with spaces, an explicit newline, a long word and Han text. |
+| [text/caps][css/text/caps] | 1 | 0 / 0 | Listed | Petite/all-petite/unicase use native small-cap fallbacks where present. Each row matches its explicit OpenType-feature control. Synthetic casing, caseless characters and byte indices are covered by text unit tests. |
+| [text/combine][css/text/combine] | 1 | 0 / 0 | Listed | Combined text remains horizontal in one vertical 1em cell, including fullwidth digits, compression, both column directions, underline and one emphasis mark for the whole cell. |
+| [text/decoration-cjk][css/text/decoration-cjk] | 1 | 10 / 10 | Not listed | Auto ink skipping keeps CJK glyphs and punctuation continuously decorated, while Latin descenders still make gaps. Solid, double, dotted, dashed and wavy underlines share this rule; an explicit offset moves the line without changing text layout. Transparent glyph fill isolates the decoration pixels without removing the glyph ink used to compute gaps. |
+| [text/decoration-matrix][css/text/decoration-matrix] | 1 | 30 / 0 | Listed | 30 combinations cross five underline styles, three writing modes and two group opacities on mixed-color text with centered stroke and a sharp shadow. |
+| [text/dynamic-axes][css/text/dynamic-axes] | 8 | 0 / 0 | Listed | State changes and restoration for css/text/axes-synthesis. The eight states reuse the independently reviewed static combinations. |
+| [text/dynamic-bidi-atoms][css/text/dynamic-bidi-atoms] | 8 | 0 / 0 | Listed | State changes and restoration for css/text/bidi-inline-atoms. The eight states reuse the independently reviewed static combinations. |
+| [text/dynamic-breaking][css/text/dynamic-breaking] | 8 | 0 / 0 | Listed | State changes and restoration for css/text/breaking-products. The eight states reuse the independently reviewed static combinations. |
+| [text/dynamic-inheritance][css/text/dynamic-inheritance] | 8 | 1 / 0 | Listed | Inherited font size, line height and color change alongside the wrap threshold, RTL ellipsis and mixed-size vertical writing. Repeated seek restores glyph positions, line counts and paragraph direction. |
+| [text/dynamic-nested-decorations][css/text/dynamic-nested-decorations] | 8 | 0 / 0 | Listed | State changes and restoration for css/text/nested-decorations. The eight states reuse the independently reviewed static combinations. |
+| [text/ellipsis][css/text/ellipsis] | 1 | 2 / 0 | Not listed | A non-wrapping overflowing line is either clipped or ends in an ellipsis; neither mode draws outside its padding box. |
+| [text/emphasis][css/text/emphasis] | 1 | 0 / 0 | Listed | Emphasis marks are centered on typographic units, skip spaces and punctuation, honor custom glyphs, colors and horizontal/vertical placement. |
+| [text/font-features][css/text/font-features] | 1 | 0 / 0 | Listed | 44 keyword controls exercise kerning and every accepted font-variant longhand value. Each selected feature is paired with the same font and text at its default setting. |
+| [text/font-position][css/text/font-position] | 1 | 4 / 0 | Listed | Native numeral variants remain native; incomplete runs synthesize all glyphs without changing line metrics, including adjusted sizes and caps. |
+| [text/font-shorthand][css/text/font-shorthand] | 1 | 2 / 0 | Not listed | Font shorthand assigns weight, size, line height and family and resets omitted italic and weight declarations. |
+| [text/font-size-adjust][css/text/font-size-adjust] | 1 | 1 / 0 | Listed | Adjusted 24px Noto Sans with aspect 1.072 matches a 48px control, including a Span override. The box uses 31.25px computed size: em stays 31.25px while ex becomes 33.5px. |
+| [text/font-size-keywords][css/text/font-size-keywords] | 1 | 8 / 0 | Listed | A fixed 16px medium size table resolves em widths; smaller in the font shorthand resolves against the parent computed size. |
+| [text/font-synthesis][css/text/font-synthesis] | 1 | 0 / 0 | Listed | A regular-only font demonstrates weight/style permissions independently. none disables synthesis, and weight does not allow a synthetic italic. |
+| [text/inline-box][css/text/inline-box] | 1 | 3 / 0 | Listed | Inline padding and borders participate in line breaking; backgrounds and borders slice continuously across wrapped fragments, including nested and empty spans. |
+| [text/inline-boxes][css/text/inline-boxes] | 1 | 3 / 0 | Listed | Replaced content and inline block, flex and grid boxes wrap with text, use their margins and appropriate baselines, and retain nested content and Span alignment. |
+| [text/inline-directions][css/text/inline-directions] | 1 | 2 / 0 | Listed | Inline decorations follow RTL order and the vertical inline axis, preserving sliced edges and the physical gradient direction on wrapped spans. |
+| [text/inline-writing][css/text/inline-writing] | 1 | 3 / 0 | Listed | Inline boxes retain independent writing modes while their margin boxes participate in vertical and RTL paragraphs, including nested inline alignment and backgrounds. |
+| [text/mixed-runs][css/text/mixed-runs] | 1 | 1 / 0 | Not listed | Normal, bold larger and italic runs share one baseline; their sizes and shapes remain distinct inside a 48px line. |
+| [text/mixed-size-matrix][css/text/mixed-size-matrix] | 1 | 12 / 0 | Listed | 12 combinations cross three writing modes, two orientations and two child sizes. Mixed vertical text aligns on the central baseline; sideways retains alphabetic alignment. |
+| [text/nested-decorations][css/text/nested-decorations] | 1 | 0 / 0 | Listed | Four nested decoration controls combine wrapping, mixed sizes, propagated outer decorations and an independently colored inner double underline. |
+| [text/overflow-wrap][css/text/overflow-wrap] | 1 | 1 / 1 | Not listed | overflow-wrap:anywhere breaks an otherwise unbreakable word into two four-glyph lines inside a 100px content width. |
+| [text/paint-order][css/text/paint-order] | 1 | 1 / 1 | Not listed | Text inherits paint-order. Painting the centered stroke before the opaque fill preserves the interiors of CJK and Latin glyphs without changing line layout. |
+| [text/paragraph][css/text/paragraph] | 1 | 5 / 5 | Listed | Last-line alignment applies at soft and forced paragraph ends; pretty avoids a final orphan without adding a line; anywhere breaks even no-break spaces and keep-all; strict and loose differ at small kana. |
+| [text/preserved-spaces][css/text/preserved-spaces] | 1 | 1 / 1 | Not listed | white-space: pre preserves doubled spaces and the explicit line break, with a 32px line height and the same pinned Noto Sans font in every renderer. |
+| [text/relative-inheritance][css/text/relative-inheritance] | 1 | 0 / 0 | Listed | Eight parent size/weight controls exercise larger/smaller and bolder/lighter inheritance in adjacent runs and at weight-range boundaries. |
+| [text/spacing-indent][css/text/spacing-indent] | 1 | 1 / 1 | Not listed | Letter spacing adds 2px per glyph slot and word spacing adds 4px to the preserved space. The 20px indent applies to the first line only. |
+| [text/truncation-matrix][css/text/truncation-matrix] | 1 | 12 / 0 | Listed | Eight width/overflow/direction combinations check clip versus ellipsis; four font-size/line-clamp combinations check one and two visible lines with independently expected 32px and 64px auto heights. |
+| [text/underline-position][css/text/underline-position] | 1 | 0 / 0 | Listed | Underline position places horizontal lines below descenders and vertical lines on the chosen physical side, with inherited values, mixed sizes and explicit offsets. |
+| [text/vertical][css/text/vertical] | 1 | 4 / 0 | Listed | Vertical Text lays out columns in both directions, uses upright CJK and vertical punctuation with sideways Latin, supports upright and sideways overrides, and preserves styled text and decorations. |
+| [text/vertical-align][css/text/vertical-align] | 1 | 12 / 0 | Listed | Inline alignment positions child line boxes relative to the parent or whole line, with nested scopes, percentages and signed lengths. Span backgrounds follow their own baselines. |
+| [text/vertical-container][css/text/vertical-container] | 1 | 8 / 0 | Listed | Inherited vertical text and percentage inline padding coexist with a horizontal paragraph and an aspect-ratio SVG in vertical flex containers. |
+| [text/word-wrap][css/text/word-wrap] | 1 | 1 / 1 | Not listed | Normal white-space wraps at the word boundary after beta; words remain whole and baselines are 32px apart. |
+| [text/wrap-matrix][css/text/wrap-matrix] | 1 | 24 / 24 | Listed | 24 combinations cross width around four M advances, white-space, word-break and overflow-wrap. Noto Sans M advances 907/1000 em: 86px fits three at 24px, 88px fits four; nowrap disables emergency wrapping. |
+| [text/wrapping][css/text/wrapping] | 1 | 1 / 1 | Not listed | At 24px Noto Sans, four M glyphs fit in 100px and five do not. break-all wraps twelve glyphs into three lines at a 32px line height. |
+| [transform/clip][css/transform/clip] | 1 | 0 / 0 | Not listed | A child clip rotates with its element while the ancestor overflow clip stays in ancestor space. Nested child content obeys both clips. |
+| [transform/dynamic-order-clipping][css/transform/dynamic-order-clipping] | 8 | 0 / 0 | Listed | State changes and restoration for css/transform/order-clipping. The eight states reuse the independently reviewed static combinations. |
+| [transform/dynamic-perspective][css/transform/dynamic-perspective] | 8 | 0 / 0 | Listed | State changes and restoration for css/transform/perspective-groups. The eight states reuse the independently reviewed static combinations. |
+| [transform/order-clipping][css/transform/order-clipping] | 1 | 0 / 0 | Listed | Twelve transform controls cross three origins, noncommutative transform lists and rounded ancestor clipping. Individual translate/rotate/scale precede the transform list; negative scale reverses handedness. |
+| [transform/origin-order][css/transform/origin-order] | 1 | 0 / 0 | Not listed | Translation moves a box by 20/40px; top-left scaling doubles both axes; a 90-degree rotation swaps extents around the top-left origin. |
+| [transform/perspective-groups][css/transform/perspective-groups] | 1 | 0 / 0 | Listed | Twelve perspective controls cross perspective origin, preserve-3d/flat and an overflow grouping property. Nested Z translations expose flattening and projection order. |
+| [transforms/dynamic-path-extents][css/transforms/dynamic-path-extents] | 8 | 0 / 0 | Listed | State changes and restoration for css/transforms/path-extents. The eight states reuse the independently reviewed static combinations. |
+| [transforms/path-extents][css/transforms/path-extents] | 1 | 0 / 0 | Listed | Sixteen open-path controls cross before/start/middle/after distances, anchor and tangent direction. Out-of-range distance clamps to endpoints while reverse flips orientation. |
+| [transforms/shape-path][css/transforms/shape-path] | 1 | 2 / 0 | Listed | Responsive shape motion paths use the containing reference box, follow curve tangents and clamp open ends. |
+| [values/absolute-units][css/values/absolute-units] | 1 | 6 / 0 | Listed | Absolute units resolve to CSS reference pixels, including mixed-unit calc; each left bar equals its independently sized pixel control. |
+| [values/dynamic-inherited-units][css/values/dynamic-inherited-units] | 8 | 0 / 0 | Listed | State changes and restoration for css/values/inherited-units. The eight states reuse the independently reviewed static combinations. |
+| [values/font-ex][css/values/font-ex] | 1 | 4 / 0 | Listed | ex uses the selected font x-height. Pinned Noto Sans has 536/1000 units/em at weight 400 and 546/1000 at weight 700. Checks calc, inherited font size and font variation against pixel controls. |
+| [values/inherited-units][css/values/inherited-units] | 1 | 48 / 0 | Listed | 24 combinations cross inherited font size, em/rem/px/percentage lengths and writing mode. Physical percentage width remains relative to the 160px containing width. |
 
 [css/background/gradients]: ../tests/cases/css/background/gradients/case.json
 [css/background/origin-clip]: ../tests/cases/css/background/origin-clip/case.json
@@ -686,3 +826,131 @@ retain the listed number of sampled frames and run seek checks automatically.
 [css/transforms/shape-path]: ../tests/cases/css/transforms/shape-path/case.json
 [css/values/absolute-units]: ../tests/cases/css/values/absolute-units/case.json
 [css/values/font-ex]: ../tests/cases/css/values/font-ex/case.json
+
+[css/background/dynamic-layer-lists]: ../tests/cases/css/background/dynamic-layer-lists/case.json
+
+[css/background/dynamic-rounded-position]: ../tests/cases/css/background/dynamic-rounded-position/case.json
+
+[css/background/fractional-repeat]: ../tests/cases/css/background/fractional-repeat/case.json
+
+[css/background/layer-lists]: ../tests/cases/css/background/layer-lists/case.json
+
+[css/background/position-order]: ../tests/cases/css/background/position-order/case.json
+
+[css/background/rounded-position]: ../tests/cases/css/background/rounded-position/case.json
+
+[css/background/text-effects]: ../tests/cases/css/background/text-effects/case.json
+
+[css/border/dynamic-corners]: ../tests/cases/css/border/dynamic-corners/case.json
+
+[css/border/logical-corners]: ../tests/cases/css/border/logical-corners/case.json
+
+[css/border/mixed-joins]: ../tests/cases/css/border/mixed-joins/case.json
+
+[css/border/unequal-corners]: ../tests/cases/css/border/unequal-corners/case.json
+
+[css/cascade/logical-order]: ../tests/cases/css/cascade/logical-order/case.json
+
+[css/color/dynamic-spaces-opacity]: ../tests/cases/css/color/dynamic-spaces-opacity/case.json
+
+[css/color/spaces-opacity]: ../tests/cases/css/color/spaces-opacity/case.json
+
+[css/compositing/backdrop-roots]: ../tests/cases/css/compositing/backdrop-roots/case.json
+
+[css/compositing/blend-families]: ../tests/cases/css/compositing/blend-families/case.json
+
+[css/compositing/dynamic-backdrop-roots]: ../tests/cases/css/compositing/dynamic-backdrop-roots/case.json
+
+[css/generated/boxes-00]: ../tests/cases/css/generated/boxes-00/case.json
+
+[css/generated/boxes-01]: ../tests/cases/css/generated/boxes-01/case.json
+
+[css/generated/boxes-02]: ../tests/cases/css/generated/boxes-02/case.json
+
+[css/generated/boxes-03]: ../tests/cases/css/generated/boxes-03/case.json
+
+[css/generated/boxes-04]: ../tests/cases/css/generated/boxes-04/case.json
+
+[css/generated/boxes-05]: ../tests/cases/css/generated/boxes-05/case.json
+
+[css/generated/boxes-06]: ../tests/cases/css/generated/boxes-06/case.json
+
+[css/generated/boxes-07]: ../tests/cases/css/generated/boxes-07/case.json
+
+[css/generated/boxes-08]: ../tests/cases/css/generated/boxes-08/case.json
+
+[css/generated/boxes-09]: ../tests/cases/css/generated/boxes-09/case.json
+
+[css/generated/boxes-10]: ../tests/cases/css/generated/boxes-10/case.json
+
+[css/generated/boxes-11]: ../tests/cases/css/generated/boxes-11/case.json
+
+[css/generated/boxes-12]: ../tests/cases/css/generated/boxes-12/case.json
+
+[css/generated/boxes-13]: ../tests/cases/css/generated/boxes-13/case.json
+
+[css/generated/boxes-14]: ../tests/cases/css/generated/boxes-14/case.json
+
+[css/generated/boxes-15]: ../tests/cases/css/generated/boxes-15/case.json
+
+[css/generated/boxes-16]: ../tests/cases/css/generated/boxes-16/case.json
+
+[css/generated/boxes-17]: ../tests/cases/css/generated/boxes-17/case.json
+
+[css/generated/boxes-18]: ../tests/cases/css/generated/boxes-18/case.json
+
+[css/generated/boxes-19]: ../tests/cases/css/generated/boxes-19/case.json
+
+[css/images/dynamic-fit-extremes]: ../tests/cases/css/images/dynamic-fit-extremes/case.json
+
+[css/images/fit-extremes]: ../tests/cases/css/images/fit-extremes/case.json
+
+[css/mask/dynamic-three-layers]: ../tests/cases/css/mask/dynamic-three-layers/case.json
+
+[css/mask/three-layer-composites]: ../tests/cases/css/mask/three-layer-composites/case.json
+
+[css/shadow/dynamic-outline]: ../tests/cases/css/shadow/dynamic-outline/case.json
+
+[css/shadow/outline-layers]: ../tests/cases/css/shadow/outline-layers/case.json
+
+[css/sizing/dynamic-percentages]: ../tests/cases/css/sizing/dynamic-percentages/case.json
+
+[css/sizing/indefinite-percentages]: ../tests/cases/css/sizing/indefinite-percentages/case.json
+
+[css/sizing/intrinsic-constraints]: ../tests/cases/css/sizing/intrinsic-constraints/case.json
+
+[css/text/axes-synthesis]: ../tests/cases/css/text/axes-synthesis/case.json
+
+[css/text/bidi-inline-atoms]: ../tests/cases/css/text/bidi-inline-atoms/case.json
+
+[css/text/breaking-products]: ../tests/cases/css/text/breaking-products/case.json
+
+[css/text/dynamic-axes]: ../tests/cases/css/text/dynamic-axes/case.json
+
+[css/text/dynamic-bidi-atoms]: ../tests/cases/css/text/dynamic-bidi-atoms/case.json
+
+[css/text/dynamic-breaking]: ../tests/cases/css/text/dynamic-breaking/case.json
+
+[css/text/dynamic-nested-decorations]: ../tests/cases/css/text/dynamic-nested-decorations/case.json
+
+[css/text/font-features]: ../tests/cases/css/text/font-features/case.json
+
+[css/text/nested-decorations]: ../tests/cases/css/text/nested-decorations/case.json
+
+[css/text/relative-inheritance]: ../tests/cases/css/text/relative-inheritance/case.json
+
+[css/transform/dynamic-order-clipping]: ../tests/cases/css/transform/dynamic-order-clipping/case.json
+
+[css/transform/dynamic-perspective]: ../tests/cases/css/transform/dynamic-perspective/case.json
+
+[css/transform/order-clipping]: ../tests/cases/css/transform/order-clipping/case.json
+
+[css/transform/perspective-groups]: ../tests/cases/css/transform/perspective-groups/case.json
+
+[css/transforms/dynamic-path-extents]: ../tests/cases/css/transforms/dynamic-path-extents/case.json
+
+[css/transforms/path-extents]: ../tests/cases/css/transforms/path-extents/case.json
+
+[css/values/dynamic-inherited-units]: ../tests/cases/css/values/dynamic-inherited-units/case.json
+
+[css/values/inherited-units]: ../tests/cases/css/values/inherited-units/case.json

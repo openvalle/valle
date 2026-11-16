@@ -1,8 +1,5 @@
 {
-  "size": [
-    768,
-    248
-  ],
+  "size": [768, 248],
   "sources": {
     "tests/baselines/browser/css/images/fit-extremes/scene.html": "8d4a8cb2bab2c3ed27b63887e64500385ee53002f3c074b05d361f2760f8477c",
     "tests/resources/photo.png": "bd0ffe9ac7f87c03e302b94c9378efde7711a1f22c68ab5a7bfa1915cbb5317c"

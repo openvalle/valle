@@ -399,14 +399,18 @@ mod tests {
     #[test]
     fn paragraphs_can_contain_only_boxes_and_vertical_boxes() {
         for writing in ["horizontal-tb", "vertical-rl", "vertical-lr"] {
-            let mut scene = load(&format!(
-                r#"return <Text style={{{{width:140,height:160,writingMode:"{writing}"}}}}><View style={{{{display:"inline-block",width:30,height:40,background:"red"}}}}/><View style={{{{display:"inline-grid",width:40,height:30,background:"blue"}}}}/></Text>"#
-            ));
-            let frame = scene.frame(Tick::ZERO).unwrap();
-            let lines = frame.layout.lines[0].as_ref().unwrap();
-            assert_eq!(lines.atoms.len(), 2, "{writing}");
-            assert_eq!(frame.layout.boxes[1].border.width, 30.0, "{writing}");
-            assert_eq!(frame.layout.boxes[1].border.height, 40.0, "{writing}");
+            for direction in ["ltr", "rtl"] {
+                let mut scene = load(&format!(
+                    r#"return <Text style={{{{width:140,height:160,writingMode:"{writing}",direction:"{direction}"}}}}><View style={{{{display:"inline-block",width:30,height:40,background:"red"}}}}/><View style={{{{display:"inline-grid",width:40,height:30,background:"blue"}}}}/></Text>"#
+                ));
+                let frame = scene.frame(Tick::ZERO).unwrap();
+                let lines = frame.layout.lines[0].as_ref().unwrap();
+                assert_eq!(lines.atoms.len(), 2, "{writing}/{direction}");
+                assert_eq!(lines.runs.len(), 2, "{writing}/{direction}");
+                assert!(lines.glyphs.is_empty(), "{writing}/{direction}");
+                assert_eq!(frame.layout.boxes[1].border.width, 30.0, "{writing}");
+                assert_eq!(frame.layout.boxes[1].border.height, 40.0, "{writing}");
+            }
         }
     }
 }
