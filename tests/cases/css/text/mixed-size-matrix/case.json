@@ -1,0 +1,267 @@
+{
+  "spec": "https://www.w3.org/TR/css-writing-modes-3/#text-baselines",
+  "assertion": "12 combinations cross three writing modes, two orientations and two child sizes. Mixed vertical text aligns on the central baseline; sideways retains alphabetic alignment.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Three browsers agree on the corrected central alignment. Native differs at glyph edges and half-pixel baseline rounding (4662 pixels, max 168); the independent unit test checks baseline deltas and line extent.",
+    "pixels": {
+      "maxDifference": 170,
+      "maxPixels": 4800
+    }
+  },
+  "layout": [
+    {
+      "key": "c0",
+      "border": {
+        "x": 12,
+        "y": 12,
+        "width": 132,
+        "height": 116
+      },
+      "padding": {
+        "x": 12,
+        "y": 12,
+        "width": 132,
+        "height": 116
+      },
+      "content": {
+        "x": 12,
+        "y": 12,
+        "width": 132,
+        "height": 116
+      }
+    },
+    {
+      "key": "c1",
+      "border": {
+        "x": 158,
+        "y": 12,
+        "width": 132,
+        "height": 116
+      },
+      "padding": {
+        "x": 158,
+        "y": 12,
+        "width": 132,
+        "height": 116
+      },
+      "content": {
+        "x": 158,
+        "y": 12,
+        "width": 132,
+        "height": 116
+      }
+    },
+    {
+      "key": "c2",
+      "border": {
+        "x": 304,
+        "y": 12,
+        "width": 132,
+        "height": 116
+      },
+      "padding": {
+        "x": 304,
+        "y": 12,
+        "width": 132,
+        "height": 116
+      },
+      "content": {
+        "x": 304,
+        "y": 12,
+        "width": 132,
+        "height": 116
+      }
+    },
+    {
+      "key": "c3",
+      "border": {
+        "x": 450,
+        "y": 12,
+        "width": 132,
+        "height": 116
+      },
+      "padding": {
+        "x": 450,
+        "y": 12,
+        "width": 132,
+        "height": 116
+      },
+      "content": {
+        "x": 450,
+        "y": 12,
+        "width": 132,
+        "height": 116
+      }
+    },
+    {
+      "key": "c4",
+      "border": {
+        "x": 12,
+        "y": 142,
+        "width": 132,
+        "height": 116
+      },
+      "padding": {
+        "x": 12,
+        "y": 142,
+        "width": 132,
+        "height": 116
+      },
+      "content": {
+        "x": 12,
+        "y": 142,
+        "width": 132,
+        "height": 116
+      }
+    },
+    {
+      "key": "c5",
+      "border": {
+        "x": 158,
+        "y": 142,
+        "width": 132,
+        "height": 116
+      },
+      "padding": {
+        "x": 158,
+        "y": 142,
+        "width": 132,
+        "height": 116
+      },
+      "content": {
+        "x": 158,
+        "y": 142,
+        "width": 132,
+        "height": 116
+      }
+    },
+    {
+      "key": "c6",
+      "border": {
+        "x": 304,
+        "y": 142,
+        "width": 132,
+        "height": 116
+      },
+      "padding": {
+        "x": 304,
+        "y": 142,
+        "width": 132,
+        "height": 116
+      },
+      "content": {
+        "x": 304,
+        "y": 142,
+        "width": 132,
+        "height": 116
+      }
+    },
+    {
+      "key": "c7",
+      "border": {
+        "x": 450,
+        "y": 142,
+        "width": 132,
+        "height": 116
+      },
+      "padding": {
+        "x": 450,
+        "y": 142,
+        "width": 132,
+        "height": 116
+      },
+      "content": {
+        "x": 450,
+        "y": 142,
+        "width": 132,
+        "height": 116
+      }
+    },
+    {
+      "key": "c8",
+      "border": {
+        "x": 12,
+        "y": 272,
+        "width": 132,
+        "height": 116
+      },
+      "padding": {
+        "x": 12,
+        "y": 272,
+        "width": 132,
+        "height": 116
+      },
+      "content": {
+        "x": 12,
+        "y": 272,
+        "width": 132,
+        "height": 116
+      }
+    },
+    {
+      "key": "c9",
+      "border": {
+        "x": 158,
+        "y": 272,
+        "width": 132,
+        "height": 116
+      },
+      "padding": {
+        "x": 158,
+        "y": 272,
+        "width": 132,
+        "height": 116
+      },
+      "content": {
+        "x": 158,
+        "y": 272,
+        "width": 132,
+        "height": 116
+      }
+    },
+    {
+      "key": "c10",
+      "border": {
+        "x": 304,
+        "y": 272,
+        "width": 132,
+        "height": 116
+      },
+      "padding": {
+        "x": 304,
+        "y": 272,
+        "width": 132,
+        "height": 116
+      },
+      "content": {
+        "x": 304,
+        "y": 272,
+        "width": 132,
+        "height": 116
+      }
+    },
+    {
+      "key": "c11",
+      "border": {
+        "x": 450,
+        "y": 272,
+        "width": 132,
+        "height": 116
+      },
+      "padding": {
+        "x": 450,
+        "y": 272,
+        "width": 132,
+        "height": 116
+      },
+      "content": {
+        "x": 450,
+        "y": 272,
+        "width": 132,
+        "height": 116
+      }
+    }
+  ]
+}

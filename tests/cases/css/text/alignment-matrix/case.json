@@ -1,0 +1,267 @@
+{
+  "spec": "https://www.w3.org/TR/CSS2/visudet.html#propdef-vertical-align",
+  "assertion": "12 independent display/alignment combinations place empty atomic inline boxes beside nested smaller superscript text; display mode is not coupled to alignment choice.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All browsers agree on the independently asserted boxes. Selected Chrome after inspecting native glyphs, line breaking and difference images.",
+    "pixels": {
+      "maxDifference": 100,
+      "maxPixels": 4200
+    }
+  },
+  "layout": [
+    {
+      "key": "c0",
+      "border": {
+        "x": 12,
+        "y": 12,
+        "width": 192,
+        "height": 72
+      },
+      "padding": {
+        "x": 12,
+        "y": 12,
+        "width": 192,
+        "height": 72
+      },
+      "content": {
+        "x": 12,
+        "y": 12,
+        "width": 192,
+        "height": 72
+      }
+    },
+    {
+      "key": "c1",
+      "border": {
+        "x": 216,
+        "y": 12,
+        "width": 192,
+        "height": 72
+      },
+      "padding": {
+        "x": 216,
+        "y": 12,
+        "width": 192,
+        "height": 72
+      },
+      "content": {
+        "x": 216,
+        "y": 12,
+        "width": 192,
+        "height": 72
+      }
+    },
+    {
+      "key": "c2",
+      "border": {
+        "x": 420,
+        "y": 12,
+        "width": 192,
+        "height": 72
+      },
+      "padding": {
+        "x": 420,
+        "y": 12,
+        "width": 192,
+        "height": 72
+      },
+      "content": {
+        "x": 420,
+        "y": 12,
+        "width": 192,
+        "height": 72
+      }
+    },
+    {
+      "key": "c3",
+      "border": {
+        "x": 12,
+        "y": 100,
+        "width": 192,
+        "height": 72
+      },
+      "padding": {
+        "x": 12,
+        "y": 100,
+        "width": 192,
+        "height": 72
+      },
+      "content": {
+        "x": 12,
+        "y": 100,
+        "width": 192,
+        "height": 72
+      }
+    },
+    {
+      "key": "c4",
+      "border": {
+        "x": 216,
+        "y": 100,
+        "width": 192,
+        "height": 72
+      },
+      "padding": {
+        "x": 216,
+        "y": 100,
+        "width": 192,
+        "height": 72
+      },
+      "content": {
+        "x": 216,
+        "y": 100,
+        "width": 192,
+        "height": 72
+      }
+    },
+    {
+      "key": "c5",
+      "border": {
+        "x": 420,
+        "y": 100,
+        "width": 192,
+        "height": 72
+      },
+      "padding": {
+        "x": 420,
+        "y": 100,
+        "width": 192,
+        "height": 72
+      },
+      "content": {
+        "x": 420,
+        "y": 100,
+        "width": 192,
+        "height": 72
+      }
+    },
+    {
+      "key": "c6",
+      "border": {
+        "x": 12,
+        "y": 188,
+        "width": 192,
+        "height": 72
+      },
+      "padding": {
+        "x": 12,
+        "y": 188,
+        "width": 192,
+        "height": 72
+      },
+      "content": {
+        "x": 12,
+        "y": 188,
+        "width": 192,
+        "height": 72
+      }
+    },
+    {
+      "key": "c7",
+      "border": {
+        "x": 216,
+        "y": 188,
+        "width": 192,
+        "height": 72
+      },
+      "padding": {
+        "x": 216,
+        "y": 188,
+        "width": 192,
+        "height": 72
+      },
+      "content": {
+        "x": 216,
+        "y": 188,
+        "width": 192,
+        "height": 72
+      }
+    },
+    {
+      "key": "c8",
+      "border": {
+        "x": 420,
+        "y": 188,
+        "width": 192,
+        "height": 72
+      },
+      "padding": {
+        "x": 420,
+        "y": 188,
+        "width": 192,
+        "height": 72
+      },
+      "content": {
+        "x": 420,
+        "y": 188,
+        "width": 192,
+        "height": 72
+      }
+    },
+    {
+      "key": "c9",
+      "border": {
+        "x": 12,
+        "y": 276,
+        "width": 192,
+        "height": 72
+      },
+      "padding": {
+        "x": 12,
+        "y": 276,
+        "width": 192,
+        "height": 72
+      },
+      "content": {
+        "x": 12,
+        "y": 276,
+        "width": 192,
+        "height": 72
+      }
+    },
+    {
+      "key": "c10",
+      "border": {
+        "x": 216,
+        "y": 276,
+        "width": 192,
+        "height": 72
+      },
+      "padding": {
+        "x": 216,
+        "y": 276,
+        "width": 192,
+        "height": 72
+      },
+      "content": {
+        "x": 216,
+        "y": 276,
+        "width": 192,
+        "height": 72
+      }
+    },
+    {
+      "key": "c11",
+      "border": {
+        "x": 420,
+        "y": 276,
+        "width": 192,
+        "height": 72
+      },
+      "padding": {
+        "x": 420,
+        "y": 276,
+        "width": 192,
+        "height": 72
+      },
+      "content": {
+        "x": 420,
+        "y": 276,
+        "width": 192,
+        "height": 72
+      }
+    }
+  ]
+}

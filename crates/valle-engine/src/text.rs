@@ -1076,12 +1076,41 @@ impl Text {
             true => lines.glyphs[g + 1].x,
             false => run.x[1],
         };
+        let rtl = font.rtl;
         let mut cuts: Vec<Option<f32>> = vec![None; lines.boxes.len()];
         for (l, cut) in cuts.iter_mut().enumerate() {
             let runs: Vec<&Run> = (lines.runs.iter()).filter(|r| r.line == l as u32).collect();
-            let over = overflow && runs.iter().any(|r| r.x[1] > width);
+            let over = overflow
+                && runs
+                    .iter()
+                    .any(|r| if rtl { r.x[0] < 0.0 } else { r.x[1] > width });
             let clamped = clamp.is_some_and(|n| l + 1 == n && lines.boxes.len() > n);
             if !over && !clamped {
+                continue;
+            }
+            if rtl {
+                let mut at = runs.last().map_or(width, |r| r.x[1]);
+                let start = runs.iter().map(|r| r.x[0]).fold(at, f32::min);
+                if !over && at - start + advance <= width {
+                    *cut = Some(start);
+                    continue;
+                }
+                'fit: for run in runs.into_iter().rev() {
+                    if lines.atoms.iter().any(|a| a.node == run.node) {
+                        if run.x[0] < advance {
+                            break;
+                        }
+                        at = run.x[0];
+                    }
+                    for g in (run.glyphs[0] as usize..run.glyphs[1] as usize).rev() {
+                        let start = lines.glyphs[g].x;
+                        if start < advance {
+                            break 'fit;
+                        }
+                        at = start;
+                    }
+                }
+                *cut = Some(at);
                 continue;
             }
             let mut at = runs.first().map_or(0.0, |r| r.x[0]);
@@ -1112,7 +1141,13 @@ impl Text {
             let run = lines.runs[k];
             let start = glyphs.len() as u32;
             for g in run.glyphs[0] as usize..run.glyphs[1] as usize {
-                if cuts[run.line as usize].is_none_or(|c| right(lines, &run, g) <= c) {
+                if cuts[run.line as usize].is_none_or(|c| {
+                    if rtl {
+                        lines.glyphs[g].x >= c
+                    } else {
+                        right(lines, &run, g) <= c
+                    }
+                }) {
                     glyphs.push(lines.glyphs[g]);
                 }
             }
@@ -1123,20 +1158,37 @@ impl Text {
             let Some(c) = cuts[line] else {
                 return true;
             };
-            d.rect[2] = d.rect[2].min(c);
+            if rtl {
+                d.rect[0] = d.rect[0].max(c);
+            } else {
+                d.rect[2] = d.rect[2].min(c);
+            }
             d.rect[0] < d.rect[2]
         });
-        lines
-            .marks
-            .retain(|m| cuts[m.line as usize].is_none_or(|c| m.inline[1] <= c));
+        lines.marks.retain(|m| {
+            cuts[m.line as usize].is_none_or(|c| {
+                if rtl {
+                    m.inline[0] >= c
+                } else {
+                    m.inline[1] <= c
+                }
+            })
+        });
         lines.atoms.retain(|a| {
             clamp.is_none_or(|n| (a.line as usize) < n)
-                && cuts[a.line as usize].is_none_or(|c| a.rect.x + a.rect.width <= c)
+                && cuts[a.line as usize].is_none_or(|c| {
+                    if rtl {
+                        a.rect.x >= c
+                    } else {
+                        a.rect.x + a.rect.width <= c
+                    }
+                })
         });
         for (l, cut) in cuts.into_iter().enumerate() {
             let Some(c) = cut else {
                 continue;
             };
+            let c = if rtl { c - advance } else { c };
             let start = glyphs.len() as u32;
             glyphs.extend(ellipsis.iter().map(|&(face, id, x, size)| Glyph {
                 face,
@@ -2948,6 +3000,36 @@ mod tests {
         let mut fits = t.lines(&plain(words, &f), wide).unwrap();
         let before = fits.clone();
         t.truncate(&mut fits, &f, 9, wide, true, None).unwrap();
+        assert_eq!(fits, before);
+    }
+
+    #[test]
+    fn rtl_overflow_replaces_the_visual_left_edge() {
+        let mut t = text();
+        let f = Font {
+            rtl: true,
+            wrap: false,
+            ..font(24.0)
+        };
+        for width in [76.0, 120.0] {
+            let mut lines = t.lines(&plain("ALPHA BETA GAMMA", &f), width).unwrap();
+            let whole = lines.clone();
+            assert!(whole.runs[0].x[0] < 0.0);
+            t.truncate(&mut lines, &f, 9, width, true, None).unwrap();
+            let marker = lines.runs.last().unwrap();
+            assert_eq!(marker.node, 9);
+            assert!(
+                marker.x[0] >= 0.0 && marker.x[0] < 24.0 && marker.x[1] < width,
+                "{marker:?}"
+            );
+            let kept = &lines.glyphs[..marker.glyphs[0] as usize];
+            assert!(!kept.is_empty() && kept.len() < whole.glyphs.len());
+            assert!(kept.iter().all(|g| g.x >= marker.x[1]));
+            assert_eq!(kept.last(), whole.glyphs.last());
+        }
+        let mut fits = t.lines(&plain("AB", &f), 120.0).unwrap();
+        let before = fits.clone();
+        t.truncate(&mut fits, &f, 9, 120.0, true, None).unwrap();
         assert_eq!(fits, before);
     }
 

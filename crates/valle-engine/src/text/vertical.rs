@@ -185,6 +185,19 @@ fn layout(
                 .iter()
                 .find(|p| p.node == run.node)
                 .map_or(content.font, |p| p.font);
+            // Mixed/upright paragraphs align different sizes on their central baseline.
+            // The horizontal shaping pass aligned them on the alphabetic baseline.
+            let baseline_shift = if content.font.orientation == Orientation::Sideways {
+                0.0
+            } else {
+                let metrics = text.metrics(font)?;
+                (metrics[0].round() - metrics[1].round()) * 0.5 - central
+            };
+            let mut extent = text.strut(font)?;
+            if content.font.orientation != Orientation::Sideways {
+                let leading = (extent[0] + extent[1] - strut[0] - strut[1]) * 0.5;
+                extent = [strut[0] + leading, strut[1] + leading];
+            }
             if let Some(a) = base.atoms.iter().find(|a| a.node == run.node) {
                 let atom = content
                     .pieces
@@ -233,7 +246,7 @@ fn layout(
                     wrap: font.wrap,
                     emergency: false,
                     break_after: !start && breaks.contains(&(at as usize)),
-                    extent: text.strut(font)?,
+                    extent,
                 });
                 continue;
             }
@@ -286,7 +299,7 @@ fn layout(
                             .iter()
                             .map(|g| Glyph {
                                 x: g.x - origin,
-                                y: g.y - base.baselines[line],
+                                y: g.y - base.baselines[line] + baseline_shift,
                                 ..*g
                             })
                             .collect(),
@@ -318,7 +331,7 @@ fn layout(
                         || font.overflow_wrap == OverflowWrap::Anywhere
                         || (!min && font.overflow_wrap == OverflowWrap::BreakWord),
                     break_after,
-                    extent: text.strut(font)?,
+                    extent,
                 });
             }
         }
@@ -885,6 +898,26 @@ mod tests {
         assert!(lines.glyphs.iter().all(|g| g.upright));
         assert!((lines.runs[0].x[1] - 100.0).abs() < 0.01);
         assert!((lines.runs[1].x[1] - 60.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn mixed_sizes_share_the_vertical_central_baseline() {
+        for writing in ["vertical-rl", "vertical-lr"] {
+            for orientation in ["mixed", "sideways"] {
+                let source = indoc::indoc! {r#"
+                    export const composition={width:120,height:120,fps:1,duration:1};
+                    export default function Scene(){return <Text style={{width:100,height:100,fontSize:24,lineHeight:"36px",writingMode:"WRITING",textOrientation:"ORIENTATION"}}>Ag<Span style={{fontSize:16}}>pq</Span></Text>}
+                "#}.replace("WRITING", writing).replace("ORIENTATION", orientation);
+                let frame = load(&source).frame(Tick::ZERO).unwrap();
+                let lines = frame.layout.lines.iter().flatten().next().unwrap();
+                // Noto Sans central baselines: (26 - 7)/2 at 24px, (17 - 5)/2 at 16px.
+                let expected = if orientation == "mixed" { -3.5 } else { 0.0 };
+                assert_eq!(lines.glyphs[2].y - lines.glyphs[0].y, expected);
+                if orientation == "mixed" {
+                    assert_eq!(lines.boxes[0][1], 36.0);
+                }
+            }
+        }
     }
 
     #[test]

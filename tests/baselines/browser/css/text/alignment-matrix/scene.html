@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>alignment-matrix</title
+  ><style>
+    @font-face {
+      font-family: "Test Sans";
+      src: url("/tests/resources/NotoSans.ttf");
+      font-weight: 100 900;
+    }
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 624px;
+      height: 364px;
+      background: white;
+    }
+  </style>
+  <div id="canvas">
+    <!-- prettier-ignore -->
+    <div data-key="c0" style="position:absolute;left:12px;top:12px;width:192px;height:72px;font-size:24px;line-height:36px;color:#17365d;background:#eef3f8;font-family:Test Sans">A<span style="font-size:14px;line-height:20px;vertical-align:super;background:#d6eaf8">xy</span><span data-key="c0/badge" style="display:inline-block;width:40px;height:24px;padding:2px;border:2px solid #b58300;background:#ffebae;vertical-align:baseline"></span>B</div>
+    <!-- prettier-ignore -->
+    <div data-key="c1" style="position:absolute;left:216px;top:12px;width:192px;height:72px;font-size:24px;line-height:36px;color:#17365d;background:#eef3f8;font-family:Test Sans">A<span style="font-size:14px;line-height:20px;vertical-align:super;background:#d6eaf8">xy</span><span data-key="c1/badge" style="display:inline-block;width:40px;height:24px;padding:2px;border:2px solid #b58300;background:#ffebae;vertical-align:middle"></span>B</div>
+    <!-- prettier-ignore -->
+    <div data-key="c2" style="position:absolute;left:420px;top:12px;width:192px;height:72px;font-size:24px;line-height:36px;color:#17365d;background:#eef3f8;font-family:Test Sans">A<span style="font-size:14px;line-height:20px;vertical-align:super;background:#d6eaf8">xy</span><span data-key="c2/badge" style="display:inline-block;width:40px;height:24px;padding:2px;border:2px solid #b58300;background:#ffebae;vertical-align:top"></span>B</div>
+    <!-- prettier-ignore -->
+    <div data-key="c3" style="position:absolute;left:12px;top:100px;width:192px;height:72px;font-size:24px;line-height:36px;color:#17365d;background:#eef3f8;font-family:Test Sans">A<span style="font-size:14px;line-height:20px;vertical-align:super;background:#d6eaf8">xy</span><span data-key="c3/badge" style="display:inline-block;width:40px;height:24px;padding:2px;border:2px solid #b58300;background:#ffebae;vertical-align:bottom"></span>B</div>
+    <!-- prettier-ignore -->
+    <div data-key="c4" style="position:absolute;left:216px;top:100px;width:192px;height:72px;font-size:24px;line-height:36px;color:#17365d;background:#eef3f8;font-family:Test Sans">A<span style="font-size:14px;line-height:20px;vertical-align:super;background:#d6eaf8">xy</span><span data-key="c4/badge" style="display:inline-flex;width:40px;height:24px;padding:2px;border:2px solid #b58300;background:#ffebae;vertical-align:baseline"></span>B</div>
+    <!-- prettier-ignore -->
+    <div data-key="c5" style="position:absolute;left:420px;top:100px;width:192px;height:72px;font-size:24px;line-height:36px;color:#17365d;background:#eef3f8;font-family:Test Sans">A<span style="font-size:14px;line-height:20px;vertical-align:super;background:#d6eaf8">xy</span><span data-key="c5/badge" style="display:inline-flex;width:40px;height:24px;padding:2px;border:2px solid #b58300;background:#ffebae;vertical-align:middle"></span>B</div>
+    <!-- prettier-ignore -->
+    <div data-key="c6" style="position:absolute;left:12px;top:188px;width:192px;height:72px;font-size:24px;line-height:36px;color:#17365d;background:#eef3f8;font-family:Test Sans">A<span style="font-size:14px;line-height:20px;vertical-align:super;background:#d6eaf8">xy</span><span data-key="c6/badge" style="display:inline-flex;width:40px;height:24px;padding:2px;border:2px solid #b58300;background:#ffebae;vertical-align:top"></span>B</div>
+    <!-- prettier-ignore -->
+    <div data-key="c7" style="position:absolute;left:216px;top:188px;width:192px;height:72px;font-size:24px;line-height:36px;color:#17365d;background:#eef3f8;font-family:Test Sans">A<span style="font-size:14px;line-height:20px;vertical-align:super;background:#d6eaf8">xy</span><span data-key="c7/badge" style="display:inline-flex;width:40px;height:24px;padding:2px;border:2px solid #b58300;background:#ffebae;vertical-align:bottom"></span>B</div>
+    <!-- prettier-ignore -->
+    <div data-key="c8" style="position:absolute;left:420px;top:188px;width:192px;height:72px;font-size:24px;line-height:36px;color:#17365d;background:#eef3f8;font-family:Test Sans">A<span style="font-size:14px;line-height:20px;vertical-align:super;background:#d6eaf8">xy</span><span data-key="c8/badge" style="display:inline-grid;width:40px;height:24px;padding:2px;border:2px solid #b58300;background:#ffebae;vertical-align:baseline"></span>B</div>
+    <!-- prettier-ignore -->
+    <div data-key="c9" style="position:absolute;left:12px;top:276px;width:192px;height:72px;font-size:24px;line-height:36px;color:#17365d;background:#eef3f8;font-family:Test Sans">A<span style="font-size:14px;line-height:20px;vertical-align:super;background:#d6eaf8">xy</span><span data-key="c9/badge" style="display:inline-grid;width:40px;height:24px;padding:2px;border:2px solid #b58300;background:#ffebae;vertical-align:middle"></span>B</div>
+    <!-- prettier-ignore -->
+    <div data-key="c10" style="position:absolute;left:216px;top:276px;width:192px;height:72px;font-size:24px;line-height:36px;color:#17365d;background:#eef3f8;font-family:Test Sans">A<span style="font-size:14px;line-height:20px;vertical-align:super;background:#d6eaf8">xy</span><span data-key="c10/badge" style="display:inline-grid;width:40px;height:24px;padding:2px;border:2px solid #b58300;background:#ffebae;vertical-align:top"></span>B</div>
+    <!-- prettier-ignore -->
+    <div data-key="c11" style="position:absolute;left:420px;top:276px;width:192px;height:72px;font-size:24px;line-height:36px;color:#17365d;background:#eef3f8;font-family:Test Sans">A<span style="font-size:14px;line-height:20px;vertical-align:super;background:#d6eaf8">xy</span><span data-key="c11/badge" style="display:inline-grid;width:40px;height:24px;padding:2px;border:2px solid #b58300;background:#ffebae;vertical-align:bottom"></span>B</div>
+  </div>
+</html>

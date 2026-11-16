@@ -360,34 +360,35 @@ mod tests {
     fn inline_combinations_keep_geometry_when_seeking() {
         for writing in ["horizontal-tb", "vertical-rl", "vertical-lr"] {
             for direction in ["ltr", "rtl"] {
-                for (index, align) in ["baseline", "middle", "top", "25%"].into_iter().enumerate() {
-                    let display = ["inline-block", "inline-flex", "inline-grid"][index % 3];
-                    let body = format!(
-                        r#"const {{seconds}}=useCurrentTime(); return <Text style={{{{width:180,height:200,fontSize:"large",lineHeight:"30px",writingMode:"{writing}",direction:"{direction}"}}}}>AB <Span style={{{{fontSize:"smaller",fontVariantPosition:"super",verticalAlign:"{align}"}}}}>12Q?<View style={{{{display:"{display}",width:40+seconds*20,height:38,padding:3,margin:2,background:"orange",verticalAlign:"{align}",writingMode:"horizontal-tb"}}}}><Text style={{{{fontSize:"small",lineHeight:"20px"}}}}>OK</Text></View></Span> words wrap.</Text>"#,
-                    );
-                    let mut scene = load(&body);
-                    for seconds in [1.5, 0.0, 0.5, 1.5] {
-                        let at = Tick::from_seconds(seconds).unwrap();
-                        let frame = scene.frame(at).unwrap();
-                        let fresh = load(&body).frame(at).unwrap();
-                        assert_eq!(
-                            frame.layout.boxes, fresh.layout.boxes,
-                            "{writing}/{direction}/{align}"
+                for align in ["baseline", "middle", "top", "25%"] {
+                    for display in ["inline-block", "inline-flex", "inline-grid"] {
+                        let body = format!(
+                            r#"const {{seconds}}=useCurrentTime(); return <Text style={{{{width:180,height:200,fontSize:"large",lineHeight:"30px",writingMode:"{writing}",direction:"{direction}"}}}}>AB <Span style={{{{fontSize:"smaller",fontVariantPosition:"super",verticalAlign:"{align}"}}}}>12Q?<View style={{{{display:"{display}",width:40+seconds*20,height:38,padding:3,margin:2,background:"orange",verticalAlign:"{align}",writingMode:"horizontal-tb"}}}}><Text style={{{{fontSize:"small",lineHeight:"20px"}}}}>OK</Text></View></Span> words wrap.</Text>"#,
                         );
-                        assert_eq!(frame.items, fresh.items, "{writing}/{direction}/{align}");
-                        let lines = frame.layout.lines[0].as_ref().unwrap();
-                        assert_eq!(lines.atoms.len(), 1);
-                        let rect = frame.layout.boxes[lines.atoms[0].node as usize].border;
-                        assert_eq!(
-                            [rect.width, rect.height],
-                            [40.0 + seconds as f32 * 20.0, 38.0]
-                        );
-                        for b in &frame.layout.boxes {
-                            assert!(
-                                [b.border.x, b.border.y, b.border.width, b.border.height]
-                                    .iter()
-                                    .all(|v| v.is_finite())
+                        let mut scene = load(&body);
+                        for seconds in [1.5, 0.0, 0.5, 1.5] {
+                            let at = Tick::from_seconds(seconds).unwrap();
+                            let frame = scene.frame(at).unwrap();
+                            let fresh = load(&body).frame(at).unwrap();
+                            assert_eq!(
+                                frame.layout.boxes, fresh.layout.boxes,
+                                "{writing}/{direction}/{align}"
                             );
+                            assert_eq!(frame.items, fresh.items, "{writing}/{direction}/{align}");
+                            let lines = frame.layout.lines[0].as_ref().unwrap();
+                            assert_eq!(lines.atoms.len(), 1);
+                            let rect = frame.layout.boxes[lines.atoms[0].node as usize].border;
+                            assert_eq!(
+                                [rect.width, rect.height],
+                                [40.0 + seconds as f32 * 20.0, 38.0]
+                            );
+                            for b in &frame.layout.boxes {
+                                assert!(
+                                    [b.border.x, b.border.y, b.border.width, b.border.height]
+                                        .iter()
+                                        .all(|v| v.is_finite())
+                                );
+                            }
                         }
                     }
                 }

@@ -1,0 +1,269 @@
+{
+  "spec": "https://www.w3.org/TR/css-overflow-3/#text-overflow",
+  "assertion": "Eight width/overflow/direction combinations check clip versus ellipsis; four font-size/line-clamp combinations check one and two visible lines with independently expected 32px and 64px auto heights.",
+  "at": [
+    0
+  ],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Three browsers agree on overflow direction and visible clamp lines. After fixing RTL ellipsis, reviewed native differences are glyph edges (7199 pixels, max 137). Box heights and the RTL truncation unit test guard semantics independently.",
+    "pixels": {
+      "maxDifference": 140,
+      "maxPixels": 7400
+    }
+  },
+  "layout": [
+    {
+      "key": "c0",
+      "border": {
+        "x": 12,
+        "y": 12,
+        "width": 76,
+        "height": 96
+      },
+      "padding": {
+        "x": 12,
+        "y": 12,
+        "width": 76,
+        "height": 96
+      },
+      "content": {
+        "x": 12,
+        "y": 12,
+        "width": 76,
+        "height": 96
+      }
+    },
+    {
+      "key": "c1",
+      "border": {
+        "x": 172,
+        "y": 12,
+        "width": 76,
+        "height": 96
+      },
+      "padding": {
+        "x": 172,
+        "y": 12,
+        "width": 76,
+        "height": 96
+      },
+      "content": {
+        "x": 172,
+        "y": 12,
+        "width": 76,
+        "height": 96
+      }
+    },
+    {
+      "key": "c2",
+      "border": {
+        "x": 332,
+        "y": 12,
+        "width": 76,
+        "height": 96
+      },
+      "padding": {
+        "x": 332,
+        "y": 12,
+        "width": 76,
+        "height": 96
+      },
+      "content": {
+        "x": 332,
+        "y": 12,
+        "width": 76,
+        "height": 96
+      }
+    },
+    {
+      "key": "c3",
+      "border": {
+        "x": 492,
+        "y": 12,
+        "width": 76,
+        "height": 96
+      },
+      "padding": {
+        "x": 492,
+        "y": 12,
+        "width": 76,
+        "height": 96
+      },
+      "content": {
+        "x": 492,
+        "y": 12,
+        "width": 76,
+        "height": 96
+      }
+    },
+    {
+      "key": "c4",
+      "border": {
+        "x": 12,
+        "y": 124,
+        "width": 120,
+        "height": 96
+      },
+      "padding": {
+        "x": 12,
+        "y": 124,
+        "width": 120,
+        "height": 96
+      },
+      "content": {
+        "x": 12,
+        "y": 124,
+        "width": 120,
+        "height": 96
+      }
+    },
+    {
+      "key": "c5",
+      "border": {
+        "x": 172,
+        "y": 124,
+        "width": 120,
+        "height": 96
+      },
+      "padding": {
+        "x": 172,
+        "y": 124,
+        "width": 120,
+        "height": 96
+      },
+      "content": {
+        "x": 172,
+        "y": 124,
+        "width": 120,
+        "height": 96
+      }
+    },
+    {
+      "key": "c6",
+      "border": {
+        "x": 332,
+        "y": 124,
+        "width": 120,
+        "height": 96
+      },
+      "padding": {
+        "x": 332,
+        "y": 124,
+        "width": 120,
+        "height": 96
+      },
+      "content": {
+        "x": 332,
+        "y": 124,
+        "width": 120,
+        "height": 96
+      }
+    },
+    {
+      "key": "c7",
+      "border": {
+        "x": 492,
+        "y": 124,
+        "width": 120,
+        "height": 96
+      },
+      "padding": {
+        "x": 492,
+        "y": 124,
+        "width": 120,
+        "height": 96
+      },
+      "content": {
+        "x": 492,
+        "y": 124,
+        "width": 120,
+        "height": 96
+      }
+    },
+    {
+      "key": "c8",
+      "border": {
+        "x": 12,
+        "y": 236,
+        "width": 136,
+        "height": 32
+      },
+      "padding": {
+        "x": 12,
+        "y": 236,
+        "width": 136,
+        "height": 32
+      },
+      "content": {
+        "x": 12,
+        "y": 236,
+        "width": 136,
+        "height": 32
+      }
+    },
+    {
+      "key": "c9",
+      "border": {
+        "x": 172,
+        "y": 236,
+        "width": 136,
+        "height": 64
+      },
+      "padding": {
+        "x": 172,
+        "y": 236,
+        "width": 136,
+        "height": 64
+      },
+      "content": {
+        "x": 172,
+        "y": 236,
+        "width": 136,
+        "height": 64
+      }
+    },
+    {
+      "key": "c10",
+      "border": {
+        "x": 332,
+        "y": 236,
+        "width": 136,
+        "height": 32
+      },
+      "padding": {
+        "x": 332,
+        "y": 236,
+        "width": 136,
+        "height": 32
+      },
+      "content": {
+        "x": 332,
+        "y": 236,
+        "width": 136,
+        "height": 32
+      }
+    },
+    {
+      "key": "c11",
+      "border": {
+        "x": 492,
+        "y": 236,
+        "width": 136,
+        "height": 64
+      },
+      "padding": {
+        "x": 492,
+        "y": 236,
+        "width": 136,
+        "height": 64
+      },
+      "content": {
+        "x": 492,
+        "y": 236,
+        "width": 136,
+        "height": 64
+      }
+    }
+  ]
+}
