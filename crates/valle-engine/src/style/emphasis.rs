@@ -155,6 +155,34 @@ mod tests {
     }
 
     #[test]
+    fn every_shape_has_its_filled_and_open_mark() {
+        // CSS Text Decoration 3's marks, by shape: filled then open.
+        let marks = [
+            ("dot", "•", "◦"),
+            ("circle", "●", "○"),
+            ("double-circle", "◉", "◎"),
+            ("triangle", "▲", "△"),
+            ("sesame", "﹅", "﹆"),
+        ];
+        for (shape, filled, open) in marks {
+            for vertical in [false, true] {
+                let mark = |s: &str| style(s).unwrap().text(vertical).map(str::to_string);
+                assert_eq!(mark(shape).as_deref(), Some(filled), "{shape}");
+                assert_eq!(mark(&format!("filled {shape}")).as_deref(), Some(filled));
+                assert_eq!(mark(&format!("{shape} open")).as_deref(), Some(open));
+            }
+        }
+        // With no shape, circles in horizontal text and sesames in vertical text.
+        let auto = |s: &str, vertical| style(s).unwrap().text(vertical).map(str::to_string);
+        assert_eq!(auto("filled", false).as_deref(), Some("●"));
+        assert_eq!(auto("filled", true).as_deref(), Some("﹅"));
+        assert_eq!(style("none").unwrap(), Mark::None);
+        assert!(style("none").unwrap().text(false).is_none());
+        assert!(style("'\\25CF'").unwrap_err().contains("literal mark"));
+        assert!(style("  ").unwrap_err().contains("empty"));
+    }
+
+    #[test]
     fn shorthand_and_position_reset_independently() {
         assert_eq!(
             shorthand("red open dot").unwrap().0,

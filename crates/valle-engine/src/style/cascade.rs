@@ -555,6 +555,48 @@ mod tests {
     }
 
     #[test]
+    fn inheritance_resolves_the_parents_ems_inside_composite_values() {
+        // Each value holds an em length a level down: in a function, a shadow, a shape, a
+        // motion path or an image layer. The child's own font is half its parent's, so a
+        // length resolved against the child rather than frozen in the parent shows as half.
+        let parent = [
+            ("fontSize", num(20.0)),
+            ("transform", text("translate(1em, 2em) perspective(3em)")),
+            ("filter", text("blur(1em) drop-shadow(1em 2em 0.5em red)")),
+            ("boxShadow", text("1em 2em 3em 0.5em blue")),
+            ("clipPath", text("inset(1em round 0.5em)")),
+            ("offsetPath", text("ray(45deg at 2em 3em)")),
+            ("backgroundSize", text("2em 3em")),
+            (
+                "backgroundImage",
+                text("radial-gradient(1em 2em at 3em 4em, red, blue)"),
+            ),
+        ];
+        let child: Vec<(&str, Prop)> = (parent.iter().skip(1))
+            .map(|&(k, _)| (k, text("inherit")))
+            .chain([("fontSize", num(10.0))])
+            .collect();
+        let s = styles(vec![view(&parent, &[1]), view(&child, &[])], &[]).unwrap();
+        let (p, c) = (&s[0], &s[1]);
+        assert_eq!(c.transform, p.transform, "transform");
+        let translate = |s: &Style| match &s.transform[0] {
+            crate::style::transform::Function::Translate(t) => t[0].resolve(0.0),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(translate(c), 20.0);
+        assert_eq!(c.filter, p.filter, "filter");
+        assert_eq!(c.filter[0], crate::style::filter::Function::Blur(20.0));
+        assert_eq!(c.shadows, p.shadows, "boxShadow");
+        assert_eq!(
+            (c.shadows[0].offset, c.shadows[0].blur, c.shadows[0].spread),
+            ([20.0, 40.0], 60.0, 10.0)
+        );
+        assert_eq!(c.clip, p.clip, "clipPath");
+        assert_eq!(c.motion, p.motion, "offsetPath");
+        assert_eq!(c.layers, p.layers, "background");
+    }
+
+    #[test]
     fn initial_resets_inherited_properties_and_unset_non_inherited_ones() {
         let tree = vec![
             view(
