@@ -52406,6 +52406,13 @@
     "min-inline-fit",
     "min-inline-max",
     "min-inline-min",
-    "hover:p-4"
+    "hover:p-4",
+    "border-[3]",
+    "outline-[2]",
+    "rotate-[45]",
+    "text-[1.5]",
+    "bg-[3]",
+    "decoration-[3]",
+    "border-[1e3]"
   ]
 }

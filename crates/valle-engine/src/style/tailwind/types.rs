@@ -74,7 +74,13 @@ const UNITS: [&str; 31] = [
 /// followed by what `rest` takes.
 fn numbered(s: &str, rest: impl Fn(&str) -> bool) -> bool {
     let b = s.as_bytes();
-    let digits = |from: usize| from + b[from..].iter().take_while(|c| c.is_ascii_digit()).count();
+    // From past the end there are no digits: a number can end the value.
+    let digits = |from: usize| {
+        from + (b.get(from..).unwrap_or_default())
+            .iter()
+            .take_while(|c| c.is_ascii_digit())
+            .count()
+    };
     let start = usize::from(matches!(b.first(), Some(b'+' | b'-')));
     let whole = digits(start);
     let end = match b.get(whole) {
