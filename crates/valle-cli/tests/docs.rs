@@ -3,10 +3,15 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 
 use serde_json::Value;
 
 const DOCS: [&str; 5] = ["start", "motion", "timeline", "project", "cli"];
+
+// A concurrent spawn can inherit the copy's open writer until exec, making Linux refuse to
+// execute the copied file with ETXTBSY even after copy returns. Keep these tests apart.
+static EXECUTABLE: Mutex<()> = Mutex::new(());
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../")
@@ -108,6 +113,7 @@ fn provide(dir: &Path, doc: &Value) {
 
 #[test]
 fn every_example_scene_and_timeline_checks() {
+    let _guard = EXECUTABLE.lock().unwrap();
     let dir = std::env::temp_dir().join(format!("valle-docs-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -140,6 +146,7 @@ fn every_example_scene_and_timeline_checks() {
 
 #[test]
 fn a_moved_executable_serves_every_guide_as_written() {
+    let _guard = EXECUTABLE.lock().unwrap();
     let dir = std::env::temp_dir().join(format!("valle-docs-moved-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
