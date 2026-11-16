@@ -22,6 +22,18 @@ const CASES: {
   nativeResources?: Record<string, string>;
   pixels?: { maxDifference: number; maxPixels: number };
 }[] = [
+  { entry: "tests/cases/css/values/inherited-units/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/sizing/indefinite-percentages/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/cascade/logical-order/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/sizing/intrinsic-constraints/scene.motion.tsx", frames: [0] },
+  {
+    entry: "tests/cases/css/values/dynamic-inherited-units/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
+  {
+    entry: "tests/cases/css/sizing/dynamic-percentages/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
   { entry: "tests/cases/css/compositing/visibility-backdrop/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/text/wrap-matrix/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/text/alignment-matrix/scene.motion.tsx", frames: [0] },

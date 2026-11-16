@@ -766,6 +766,55 @@ impl Tree<'_> {
         if own != parent {
             inputs.vertical_margins_are_collapsible = taffy::Line::FALSE;
         }
+        let style = self.style(id);
+        // Out-of-flow layout supplies the measured auto height as a known size. It is
+        // still content-dependent: block/flex descendants must not use it as a new
+        // percentage basis. Opposing insets or an aspect ratio can make it definite.
+        if matches!(style.position, Position::Absolute | Position::Fixed)
+            && style.size.height.is_auto()
+            && style.aspect_ratio.is_none()
+            && (style.inset.top.is_auto() || style.inset.bottom.is_auto())
+        {
+            let calc = |h, basis| self.calc(h, basis);
+            let min = style
+                .min_size
+                .height
+                .maybe_resolve(inputs.parent_size.height, calc);
+            let max = style
+                .max_size
+                .height
+                .maybe_resolve(inputs.parent_size.height, calc);
+            if !matches!((min, max), (Some(min), Some(max)) if max <= min) {
+                inputs.known_dimensions_are_definite.height = false;
+                if style.display == Display::Flex {
+                    // Flex also resolves cross-axis percentages from the known size.
+                    // Let it recompute this content height with an indefinite basis.
+                    inputs.known_dimensions.height = None;
+                }
+            }
+        }
+        // A min/max-content query must collect lines under that intrinsic constraint.
+        // Taffy's flex collector otherwise replaces it with max-width, changing both
+        // the min-content and max-content widths. The parent applies the maximum to
+        // the measured keyword size before the final layout pass.
+        if style.display == Display::Flex
+            && matches!(
+                style.flex_direction,
+                taffy::FlexDirection::Row | taffy::FlexDirection::RowReverse
+            )
+            && style.size.width.is_sizing_keyword()
+            && inputs.run_mode == RunMode::ComputeSize
+            && inputs.known_dimensions.width.is_none()
+            && matches!(
+                inputs.available_space.width,
+                AvailableSpace::MinContent | AvailableSpace::MaxContent
+            )
+            && !style.max_size.width.is_auto()
+        {
+            let mut style = style.clone();
+            style.max_size.width = LengthPercentageAuto::auto();
+            self.local = Some((id, style));
+        }
         // An orthogonal flow with no definite inline available space uses its containing block's
         // size, or the canvas as the initial containing block (Writing Modes 3, section 7.3).
         if orthogonal && inputs.available_space.width == AvailableSpace::MaxContent {
@@ -1290,6 +1339,94 @@ mod tests {
             y,
             width,
             height,
+        }
+    }
+
+    #[test]
+    fn absolute_auto_height_does_not_become_a_percentage_basis() {
+        for display in ["block", "flex", "grid"] {
+            for (height, bottom, parent, child) in [
+                (
+                    "auto",
+                    "auto",
+                    40.0,
+                    if display == "grid" { 24.0 } else { 40.0 },
+                ),
+                ("80px", "auto", 80.0, 40.0),
+                ("auto", "0px", 100.0, 50.0),
+            ] {
+                let l = lay(
+                    vec![
+                        view(
+                            &[
+                                ("position", "absolute"),
+                                ("top", "0px"),
+                                ("bottom", bottom),
+                                ("width", "120px"),
+                                ("height", height),
+                                ("display", display),
+                                ("alignItems", "start"),
+                            ],
+                            &[1],
+                        ),
+                        view(
+                            &[("width", "60px"), ("height", "50%"), ("minHeight", "24px")],
+                            &[2],
+                        ),
+                        view(&[("width", "20px"), ("height", "40px")], &[]),
+                    ],
+                    &[0],
+                )
+                .unwrap();
+                assert_eq!(
+                    l.boxes[0].border.height, parent,
+                    "{display}, {height}, {bottom}"
+                );
+                assert_eq!(
+                    l.boxes[1].border.height, child,
+                    "{display}, {height}, {bottom}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn intrinsic_flex_width_is_measured_before_its_maximum_is_applied() {
+        for keyword in ["min-content", "max-content", "fit-content"] {
+            for (maximum, max_px) in [("50px", 50.0), ("90px", 90.0), ("150px", 150.0)] {
+                let l = lay(
+                    vec![
+                        view(
+                            &[
+                                ("display", "flex"),
+                                ("flexWrap", "wrap"),
+                                ("gap", "8px"),
+                                ("width", keyword),
+                                ("maxWidth", maximum),
+                            ],
+                            &[1, 2],
+                        ),
+                        view(
+                            &[("width", "44px"), ("height", "44px"), ("flexShrink", "0")],
+                            &[],
+                        ),
+                        view(
+                            &[("width", "68px"), ("height", "68px"), ("flexShrink", "0")],
+                            &[],
+                        ),
+                    ],
+                    &[0],
+                )
+                .unwrap();
+                let intrinsic: f32 = if keyword == "min-content" {
+                    68.0
+                } else {
+                    120.0
+                };
+                let width = intrinsic.min(max_px);
+                assert_eq!(l.boxes[0].border.width, width, "{keyword}, {maximum}");
+                assert_eq!(l.boxes[2].border.y, if width < 120.0 { 52.0 } else { 0.0 });
+            }
         }
     }
 
