@@ -147,6 +147,9 @@ HTML tags (`div`, `span`, `img`, `h1`…) are errors that name the tag to use in
 `borderRadius`. Numbers are pixels. `className` takes Tailwind classes (v4), including
 arbitrary values such as `w-[340px]`; both can be used together, `style` winning.
 
+The repository's [CSS support and test coverage inventory](css.md) lists accepted
+properties, value restrictions, existing test evidence and combination gaps.
+
 Lengths also accept `cm`, `mm`, `in`, `pt` and `pc`, including inside `calc()`.
 They use CSS reference pixels: `1in = 96px = 2.54cm = 25.4mm = 72pt = 6pc`.
 Output resolution scales the result; these units do not read screen DPI.

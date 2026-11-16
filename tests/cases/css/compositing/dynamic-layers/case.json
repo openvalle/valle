@@ -1,0 +1,32 @@
+{
+  "spec": "https://www.w3.org/TR/compositing-1/#csscompositingrules",
+  "assertion": "Eight states change opacity, filter, transform, clip, mask, display and visibility around nested backdrop/blend layers. Zero opacity, display:none and visibility:hidden must produce identical background-only frames.",
+  "at": [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75],
+  "valle": {
+    "reason": "Eight reviewed states; exact fresh, forward, reverse and alternating seek comparisons. Frames 2, 6 and 7 share the same background-only baseline.",
+    "maxDifference": 0
+  },
+  "layout": [
+    {
+      "key": "canvas",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 280,
+        "height": 180
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 280,
+        "height": 180
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 280,
+        "height": 180
+      }
+    }
+  ]
+}

@@ -1,8 +1,5 @@
 {
-  "size": [
-    948,
-    756
-  ],
+  "size": [948, 756],
   "sources": {
     "tests/baselines/browser/css/compositing/nested-matrix/scene.html": "f13a967eeafd43e0c79b5b08b0de8fbd91372f3743432ba087631418c67d0af1"
   },

@@ -1,8 +1,5 @@
 {
-  "size": [
-    948,
-    384
-  ],
+  "size": [948, 384],
   "sources": {
     "tests/baselines/browser/css/filter/transformed-bounds/scene.html": "72f35408307ac62f559326c2545bfd55e197326361ead0aa18a01daa936e31db"
   },

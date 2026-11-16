@@ -875,6 +875,62 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_layout_fixture_crosses_wrap_and_sizing_boundaries() {
+        let source =
+            include_str!("../../../tests/cases/css/flex/dynamic-constraints/scene.motion.tsx");
+        let mut scene = load(source).unwrap();
+        for number in [0, 7, 1, 6, 2, 5, 3, 4, 0] {
+            let frame = scene
+                .frame(Tick::from_seconds(number as f64 / 4.0).unwrap())
+                .unwrap();
+            let border = |key| {
+                let index = frame
+                    .template
+                    .nodes
+                    .iter()
+                    .position(|n| n.path.as_deref() == Some(key))
+                    .unwrap();
+                frame.layout.boxes[index].border
+            };
+            let wraps = [true, false, false, true, false, false, true, false][number];
+            let second = border("canvas/wrap/b");
+            assert_eq!(
+                [second.x, second.y],
+                if wraps { [12.0, 40.0] } else { [72.0, 12.0] }
+            );
+            assert_eq!(border("canvas/nested/inner").width, 90.0);
+            assert_eq!(border("canvas/nested/inner/fill").width, 45.0);
+        }
+    }
+
+    #[test]
+    fn dynamic_text_fixture_invalidates_inherited_metrics() {
+        let source =
+            include_str!("../../../tests/cases/css/text/dynamic-inheritance/scene.motion.tsx");
+        let mut scene = load(source).unwrap();
+        for number in [0, 7, 1, 6, 2, 5, 3, 4, 0] {
+            let frame = scene
+                .frame(Tick::from_seconds(number as f64 / 4.0).unwrap())
+                .unwrap();
+            let index = frame
+                .template
+                .nodes
+                .iter()
+                .position(|n| n.path.as_deref() == Some("canvas/wrap"))
+                .unwrap();
+            let lines = frame.layout.lines[index].as_ref().unwrap();
+            assert_eq!(lines.boxes.len(), [3, 2, 3, 2, 2, 2, 2, 2][number]);
+            let (size, height) = if number < 4 {
+                (24.0, 32.0)
+            } else {
+                (16.0, 24.0)
+            };
+            assert!(lines.boxes.iter().all(|b| b[1] == height));
+            assert!(lines.glyphs.iter().all(|g| g.size == size));
+        }
+    }
+
+    #[test]
     fn frames_paint_from_source() {
         big_stack(|| {
             let mut scene = load(SOURCE).unwrap();

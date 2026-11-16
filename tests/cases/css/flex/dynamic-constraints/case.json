@@ -1,0 +1,32 @@
+{
+  "spec": "https://www.w3.org/TR/css-flexbox-1/#flex-lines",
+  "assertion": "Widths cross the exact 120px flex wrapping threshold in both directions; a flex/grid parent alternates while nested percentage sizing remains min-constrained.",
+  "at": [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75],
+  "valle": {
+    "reason": "Eight reviewed states; exact fresh, forward, reverse and alternating seek comparisons. Numerical transition checks accompany the fixture.",
+    "maxDifference": 0
+  },
+  "layout": [
+    {
+      "key": "canvas",
+      "border": {
+        "x": 0,
+        "y": 0,
+        "width": 300,
+        "height": 210
+      },
+      "padding": {
+        "x": 0,
+        "y": 0,
+        "width": 300,
+        "height": 210
+      },
+      "content": {
+        "x": 0,
+        "y": 0,
+        "width": 300,
+        "height": 210
+      }
+    }
+  ]
+}

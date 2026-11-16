@@ -22,6 +22,28 @@ const CASES: {
   nativeResources?: Record<string, string>;
   pixels?: { maxDifference: number; maxPixels: number };
 }[] = [
+  { entry: "tests/cases/css/compositing/visibility-backdrop/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/text/wrap-matrix/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/text/alignment-matrix/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/text/decoration-matrix/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/text/truncation-matrix/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/text/mixed-size-matrix/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/compositing/filter-blend-matrix/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/compositing/clip-mask-matrix/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/compositing/nested-matrix/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/filter/transformed-bounds/scene.motion.tsx", frames: [0] },
+  {
+    entry: "tests/cases/css/flex/dynamic-constraints/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
+  {
+    entry: "tests/cases/css/text/dynamic-inheritance/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
+  {
+    entry: "tests/cases/css/compositing/dynamic-layers/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
   { entry: "tests/cases/css/flex/constraints-matrix/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/flex/wrap-thresholds/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/layout/nested-sizing/scene.motion.tsx", frames: [0] },

@@ -1,8 +1,5 @@
 {
-  "size": [
-    948,
-    756
-  ],
+  "size": [948, 756],
   "sources": {
     "tests/baselines/browser/css/compositing/filter-blend-matrix/scene.html": "6ab7a25c47ec10eebfa80ecc854df294ea73a763bb2ba60244a9e34433631cba"
   },

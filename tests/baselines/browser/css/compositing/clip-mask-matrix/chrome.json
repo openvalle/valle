@@ -1,8 +1,5 @@
 {
-  "size": [
-    948,
-    756
-  ],
+  "size": [948, 756],
   "sources": {
     "tests/baselines/browser/css/compositing/clip-mask-matrix/scene.html": "f97dede6ca99657acdda7c9bb14165ca10f26d9617c0b24e0be499a802f461ec"
   },

@@ -1,9 +1,7 @@
 {
   "spec": "https://www.w3.org/TR/css-overflow-3/#text-overflow",
   "assertion": "Eight width/overflow/direction combinations check clip versus ellipsis; four font-size/line-clamp combinations check one and two visible lines with independently expected 32px and 64px auto heights.",
-  "at": [
-    0
-  ],
+  "at": [0],
   "browser": {
     "selected": "chrome",
     "reason": "Three browsers agree on overflow direction and visible clamp lines. After fixing RTL ellipsis, reviewed native differences are glyph edges (7199 pixels, max 137). Box heights and the RTL truncation unit test guard semantics independently.",

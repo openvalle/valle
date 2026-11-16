@@ -466,6 +466,56 @@ fn combination_allowances_reject_missing_effects() {
             .unwrap();
         for (name, from, to) in [
             (
+                "css/compositing/filter-blend-matrix",
+                "backdropFilter: c.filter",
+                "backdropFilter: \"none\"",
+            ),
+            (
+                "css/compositing/clip-mask-matrix",
+                "maskImage: c.mask",
+                "maskImage: \"none\"",
+            ),
+            (
+                "css/compositing/clip-mask-matrix",
+                "clipPath: c.clip",
+                "clipPath: \"none\"",
+            ),
+            (
+                "css/compositing/nested-matrix",
+                "opacity: c.opacity",
+                "opacity: 1",
+            ),
+            (
+                "css/filter/transformed-bounds",
+                "filter: c.filter",
+                "filter: \"none\"",
+            ),
+            (
+                "css/text/decoration-matrix",
+                "textDecorationLine: \"underline\"",
+                "textDecorationLine: \"none\"",
+            ),
+            (
+                "css/text/mixed-size-matrix",
+                "fontSize: c.size",
+                "fontSize: 24",
+            ),
+            (
+                "css/text/wrap-matrix",
+                "overflowWrap: c.overflow",
+                "overflowWrap: \"normal\"",
+            ),
+            (
+                "css/text/truncation-matrix",
+                "textOverflow: c.overflow",
+                "textOverflow: \"clip\"",
+            ),
+            (
+                "css/text/alignment-matrix",
+                "verticalAlign: c.align",
+                "verticalAlign: \"baseline\"",
+            ),
+            (
                 "css/filter/blur-overflow",
                 "overflow: \"hidden\"",
                 "overflow: \"visible\"",
@@ -519,7 +569,14 @@ fn combination_allowances_reject_missing_effects() {
                 "probe.motion.tsx",
                 &|path| (path == "probe.motion.tsx").then(|| changed.as_bytes().to_vec()),
                 &valle_engine::front::Inputs::default(),
-                std::rc::Rc::new(|_| Err("these geometric probes do not use fonts".into())),
+                std::rc::Rc::new({
+                    let resources = root.join("tests/resources");
+                    move |font| {
+                        std::fs::read(resources.join(font.file))
+                            .map(valle_engine::text::Blob::from)
+                            .map_err(|e| e.to_string())
+                    }
+                }),
             )
             .unwrap();
             let at = valle_engine::time::Tick::ZERO;
@@ -537,8 +594,17 @@ fn combination_allowances_reject_missing_effects() {
             )
             .unwrap();
             let (pixels, _, _) = compare(&actual, &baseline, &[]).unwrap();
+            let product_accepts = case.valle.as_ref().is_none_or(|valle| {
+                let baseline = read_png(
+                    &root.join("tests/baselines/valle").join(name).join("0.png"),
+                    sample.size(),
+                )
+                .unwrap();
+                let (pixels, _, _) = compare(&actual, &baseline, &[]).unwrap();
+                valle.accepts(pixels.changed, pixels.max)
+            });
             assert!(
-                !browser.pixels.accepts(pixels.changed, pixels.max),
+                !(browser.pixels.accepts(pixels.changed, pixels.max) && product_accepts),
                 "{name}: changing {from} to {to} must fail the reviewed allowance"
             );
         }

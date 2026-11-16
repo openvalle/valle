@@ -1,8 +1,5 @@
 {
-  "size": [
-    624,
-    364
-  ],
+  "size": [624, 364],
   "sources": {
     "tests/baselines/browser/css/text/alignment-matrix/scene.html": "cea9ca352b8107c9889bbd64af2330b28d6ac9cb0654a47b7ce6ae3af67f2245",
     "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"

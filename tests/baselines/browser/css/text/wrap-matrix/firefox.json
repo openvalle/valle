@@ -1,8 +1,5 @@
 {
-  "size": [
-    876,
-    508
-  ],
+  "size": [876, 508],
   "sources": {
     "tests/baselines/browser/css/text/wrap-matrix/scene.html": "ba781aba57a4f9428c3f09b934b3a8600b0e21cd0539f69ada3b860007da1d9b",
     "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
@@ -517,9 +514,7 @@
     "lines": [
       {
         "key": "c0",
-        "text": [
-          "MMMMMMMM"
-        ],
+        "text": ["MMMMMMMM"],
         "geometry": [
           {
             "x": 12,
@@ -530,11 +525,7 @@
       },
       {
         "key": "c1",
-        "text": [
-          "MMM",
-          "MMM",
-          "MM"
-        ],
+        "text": ["MMM", "MMM", "MM"],
         "geometry": [
           {
             "x": 156,
@@ -555,11 +546,7 @@
       },
       {
         "key": "c2",
-        "text": [
-          "MMM",
-          "MMM",
-          "MM"
-        ],
+        "text": ["MMM", "MMM", "MM"],
         "geometry": [
           {
             "x": 300,
@@ -580,11 +567,7 @@
       },
       {
         "key": "c3",
-        "text": [
-          "MMM",
-          "MMM",
-          "MM"
-        ],
+        "text": ["MMM", "MMM", "MM"],
         "geometry": [
           {
             "x": 444,
@@ -605,9 +588,7 @@
       },
       {
         "key": "c4",
-        "text": [
-          "MMMMMMMM"
-        ],
+        "text": ["MMMMMMMM"],
         "geometry": [
           {
             "x": 588,
@@ -618,9 +599,7 @@
       },
       {
         "key": "c5",
-        "text": [
-          "MMMMMMMM"
-        ],
+        "text": ["MMMMMMMM"],
         "geometry": [
           {
             "x": 732,
@@ -631,9 +610,7 @@
       },
       {
         "key": "c6",
-        "text": [
-          "MMMMMMMM"
-        ],
+        "text": ["MMMMMMMM"],
         "geometry": [
           {
             "x": 12,
@@ -644,9 +621,7 @@
       },
       {
         "key": "c7",
-        "text": [
-          "MMMMMMMM"
-        ],
+        "text": ["MMMMMMMM"],
         "geometry": [
           {
             "x": 156,
@@ -657,9 +632,7 @@
       },
       {
         "key": "c8",
-        "text": [
-          "MMMMMMMM"
-        ],
+        "text": ["MMMMMMMM"],
         "geometry": [
           {
             "x": 300,
@@ -670,11 +643,7 @@
       },
       {
         "key": "c9",
-        "text": [
-          "MMM",
-          "MMM",
-          "MM"
-        ],
+        "text": ["MMM", "MMM", "MM"],
         "geometry": [
           {
             "x": 444,
@@ -695,11 +664,7 @@
       },
       {
         "key": "c10",
-        "text": [
-          "MMM",
-          "MMM",
-          "MM"
-        ],
+        "text": ["MMM", "MMM", "MM"],
         "geometry": [
           {
             "x": 588,
@@ -720,11 +685,7 @@
       },
       {
         "key": "c11",
-        "text": [
-          "MMM",
-          "MMM",
-          "MM"
-        ],
+        "text": ["MMM", "MMM", "MM"],
         "geometry": [
           {
             "x": 732,
@@ -745,9 +706,7 @@
       },
       {
         "key": "c12",
-        "text": [
-          "MMMMMMMM"
-        ],
+        "text": ["MMMMMMMM"],
         "geometry": [
           {
             "x": 12,
@@ -758,10 +717,7 @@
       },
       {
         "key": "c13",
-        "text": [
-          "MMMM",
-          "MMMM"
-        ],
+        "text": ["MMMM", "MMMM"],
         "geometry": [
           {
             "x": 156,
@@ -777,10 +733,7 @@
       },
       {
         "key": "c14",
-        "text": [
-          "MMMM",
-          "MMMM"
-        ],
+        "text": ["MMMM", "MMMM"],
         "geometry": [
           {
             "x": 300,
@@ -796,10 +749,7 @@
       },
       {
         "key": "c15",
-        "text": [
-          "MMMM",
-          "MMMM"
-        ],
+        "text": ["MMMM", "MMMM"],
         "geometry": [
           {
             "x": 444,
@@ -815,9 +765,7 @@
       },
       {
         "key": "c16",
-        "text": [
-          "MMMMMMMM"
-        ],
+        "text": ["MMMMMMMM"],
         "geometry": [
           {
             "x": 588,
@@ -828,9 +776,7 @@
       },
       {
         "key": "c17",
-        "text": [
-          "MMMMMMMM"
-        ],
+        "text": ["MMMMMMMM"],
         "geometry": [
           {
             "x": 732,
@@ -841,9 +787,7 @@
       },
       {
         "key": "c18",
-        "text": [
-          "MMMMMMMM"
-        ],
+        "text": ["MMMMMMMM"],
         "geometry": [
           {
             "x": 12,
@@ -854,9 +798,7 @@
       },
       {
         "key": "c19",
-        "text": [
-          "MMMMMMMM"
-        ],
+        "text": ["MMMMMMMM"],
         "geometry": [
           {
             "x": 156,
@@ -867,9 +809,7 @@
       },
       {
         "key": "c20",
-        "text": [
-          "MMMMMMMM"
-        ],
+        "text": ["MMMMMMMM"],
         "geometry": [
           {
             "x": 300,
@@ -880,10 +820,7 @@
       },
       {
         "key": "c21",
-        "text": [
-          "MMMM",
-          "MMMM"
-        ],
+        "text": ["MMMM", "MMMM"],
         "geometry": [
           {
             "x": 444,
@@ -899,10 +836,7 @@
       },
       {
         "key": "c22",
-        "text": [
-          "MMMM",
-          "MMMM"
-        ],
+        "text": ["MMMM", "MMMM"],
         "geometry": [
           {
             "x": 588,
@@ -918,10 +852,7 @@
       },
       {
         "key": "c23",
-        "text": [
-          "MMMM",
-          "MMMM"
-        ],
+        "text": ["MMMM", "MMMM"],
         "geometry": [
           {
             "x": 732,

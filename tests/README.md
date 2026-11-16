@@ -18,17 +18,41 @@ CI platforms exercise them. The Playwright player and Studio tests in
 `web/tests/` remain the checks for real WebGPU rendering, browser media APIs
 and UI interaction.
 
-| What you are testing              | What to compare                                                           | Example to adapt                                                                                            |
-| --------------------------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| What you are testing              | What to compare                                                           | Example to adapt                                                                                                          |
+| --------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | CSS layout, text or compositing   | Explicit numerical expectations and reviewed browser images               | [Content box](cases/css/box-model/content-box/scene.motion.tsx), [text](cases/css/text/preserved-spaces/scene.motion.tsx) |
-| SVG rendering                     | Reviewed browser images, plus viewport/layout assertions where applicable | [Viewports and dashes](cases/svg/viewbox-dashes/inline/scene.motion.tsx)                                           |
+| SVG rendering                     | Reviewed browser images, plus viewport/layout assertions where applicable | [Viewports and dashes](cases/svg/viewbox-dashes/inline/scene.motion.tsx)                                                  |
 | Motion or a Valle-specific effect | Reviewed frame PNGs and seek consistency                                  | [Echo](cases/motion/echo/scene.motion.tsx), [Shutter](cases/motion/shutter/scene.motion.tsx)                              |
-| D3-compatible calculations        | Recorded results from the official D3 package                             | [Function calls](cases/d3/cases.ts)                                                                         |
-| Tailwind expansion                | Official CSS, class order and expected rejection                          | [Utility samples](cases/tailwind/classes.json)                                                              |
-| Tailwind rendering                | Reviewed Valle PNGs after class expansion and painting                    | [Flex utilities](cases/tailwind/flex/scene.motion.tsx)                                                             |
-| Timeline behavior                 | Reviewed frames around clip boundaries and seek consistency               | [Clips](cases/timeline/clips/scene.timeline.json)                                                           |
+| D3-compatible calculations        | Recorded results from the official D3 package                             | [Function calls](cases/d3/cases.ts)                                                                                       |
+| Tailwind expansion                | Official CSS, class order and expected rejection                          | [Utility samples](cases/tailwind/classes.json)                                                                            |
+| Tailwind rendering                | Reviewed Valle PNGs after class expansion and painting                    | [Flex utilities](cases/tailwind/flex/scene.motion.tsx)                                                                    |
+| Timeline behavior                 | Reviewed frames around clip boundaries and seek consistency               | [Clips](cases/timeline/clips/scene.timeline.json)                                                                         |
+
+## Retained combination tests
+
+The CSS combinations are ordinary permanent cases. See the
+[coverage inventory](../docs/css.md#combination-coverage-and-gaps) for the layout,
+text, compositing and dynamic batches and their explicitly bounded factors.
+
+- Enumerate independent factors in a small TSX matrix; keep arithmetic box/line
+  expectations in `case.json` and describe the formula in the case README.
+- Retain all three browser captures and explain the selected result. A majority
+  vote is insufficient when controls expose a capture limitation or an open
+  specification issue.
+- For changing scenes, retain numbered PNGs for threshold and state transitions.
+  The runner checks fresh/forward/reverse/alternating visits automatically. Add
+  the fixture to `web/tests/player.ts` for Native/WebGPU comparisons.
+- Review actual **and difference** images before setting allowances. If browser
+  rasterization needs a broad allowance, pair it with a strict reviewed Valle
+  baseline. Extend the GPU mutation test in `crates/valle-engine/tests/cases/pixels.rs` to prove that
+  deleting a relevant effect cannot pass that allowance.
 
 ## CSS and SVG
+
+Use the [CSS support and coverage inventory](../docs/css.md) to find existing
+evidence and missing value/combination checks. Update it when changing supported
+syntax or adding coverage; a property appearing in a scene is not itself an
+assertion that the property works.
 
 1. Create `tests/cases/css/<feature>/<name>/scene.motion.tsx` or
    `tests/cases/svg/<feature>/inline/scene.motion.tsx`.

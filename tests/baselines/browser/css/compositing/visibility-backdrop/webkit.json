@@ -1,8 +1,5 @@
 {
-  "size": [
-    948,
-    136
-  ],
+  "size": [948, 136],
   "sources": {
     "tests/baselines/browser/css/compositing/visibility-backdrop/scene.html": "6d5542fde76857c61a83921569419fd6b4ee08727784d7777d505c86560d8042"
   },
