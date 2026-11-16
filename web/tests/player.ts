@@ -22,6 +22,29 @@ const CASES: {
   nativeResources?: Record<string, string>;
   pixels?: { maxDifference: number; maxPixels: number };
 }[] = [
+  { entry: "tests/cases/css/background/layer-lists/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/background/fractional-repeat/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/background/rounded-position/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/background/position-order/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/background/text-effects/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/color/spaces-opacity/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/images/fit-extremes/scene.motion.tsx", frames: [0] },
+  {
+    entry: "tests/cases/css/background/dynamic-rounded-position/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
+  {
+    entry: "tests/cases/css/background/dynamic-layer-lists/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
+  {
+    entry: "tests/cases/css/images/dynamic-fit-extremes/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
+  {
+    entry: "tests/cases/css/color/dynamic-spaces-opacity/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
   { entry: "tests/cases/css/border/unequal-corners/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/border/mixed-joins/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/border/logical-corners/scene.motion.tsx", frames: [0] },

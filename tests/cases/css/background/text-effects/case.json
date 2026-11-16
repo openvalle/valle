@@ -1,0 +1,17 @@
+{
+  "spec": "https://www.w3.org/TR/css-backgrounds-4/#background-clip",
+  "assertion": "Eight combinations verify text-clipped repeated gradients with background positioning, blur and rotation.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed glyph bounds and difference images, with the pinned variable font weight range explicitly declared in HTML. Glyph bounds match Chrome; remaining differences follow antialiased glyph coverage and blur falloff. The strict product image and missing-clip/filter mutations protect the effect.",
+    "pixels": {
+      "maxDifference": 155,
+      "maxPixels": 19000
+    }
+  },
+  "valle": {
+    "reason": "Reviewed glyph bounds and difference images, with the pinned variable font weight range explicitly declared in HTML. Glyph bounds match Chrome; remaining differences follow antialiased glyph coverage and blur falloff. The strict product image and missing-clip/filter mutations protect the effect.",
+    "maxDifference": 1
+  }
+}

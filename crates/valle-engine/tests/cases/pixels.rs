@@ -466,6 +466,16 @@ fn combination_allowances_reject_missing_effects() {
             .unwrap();
         for (name, from, to) in [
             (
+                "css/background/text-effects",
+                "backgroundClip: \"text\"",
+                "backgroundClip: \"border-box\"",
+            ),
+            (
+                "css/background/text-effects",
+                "filter: c.filter",
+                "filter: \"none\"",
+            ),
+            (
                 "css/border/unequal-corners",
                 "...c.border",
                 "...c.border, borderStyle: \"none\"",
@@ -587,7 +597,15 @@ fn combination_allowances_reject_missing_effects() {
             assert_ne!(source, changed, "mutation must change {name}");
             let mut scene = valle_engine::scene::Scene::load(
                 "probe.motion.tsx",
-                &|path| (path == "probe.motion.tsx").then(|| changed.as_bytes().to_vec()),
+                &|path| {
+                    if path == "probe.motion.tsx" {
+                        Some(changed.as_bytes().to_vec())
+                    } else {
+                        path.strip_prefix("/tests/resources/").and_then(|name| {
+                            std::fs::read(root.join("tests/resources").join(name)).ok()
+                        })
+                    }
+                },
                 &valle_engine::front::Inputs::default(),
                 std::rc::Rc::new({
                     let resources = root.join("tests/resources");

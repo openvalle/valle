@@ -1,0 +1,183 @@
+{
+  "spec": "https://www.w3.org/TR/css-backgrounds-3/#layering",
+  "assertion": "Eight controls cross background-position shorthand order with independent X/Y lists of different lengths. Later declarations win on each axis and shorter lists repeat.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed shorthand/axis declaration orders and list repetition against all three browsers; Chrome matches exactly and independent box expectations pass.",
+    "pixels": {
+      "maxDifference": 0,
+      "maxPixels": 0
+    }
+  },
+  "layout": [
+    {
+      "key": "c0",
+      "border": {
+        "x": 8,
+        "y": 8,
+        "width": 156,
+        "height": 92
+      },
+      "padding": {
+        "x": 8,
+        "y": 8,
+        "width": 156,
+        "height": 92
+      },
+      "content": {
+        "x": 8,
+        "y": 8,
+        "width": 156,
+        "height": 92
+      }
+    },
+    {
+      "key": "c1",
+      "border": {
+        "x": 196,
+        "y": 8,
+        "width": 156,
+        "height": 92
+      },
+      "padding": {
+        "x": 196,
+        "y": 8,
+        "width": 156,
+        "height": 92
+      },
+      "content": {
+        "x": 196,
+        "y": 8,
+        "width": 156,
+        "height": 92
+      }
+    },
+    {
+      "key": "c2",
+      "border": {
+        "x": 384,
+        "y": 8,
+        "width": 156,
+        "height": 92
+      },
+      "padding": {
+        "x": 384,
+        "y": 8,
+        "width": 156,
+        "height": 92
+      },
+      "content": {
+        "x": 384,
+        "y": 8,
+        "width": 156,
+        "height": 92
+      }
+    },
+    {
+      "key": "c3",
+      "border": {
+        "x": 572,
+        "y": 8,
+        "width": 156,
+        "height": 92
+      },
+      "padding": {
+        "x": 572,
+        "y": 8,
+        "width": 156,
+        "height": 92
+      },
+      "content": {
+        "x": 572,
+        "y": 8,
+        "width": 156,
+        "height": 92
+      }
+    },
+    {
+      "key": "c4",
+      "border": {
+        "x": 8,
+        "y": 124,
+        "width": 156,
+        "height": 92
+      },
+      "padding": {
+        "x": 8,
+        "y": 124,
+        "width": 156,
+        "height": 92
+      },
+      "content": {
+        "x": 8,
+        "y": 124,
+        "width": 156,
+        "height": 92
+      }
+    },
+    {
+      "key": "c5",
+      "border": {
+        "x": 196,
+        "y": 124,
+        "width": 156,
+        "height": 92
+      },
+      "padding": {
+        "x": 196,
+        "y": 124,
+        "width": 156,
+        "height": 92
+      },
+      "content": {
+        "x": 196,
+        "y": 124,
+        "width": 156,
+        "height": 92
+      }
+    },
+    {
+      "key": "c6",
+      "border": {
+        "x": 384,
+        "y": 124,
+        "width": 156,
+        "height": 92
+      },
+      "padding": {
+        "x": 384,
+        "y": 124,
+        "width": 156,
+        "height": 92
+      },
+      "content": {
+        "x": 384,
+        "y": 124,
+        "width": 156,
+        "height": 92
+      }
+    },
+    {
+      "key": "c7",
+      "border": {
+        "x": 572,
+        "y": 124,
+        "width": 156,
+        "height": 92
+      },
+      "padding": {
+        "x": 572,
+        "y": 124,
+        "width": 156,
+        "height": 92
+      },
+      "content": {
+        "x": 572,
+        "y": 124,
+        "width": 156,
+        "height": 92
+      }
+    }
+  ]
+}

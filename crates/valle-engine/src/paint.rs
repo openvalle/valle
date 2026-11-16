@@ -349,8 +349,8 @@ fn tiles(layer: &Layer, area: Rect, pictures: &[Picture]) -> Option<Tiles> {
     if size[0] <= 0.0 || size[1] <= 0.0 {
         return None;
     }
-    // Placed in the room the tile leaves before it is rounded, as Chrome and Safari place it.
-    let mut first = [0, 1].map(|k| layer.position[k].resolve(room[k] - asked[k]));
+    // CSS Backgrounds 3 positions the image after resizing, including round repeat.
+    let mut first = [0, 1].map(|k| layer.position[k].resolve(room[k] - size[k]));
     let mut step = [None; 2];
     for k in 0..2 {
         step[k] = match layer.repeat[k] {
@@ -4120,10 +4120,20 @@ mod tests {
             tiles("0 0 / 30px round no-repeat"),
             ([10.0, 10.0, 33.333, 55.556], [Some(33.333), None])
         );
-        // Placed as if it were not rounded.
+        // Fractional tiles retain their requested size with space, but round fits
+        // four columns and three rows exactly into the 100 x 50 positioning area.
+        assert_eq!(
+            tiles("0 0 / 23.5px 17.5px space"),
+            ([10.0, 10.0, 23.5, 17.5], [Some(25.5), Some(32.5)])
+        );
+        assert_eq!(
+            tiles("0 0 / 23.5px 17.5px round"),
+            ([10.0, 10.0, 25.0, 16.667], [Some(25.0), Some(16.667)])
+        );
+        // Position uses the final rounded image size, not the requested 28px width.
         assert_eq!(
             tiles("center / 28px 10px round"),
-            ([46.0, 30.0, 25.0, 10.0], [Some(25.0), Some(10.0)])
+            ([47.5, 30.0, 25.0, 10.0], [Some(25.0), Some(10.0)])
         );
         // No tiles without a size.
         assert!(tiled("linear-gradient(red, blue) 0 0 / 0 10px").is_empty());

@@ -1,0 +1,140 @@
+{
+  "size": [
+    388,
+    216
+  ],
+  "sources": {
+    "tests/baselines/browser/css/background/rounded-position/scene.html": "f27d4c786b59f00aeb2f1429a439c1f00055b768a1e651a9dbc61a627a38e827"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "c0",
+        "border": {
+          "x": 8,
+          "y": 8,
+          "width": 100,
+          "height": 76
+        },
+        "padding": {
+          "x": 8,
+          "y": 8,
+          "width": 100,
+          "height": 76
+        },
+        "content": {
+          "x": 8,
+          "y": 8,
+          "width": 100,
+          "height": 76
+        }
+      },
+      {
+        "key": "c1",
+        "border": {
+          "x": 132,
+          "y": 8,
+          "width": 100,
+          "height": 76
+        },
+        "padding": {
+          "x": 132,
+          "y": 8,
+          "width": 100,
+          "height": 76
+        },
+        "content": {
+          "x": 132,
+          "y": 8,
+          "width": 100,
+          "height": 76
+        }
+      },
+      {
+        "key": "c2",
+        "border": {
+          "x": 256,
+          "y": 8,
+          "width": 100,
+          "height": 76
+        },
+        "padding": {
+          "x": 256,
+          "y": 8,
+          "width": 100,
+          "height": 76
+        },
+        "content": {
+          "x": 256,
+          "y": 8,
+          "width": 100,
+          "height": 76
+        }
+      },
+      {
+        "key": "c3",
+        "border": {
+          "x": 8,
+          "y": 108,
+          "width": 100,
+          "height": 76
+        },
+        "padding": {
+          "x": 8,
+          "y": 108,
+          "width": 100,
+          "height": 76
+        },
+        "content": {
+          "x": 8,
+          "y": 108,
+          "width": 100,
+          "height": 76
+        }
+      },
+      {
+        "key": "c4",
+        "border": {
+          "x": 132,
+          "y": 108,
+          "width": 100,
+          "height": 76
+        },
+        "padding": {
+          "x": 132,
+          "y": 108,
+          "width": 100,
+          "height": 76
+        },
+        "content": {
+          "x": 132,
+          "y": 108,
+          "width": 100,
+          "height": 76
+        }
+      },
+      {
+        "key": "c5",
+        "border": {
+          "x": 256,
+          "y": 108,
+          "width": 100,
+          "height": 76
+        },
+        "padding": {
+          "x": 256,
+          "y": 108,
+          "width": 100,
+          "height": 76
+        },
+        "content": {
+          "x": 256,
+          "y": 108,
+          "width": 100,
+          "height": 76
+        }
+      }
+    ],
+    "lines": []
+  }
+}

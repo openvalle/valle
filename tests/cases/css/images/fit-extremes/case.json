@@ -1,0 +1,183 @@
+{
+  "spec": "https://www.w3.org/TR/css-images-3/#the-object-fit",
+  "assertion": "Eight combinations verify none/scale-down with boxes smaller and larger than the image and opposite object positions. Scale-down never enlarges the intrinsic image.",
+  "at": [0],
+  "browser": {
+    "selected": "webkit",
+    "reason": "WebKit matches exactly. The fixed 64\u00d740 image is larger than the 24px box and smaller than the 96px box, so scale-down exercises both branches. Chrome/Firefox differ at pixelated sample boundaries; geometry agrees.",
+    "pixels": {
+      "maxDifference": 0,
+      "maxPixels": 0
+    }
+  },
+  "layout": [
+    {
+      "key": "c0",
+      "border": {
+        "x": 8,
+        "y": 8,
+        "width": 24,
+        "height": 24
+      },
+      "padding": {
+        "x": 8,
+        "y": 8,
+        "width": 24,
+        "height": 24
+      },
+      "content": {
+        "x": 8,
+        "y": 8,
+        "width": 24,
+        "height": 24
+      }
+    },
+    {
+      "key": "c1",
+      "border": {
+        "x": 196,
+        "y": 8,
+        "width": 24,
+        "height": 24
+      },
+      "padding": {
+        "x": 196,
+        "y": 8,
+        "width": 24,
+        "height": 24
+      },
+      "content": {
+        "x": 196,
+        "y": 8,
+        "width": 24,
+        "height": 24
+      }
+    },
+    {
+      "key": "c2",
+      "border": {
+        "x": 384,
+        "y": 8,
+        "width": 24,
+        "height": 24
+      },
+      "padding": {
+        "x": 384,
+        "y": 8,
+        "width": 24,
+        "height": 24
+      },
+      "content": {
+        "x": 384,
+        "y": 8,
+        "width": 24,
+        "height": 24
+      }
+    },
+    {
+      "key": "c3",
+      "border": {
+        "x": 572,
+        "y": 8,
+        "width": 24,
+        "height": 24
+      },
+      "padding": {
+        "x": 572,
+        "y": 8,
+        "width": 24,
+        "height": 24
+      },
+      "content": {
+        "x": 572,
+        "y": 8,
+        "width": 24,
+        "height": 24
+      }
+    },
+    {
+      "key": "c4",
+      "border": {
+        "x": 8,
+        "y": 124,
+        "width": 96,
+        "height": 96
+      },
+      "padding": {
+        "x": 8,
+        "y": 124,
+        "width": 96,
+        "height": 96
+      },
+      "content": {
+        "x": 8,
+        "y": 124,
+        "width": 96,
+        "height": 96
+      }
+    },
+    {
+      "key": "c5",
+      "border": {
+        "x": 196,
+        "y": 124,
+        "width": 96,
+        "height": 96
+      },
+      "padding": {
+        "x": 196,
+        "y": 124,
+        "width": 96,
+        "height": 96
+      },
+      "content": {
+        "x": 196,
+        "y": 124,
+        "width": 96,
+        "height": 96
+      }
+    },
+    {
+      "key": "c6",
+      "border": {
+        "x": 384,
+        "y": 124,
+        "width": 96,
+        "height": 96
+      },
+      "padding": {
+        "x": 384,
+        "y": 124,
+        "width": 96,
+        "height": 96
+      },
+      "content": {
+        "x": 384,
+        "y": 124,
+        "width": 96,
+        "height": 96
+      }
+    },
+    {
+      "key": "c7",
+      "border": {
+        "x": 572,
+        "y": 124,
+        "width": 96,
+        "height": 96
+      },
+      "padding": {
+        "x": 572,
+        "y": 124,
+        "width": 96,
+        "height": 96
+      },
+      "content": {
+        "x": 572,
+        "y": 124,
+        "width": 96,
+        "height": 96
+      }
+    }
+  ]
+}

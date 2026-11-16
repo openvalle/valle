@@ -1,0 +1,183 @@
+{
+  "size": [
+    768,
+    248
+  ],
+  "sources": {
+    "tests/baselines/browser/css/images/fit-extremes/scene.html": "8d4a8cb2bab2c3ed27b63887e64500385ee53002f3c074b05d361f2760f8477c",
+    "tests/resources/photo.png": "bd0ffe9ac7f87c03e302b94c9378efde7711a1f22c68ab5a7bfa1915cbb5317c"
+  },
+  "measurements": {
+    "layout": [
+      {
+        "key": "c0",
+        "border": {
+          "x": 8,
+          "y": 8,
+          "width": 24,
+          "height": 24
+        },
+        "padding": {
+          "x": 8,
+          "y": 8,
+          "width": 24,
+          "height": 24
+        },
+        "content": {
+          "x": 8,
+          "y": 8,
+          "width": 24,
+          "height": 24
+        }
+      },
+      {
+        "key": "c1",
+        "border": {
+          "x": 196,
+          "y": 8,
+          "width": 24,
+          "height": 24
+        },
+        "padding": {
+          "x": 196,
+          "y": 8,
+          "width": 24,
+          "height": 24
+        },
+        "content": {
+          "x": 196,
+          "y": 8,
+          "width": 24,
+          "height": 24
+        }
+      },
+      {
+        "key": "c2",
+        "border": {
+          "x": 384,
+          "y": 8,
+          "width": 24,
+          "height": 24
+        },
+        "padding": {
+          "x": 384,
+          "y": 8,
+          "width": 24,
+          "height": 24
+        },
+        "content": {
+          "x": 384,
+          "y": 8,
+          "width": 24,
+          "height": 24
+        }
+      },
+      {
+        "key": "c3",
+        "border": {
+          "x": 572,
+          "y": 8,
+          "width": 24,
+          "height": 24
+        },
+        "padding": {
+          "x": 572,
+          "y": 8,
+          "width": 24,
+          "height": 24
+        },
+        "content": {
+          "x": 572,
+          "y": 8,
+          "width": 24,
+          "height": 24
+        }
+      },
+      {
+        "key": "c4",
+        "border": {
+          "x": 8,
+          "y": 124,
+          "width": 96,
+          "height": 96
+        },
+        "padding": {
+          "x": 8,
+          "y": 124,
+          "width": 96,
+          "height": 96
+        },
+        "content": {
+          "x": 8,
+          "y": 124,
+          "width": 96,
+          "height": 96
+        }
+      },
+      {
+        "key": "c5",
+        "border": {
+          "x": 196,
+          "y": 124,
+          "width": 96,
+          "height": 96
+        },
+        "padding": {
+          "x": 196,
+          "y": 124,
+          "width": 96,
+          "height": 96
+        },
+        "content": {
+          "x": 196,
+          "y": 124,
+          "width": 96,
+          "height": 96
+        }
+      },
+      {
+        "key": "c6",
+        "border": {
+          "x": 384,
+          "y": 124,
+          "width": 96,
+          "height": 96
+        },
+        "padding": {
+          "x": 384,
+          "y": 124,
+          "width": 96,
+          "height": 96
+        },
+        "content": {
+          "x": 384,
+          "y": 124,
+          "width": 96,
+          "height": 96
+        }
+      },
+      {
+        "key": "c7",
+        "border": {
+          "x": 572,
+          "y": 124,
+          "width": 96,
+          "height": 96
+        },
+        "padding": {
+          "x": 572,
+          "y": 124,
+          "width": 96,
+          "height": 96
+        },
+        "content": {
+          "x": 572,
+          "y": 124,
+          "width": 96,
+          "height": 96
+        }
+      }
+    ],
+    "lines": []
+  }
+}
