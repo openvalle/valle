@@ -340,6 +340,8 @@ fn valle_pixel_allowances_reject_more_changed_pixels() {
     for (name, size) in [
         ("tailwind/text", [320, 200]),
         ("tailwind/paragraphs", [320, 320]),
+        ("css/compositing/dynamic-layers", [280, 180]),
+        ("css/text/dynamic-inheritance", [400, 240]),
     ] {
         let case = Case::read(&root.join("tests/cases").join(name).join("case.json")).unwrap();
         let valle = case.valle.as_ref().unwrap();
@@ -807,6 +809,48 @@ fn fractional_glyphs_survive_translation_and_offscreen_compositing() {
                 );
             }
         }
+    });
+}
+
+#[test]
+fn glyph_tangent_coverage_keeps_the_same_rounding_on_every_backend() {
+    if !std::env::var("VALLE_TEST_LAYERS")
+        .unwrap_or_default()
+        .split(',')
+        .any(|layer| layer == "gpu")
+    {
+        return;
+    }
+    crate::with_stack(|| {
+        use skrifa::MetadataProvider;
+        use valle_engine::{paint::Item, time::Tick};
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let sample = crate::scene::load(
+            &root,
+            &root.join("tests/cases/motion/inline-layout/scene.motion.tsx"),
+            Tick::ZERO,
+        )
+        .unwrap();
+        let faces = sample.scene.faces();
+        let font = skrifa::FontRef::from_index(faces[0].data.data(), faces[0].index).unwrap();
+        let id = font.charmap().map('i').unwrap().to_u32();
+        let gpu = valle_native::gpu::adapter(None)
+            .and_then(|c| Gpu::with(c.adapter))
+            .unwrap();
+        let item = Item::Glyphs {
+            face: 0,
+            size: 24.0,
+            color: [1.0; 4],
+            stroke: 0.0,
+            glyphs: vec![(id, [111.62401, 25.5])],
+        };
+        let pixels = Renderer::new(&gpu, 160, 48)
+            .render(&[item], &[], faces, &[])
+            .unwrap();
+        // The dot's bottom is tangent at 625 font units. Rounding the sample before subtracting
+        // the control points changes this pixel's alpha from 80 to 123 on Lavapipe.
+        let alpha = pixels[(10 * 160 + 114) * 4 + 3];
+        assert!(alpha.abs_diff(80) <= 1, "tangent coverage alpha: {alpha}");
     });
 }
 

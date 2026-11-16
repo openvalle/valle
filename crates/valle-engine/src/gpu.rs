@@ -1256,7 +1256,7 @@ impl<'a> Renderer<'a> {
             let floats = [0.0, 0.0, 1.0, f32::from(flags)]
                 .into_iter()
                 .chain(o.bounds);
-            let floats = floats.chain([u, v, 0.0, 0.0]);
+            let floats = floats.chain([u, v, 1.0, 0.0]);
             plan.glyphs.extend(floats.map(f32::to_bits));
             plan.placed.push(plan.glyphs.len());
             plan.glyphs.extend([first[0], first[1], bands, transform]);
@@ -1673,10 +1673,10 @@ impl<'a> Renderer<'a> {
                         };
                         plan.reach = plan.reach.union(Reach::of(matrix, r).grown(1.0));
                         let i = (plan.glyphs.len() / GLYPH) as u32;
-                        let floats = [x, y, size / o.em, 0.0].into_iter().chain(o.bounds).chain([
+                        let floats = [x, y, s, 0.0].into_iter().chain(o.bounds).chain([
                             o.band_scale[0],
                             o.band_scale[1],
-                            0.0,
+                            1.0 / s,
                             0.0,
                         ]);
                         plan.glyphs.extend(floats.map(f32::to_bits));

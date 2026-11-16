@@ -3,8 +3,9 @@
   "assertion": "Inherited font size, line height and color change alongside the wrap threshold, RTL ellipsis and mixed-size vertical writing. Repeated seek restores glyph positions, line counts and paragraph direction.",
   "at": [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75],
   "valle": {
-    "reason": "Eight reviewed states; exact fresh, forward, reverse and alternating seek comparisons. Numerical transition checks accompany the fixture.",
-    "maxDifference": 0
+    "reason": "Eight reviewed states; exact fresh, forward, reverse and alternating seek comparisons. Numerical transition checks accompany the fixture. Metal and Lavapipe differ by one 8-bit level at one glyph-edge pixel in the even frames; no larger or broader change is allowed.",
+    "maxDifference": 1,
+    "maxPixels": 1
   },
   "layout": [
     {

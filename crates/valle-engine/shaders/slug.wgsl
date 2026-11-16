@@ -9,7 +9,7 @@ struct Glyph {
   place: vec4f,
   // The outline's bounds in font units, y up: min x, min y, max x, max y.
   bounds: vec4f,
-  // Vertical and horizontal bands per font unit.
+  // Vertical and horizontal bands per font unit; font units per px.
   bands: vec4f,
   // The outline's first curve texel and first list word; how many horizontal bands it has, and
   // vertical ones above 16 bits; the transform.
@@ -73,10 +73,10 @@ fn roots(p1: vec2f, p2: vec2f, p3: vec2f) -> vec2f {
   return (a.x * t - 2.0 * b.x) * t + p1.x;
 }
 
-// A ray from the pixel at `em` to +x through the curves the band at `head` lists: the winding it
-// crosses, each crossing counted by how much of the pixel lies before it, and the weight of the
-// nearest crossing. With `swap` the axes are swapped, which makes it the ray to +y.
-fn ray(g: Glyph, em: vec2f, ppu: f32, head: u32, swap: bool) -> vec2f {
+// A ray from `pixel`, relative to the glyph origin, to +x through the curves listed at `head`:
+// the winding it crosses, each crossing counted by how much of the pixel lies before it, and
+// the weight of the nearest crossing. With `swap` the axes are swapped, making it a ray to +y.
+fn ray(g: Glyph, pixel: vec2f, ppu: f32, head: u32, swap: bool) -> vec2f {
   let count = lists[g.at.y + head];
   let start = g.at.y + lists[g.at.y + head + 1u];
   var cov = 0.0;
@@ -85,9 +85,12 @@ fn ray(g: Glyph, em: vec2f, ppu: f32, head: u32, swap: bool) -> vec2f {
     let c = g.at.x + lists[start + k];
     let a = curves[c];
     let b = curves[c + 1u];
-    var p1 = a.xy - em;
-    var p2 = a.zw - em;
-    var p3 = b.xy - em;
+    // Keep this multiply-subtract fused on every backend. Contracting it only on Metal
+    // changes the signs at a tangent by one ulp, which changes the eligible crossings.
+    let units = vec2f(g.bands.z);
+    var p1 = fma(-pixel, units, a.xy);
+    var p2 = fma(-pixel, units, a.zw);
+    var p3 = fma(-pixel, units, b.xy);
     if (swap) {
       p1 = p1.yx;
       p2 = p2.yx;
@@ -131,13 +134,15 @@ fn odd(w: vec2f) -> vec2f {
   // an edge runs through pixel centers, the least difference turns its coverage, and the same
   // pixel must come out the same in any of the quads a path draws in.
   let l = local(in.pos.xy, g.at.w);
-  let em = vec2f(l.x - g.place.x, g.place.y - l.y) / g.place.z;
+  // Share the CPU's reciprocal with ray(), where the multiply-subtract is explicitly fused.
+  let pixel = vec2f(l.x - g.place.x, g.place.y - l.y);
+  let em = pixel * g.bands.z;
   let ppu = g.place.z / vec2f(abs(j[0].x) + abs(j[1].x), abs(j[0].y) + abs(j[1].y));
   let bands = vec2u(g.at.z >> 16u, g.at.z & 0xffffu);
   let last = vec2f(bands) - 1.0;
   let band = clamp(floor((em - g.bounds.xy) * g.bands.xy), vec2f(0.0), last);
-  let h = ray(g, em, ppu.x, 2u * u32(band.y), false);
-  let v = ray(g, em, ppu.y, 2u * (bands.y + u32(band.x)), true);
+  let h = ray(g, pixel, ppu.x, 2u * u32(band.y), false);
+  let v = ray(g, pixel, ppu.y, 2u * (bands.y + u32(band.x)), true);
   // Swapping the axes reverses the winding.
   var cov = vec2f(h.x, -v.x);
   if ((flags & 1u) != 0u) {
