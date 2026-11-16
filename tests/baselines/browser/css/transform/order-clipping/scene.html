@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/transform/order-clipping</title
+  ><style>
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 1216px;
+      height: 556px;
+      background: white;
+    }
+  </style>
+  <div id="canvas">
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: #eef3f8;
+        border-radius: 18px;
+        overflow: visible;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 42px;
+          top: 18px;
+          width: 96px;
+          height: 62px;
+          background: #2463a0;
+          transform: translate(12px, 8px) rotate(30deg) scale(-1, 0.75);
+          transform-origin: left top;
+          translate: 4px 2px;
+          rotate: 10deg;
+          scale: 1.1 0.9;
+        "
+      >
+        <div style="width: 22px; height: 30px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 308px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: #eef3f8;
+        border-radius: 18px;
+        overflow: hidden;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 42px;
+          top: 18px;
+          width: 96px;
+          height: 62px;
+          background: #2463a0;
+          transform: translate(12px, 8px) rotate(30deg) scale(-1, 0.75);
+          transform-origin: left top;
+          translate: 4px 2px;
+          rotate: 10deg;
+          scale: 1.1 0.9;
+        "
+      >
+        <div style="width: 22px; height: 30px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 608px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: #eef3f8;
+        border-radius: 18px;
+        overflow: visible;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 42px;
+          top: 18px;
+          width: 96px;
+          height: 62px;
+          background: #2463a0;
+          transform: scale(-1, 0.75) rotate(30deg) translate(12px, 8px);
+          transform-origin: left top;
+          translate: 4px 2px;
+          rotate: 10deg;
+          scale: 1.1 0.9;
+        "
+      >
+        <div style="width: 22px; height: 30px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 908px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: #eef3f8;
+        border-radius: 18px;
+        overflow: hidden;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 42px;
+          top: 18px;
+          width: 96px;
+          height: 62px;
+          background: #2463a0;
+          transform: scale(-1, 0.75) rotate(30deg) translate(12px, 8px);
+          transform-origin: left top;
+          translate: 4px 2px;
+          rotate: 10deg;
+          scale: 1.1 0.9;
+        "
+      >
+        <div style="width: 22px; height: 30px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 188px;
+        width: 156px;
+        height: 92px;
+        background: #eef3f8;
+        border-radius: 18px;
+        overflow: visible;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 42px;
+          top: 18px;
+          width: 96px;
+          height: 62px;
+          background: #2463a0;
+          transform: translate(12px, 8px) rotate(30deg) scale(-1, 0.75);
+          transform-origin: center;
+          translate: 4px 2px;
+          rotate: 10deg;
+          scale: 1.1 0.9;
+        "
+      >
+        <div style="width: 22px; height: 30px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 308px;
+        top: 188px;
+        width: 156px;
+        height: 92px;
+        background: #eef3f8;
+        border-radius: 18px;
+        overflow: hidden;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 42px;
+          top: 18px;
+          width: 96px;
+          height: 62px;
+          background: #2463a0;
+          transform: translate(12px, 8px) rotate(30deg) scale(-1, 0.75);
+          transform-origin: center;
+          translate: 4px 2px;
+          rotate: 10deg;
+          scale: 1.1 0.9;
+        "
+      >
+        <div style="width: 22px; height: 30px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 608px;
+        top: 188px;
+        width: 156px;
+        height: 92px;
+        background: #eef3f8;
+        border-radius: 18px;
+        overflow: visible;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 42px;
+          top: 18px;
+          width: 96px;
+          height: 62px;
+          background: #2463a0;
+          transform: scale(-1, 0.75) rotate(30deg) translate(12px, 8px);
+          transform-origin: center;
+          translate: 4px 2px;
+          rotate: 10deg;
+          scale: 1.1 0.9;
+        "
+      >
+        <div style="width: 22px; height: 30px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 908px;
+        top: 188px;
+        width: 156px;
+        height: 92px;
+        background: #eef3f8;
+        border-radius: 18px;
+        overflow: hidden;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 42px;
+          top: 18px;
+          width: 96px;
+          height: 62px;
+          background: #2463a0;
+          transform: scale(-1, 0.75) rotate(30deg) translate(12px, 8px);
+          transform-origin: center;
+          translate: 4px 2px;
+          rotate: 10deg;
+          scale: 1.1 0.9;
+        "
+      >
+        <div style="width: 22px; height: 30px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 368px;
+        width: 156px;
+        height: 92px;
+        background: #eef3f8;
+        border-radius: 18px;
+        overflow: visible;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 42px;
+          top: 18px;
+          width: 96px;
+          height: 62px;
+          background: #2463a0;
+          transform: translate(12px, 8px) rotate(30deg) scale(-1, 0.75);
+          transform-origin: right bottom;
+          translate: 4px 2px;
+          rotate: 10deg;
+          scale: 1.1 0.9;
+        "
+      >
+        <div style="width: 22px; height: 30px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 308px;
+        top: 368px;
+        width: 156px;
+        height: 92px;
+        background: #eef3f8;
+        border-radius: 18px;
+        overflow: hidden;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 42px;
+          top: 18px;
+          width: 96px;
+          height: 62px;
+          background: #2463a0;
+          transform: translate(12px, 8px) rotate(30deg) scale(-1, 0.75);
+          transform-origin: right bottom;
+          translate: 4px 2px;
+          rotate: 10deg;
+          scale: 1.1 0.9;
+        "
+      >
+        <div style="width: 22px; height: 30px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 608px;
+        top: 368px;
+        width: 156px;
+        height: 92px;
+        background: #eef3f8;
+        border-radius: 18px;
+        overflow: visible;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 42px;
+          top: 18px;
+          width: 96px;
+          height: 62px;
+          background: #2463a0;
+          transform: scale(-1, 0.75) rotate(30deg) translate(12px, 8px);
+          transform-origin: right bottom;
+          translate: 4px 2px;
+          rotate: 10deg;
+          scale: 1.1 0.9;
+        "
+      >
+        <div style="width: 22px; height: 30px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 908px;
+        top: 368px;
+        width: 156px;
+        height: 92px;
+        background: #eef3f8;
+        border-radius: 18px;
+        overflow: hidden;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 42px;
+          top: 18px;
+          width: 96px;
+          height: 62px;
+          background: #2463a0;
+          transform: scale(-1, 0.75) rotate(30deg) translate(12px, 8px);
+          transform-origin: right bottom;
+          translate: 4px 2px;
+          rotate: 10deg;
+          scale: 1.1 0.9;
+        "
+      >
+        <div style="width: 22px; height: 30px; background: #e0b060"></div>
+      </div>
+    </div>
+  </div>
+</html>

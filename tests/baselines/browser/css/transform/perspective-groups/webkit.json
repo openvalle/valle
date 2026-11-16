@@ -1,0 +1,13 @@
+{
+  "size": [
+    768,
+    436
+  ],
+  "sources": {
+    "tests/baselines/browser/css/transform/perspective-groups/scene.html": "b8898223e7ad154fd30766db90511a893ed4be0386ddf2b3d9754ce596ae94cc"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

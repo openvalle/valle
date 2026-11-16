@@ -22,6 +22,21 @@ const CASES: {
   nativeResources?: Record<string, string>;
   pixels?: { maxDifference: number; maxPixels: number };
 }[] = [
+  { entry: "tests/cases/css/transform/order-clipping/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/transform/perspective-groups/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/transforms/path-extents/scene.motion.tsx", frames: [0] },
+  {
+    entry: "tests/cases/css/transform/dynamic-order-clipping/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
+  {
+    entry: "tests/cases/css/transform/dynamic-perspective/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
+  {
+    entry: "tests/cases/css/transforms/dynamic-path-extents/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
   { entry: "tests/cases/css/compositing/blend-families/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/compositing/backdrop-roots/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/mask/three-layer-composites/scene.motion.tsx", frames: [0] },

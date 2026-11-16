@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/transform/perspective-groups</title
+  ><style>
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 768px;
+      height: 436px;
+      background: white;
+    }
+  </style>
+  <div id="canvas">
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 8px;
+        width: 156px;
+        height: 112px;
+        perspective: 240px;
+        perspective-origin: left top;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 24px;
+          top: 20px;
+          width: 112px;
+          height: 76px;
+          transform: rotateY(35deg);
+          transform-style: flat;
+          overflow: visible;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            width: 76px;
+            height: 56px;
+            background: #2463a0;
+            transform: translateZ(28px) rotateX(25deg);
+          "
+        ></div>
+        <div
+          style="
+            position: absolute;
+            left: 36px;
+            top: 24px;
+            width: 76px;
+            height: 56px;
+            background: #e0b060;
+            transform: translateZ(-16px);
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 196px;
+        top: 8px;
+        width: 156px;
+        height: 112px;
+        perspective: 240px;
+        perspective-origin: left top;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 24px;
+          top: 20px;
+          width: 112px;
+          height: 76px;
+          transform: rotateY(35deg);
+          transform-style: flat;
+          overflow: hidden;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            width: 76px;
+            height: 56px;
+            background: #2463a0;
+            transform: translateZ(28px) rotateX(25deg);
+          "
+        ></div>
+        <div
+          style="
+            position: absolute;
+            left: 36px;
+            top: 24px;
+            width: 76px;
+            height: 56px;
+            background: #e0b060;
+            transform: translateZ(-16px);
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 384px;
+        top: 8px;
+        width: 156px;
+        height: 112px;
+        perspective: 240px;
+        perspective-origin: left top;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 24px;
+          top: 20px;
+          width: 112px;
+          height: 76px;
+          transform: rotateY(35deg);
+          transform-style: preserve-3d;
+          overflow: visible;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            width: 76px;
+            height: 56px;
+            background: #2463a0;
+            transform: translateZ(28px) rotateX(25deg);
+          "
+        ></div>
+        <div
+          style="
+            position: absolute;
+            left: 36px;
+            top: 24px;
+            width: 76px;
+            height: 56px;
+            background: #e0b060;
+            transform: translateZ(-16px);
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 572px;
+        top: 8px;
+        width: 156px;
+        height: 112px;
+        perspective: 240px;
+        perspective-origin: left top;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 24px;
+          top: 20px;
+          width: 112px;
+          height: 76px;
+          transform: rotateY(35deg);
+          transform-style: preserve-3d;
+          overflow: hidden;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            width: 76px;
+            height: 56px;
+            background: #2463a0;
+            transform: translateZ(28px) rotateX(25deg);
+          "
+        ></div>
+        <div
+          style="
+            position: absolute;
+            left: 36px;
+            top: 24px;
+            width: 76px;
+            height: 56px;
+            background: #e0b060;
+            transform: translateZ(-16px);
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 148px;
+        width: 156px;
+        height: 112px;
+        perspective: 240px;
+        perspective-origin: center;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 24px;
+          top: 20px;
+          width: 112px;
+          height: 76px;
+          transform: rotateY(35deg);
+          transform-style: flat;
+          overflow: visible;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            width: 76px;
+            height: 56px;
+            background: #2463a0;
+            transform: translateZ(28px) rotateX(25deg);
+          "
+        ></div>
+        <div
+          style="
+            position: absolute;
+            left: 36px;
+            top: 24px;
+            width: 76px;
+            height: 56px;
+            background: #e0b060;
+            transform: translateZ(-16px);
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 196px;
+        top: 148px;
+        width: 156px;
+        height: 112px;
+        perspective: 240px;
+        perspective-origin: center;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 24px;
+          top: 20px;
+          width: 112px;
+          height: 76px;
+          transform: rotateY(35deg);
+          transform-style: flat;
+          overflow: hidden;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            width: 76px;
+            height: 56px;
+            background: #2463a0;
+            transform: translateZ(28px) rotateX(25deg);
+          "
+        ></div>
+        <div
+          style="
+            position: absolute;
+            left: 36px;
+            top: 24px;
+            width: 76px;
+            height: 56px;
+            background: #e0b060;
+            transform: translateZ(-16px);
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 384px;
+        top: 148px;
+        width: 156px;
+        height: 112px;
+        perspective: 240px;
+        perspective-origin: center;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 24px;
+          top: 20px;
+          width: 112px;
+          height: 76px;
+          transform: rotateY(35deg);
+          transform-style: preserve-3d;
+          overflow: visible;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            width: 76px;
+            height: 56px;
+            background: #2463a0;
+            transform: translateZ(28px) rotateX(25deg);
+          "
+        ></div>
+        <div
+          style="
+            position: absolute;
+            left: 36px;
+            top: 24px;
+            width: 76px;
+            height: 56px;
+            background: #e0b060;
+            transform: translateZ(-16px);
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 572px;
+        top: 148px;
+        width: 156px;
+        height: 112px;
+        perspective: 240px;
+        perspective-origin: center;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 24px;
+          top: 20px;
+          width: 112px;
+          height: 76px;
+          transform: rotateY(35deg);
+          transform-style: preserve-3d;
+          overflow: hidden;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            width: 76px;
+            height: 56px;
+            background: #2463a0;
+            transform: translateZ(28px) rotateX(25deg);
+          "
+        ></div>
+        <div
+          style="
+            position: absolute;
+            left: 36px;
+            top: 24px;
+            width: 76px;
+            height: 56px;
+            background: #e0b060;
+            transform: translateZ(-16px);
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 288px;
+        width: 156px;
+        height: 112px;
+        perspective: 240px;
+        perspective-origin: right bottom;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 24px;
+          top: 20px;
+          width: 112px;
+          height: 76px;
+          transform: rotateY(35deg);
+          transform-style: flat;
+          overflow: visible;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            width: 76px;
+            height: 56px;
+            background: #2463a0;
+            transform: translateZ(28px) rotateX(25deg);
+          "
+        ></div>
+        <div
+          style="
+            position: absolute;
+            left: 36px;
+            top: 24px;
+            width: 76px;
+            height: 56px;
+            background: #e0b060;
+            transform: translateZ(-16px);
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 196px;
+        top: 288px;
+        width: 156px;
+        height: 112px;
+        perspective: 240px;
+        perspective-origin: right bottom;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 24px;
+          top: 20px;
+          width: 112px;
+          height: 76px;
+          transform: rotateY(35deg);
+          transform-style: flat;
+          overflow: hidden;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            width: 76px;
+            height: 56px;
+            background: #2463a0;
+            transform: translateZ(28px) rotateX(25deg);
+          "
+        ></div>
+        <div
+          style="
+            position: absolute;
+            left: 36px;
+            top: 24px;
+            width: 76px;
+            height: 56px;
+            background: #e0b060;
+            transform: translateZ(-16px);
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 384px;
+        top: 288px;
+        width: 156px;
+        height: 112px;
+        perspective: 240px;
+        perspective-origin: right bottom;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 24px;
+          top: 20px;
+          width: 112px;
+          height: 76px;
+          transform: rotateY(35deg);
+          transform-style: preserve-3d;
+          overflow: visible;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            width: 76px;
+            height: 56px;
+            background: #2463a0;
+            transform: translateZ(28px) rotateX(25deg);
+          "
+        ></div>
+        <div
+          style="
+            position: absolute;
+            left: 36px;
+            top: 24px;
+            width: 76px;
+            height: 56px;
+            background: #e0b060;
+            transform: translateZ(-16px);
+          "
+        ></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 572px;
+        top: 288px;
+        width: 156px;
+        height: 112px;
+        perspective: 240px;
+        perspective-origin: right bottom;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 24px;
+          top: 20px;
+          width: 112px;
+          height: 76px;
+          transform: rotateY(35deg);
+          transform-style: preserve-3d;
+          overflow: hidden;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            width: 76px;
+            height: 56px;
+            background: #2463a0;
+            transform: translateZ(28px) rotateX(25deg);
+          "
+        ></div>
+        <div
+          style="
+            position: absolute;
+            left: 36px;
+            top: 24px;
+            width: 76px;
+            height: 56px;
+            background: #e0b060;
+            transform: translateZ(-16px);
+          "
+        ></div>
+      </div>
+    </div>
+  </div>
+</html>

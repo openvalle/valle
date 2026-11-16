@@ -1,0 +1,17 @@
+{
+  "spec": "https://www.w3.org/TR/css-transforms-2/#individual-transforms",
+  "assertion": "Twelve transform controls cross three origins, noncommutative transform lists and rounded ancestor clipping. Individual translate/rotate/scale precede the transform list; negative scale reverses handedness.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all origins, list orders and clipping controls with enough space to prevent neighboring overflow from contaminating a control. Geometry agrees with all browsers; differences follow polygon and rounded-clip edge coverage.",
+    "pixels": {
+      "maxDifference": 55,
+      "maxPixels": 3500
+    }
+  },
+  "valle": {
+    "reason": "Reviewed all origins, list orders and clipping controls with enough space to prevent neighboring overflow from contaminating a control. Geometry agrees with all browsers; differences follow polygon and rounded-clip edge coverage.",
+    "maxDifference": 1
+  }
+}

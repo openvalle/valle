@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/transforms/path-extents</title
+  ><style>
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 768px;
+      height: 576px;
+      background: white;
+    }
+  </style>
+  <div id="canvas">
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 8px;
+        width: 156px;
+        height: 112px;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          width: 28px;
+          height: 16px;
+          background: #2463a0;
+          offset-path: path(&quot;M 24 64 Q 78 0 132 64&quot;);
+          offset-distance: -25%;
+          offset-anchor: center;
+          offset-rotate: auto;
+        "
+      >
+        <div style="width: 8px; height: 8px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 196px;
+        top: 8px;
+        width: 156px;
+        height: 112px;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          width: 28px;
+          height: 16px;
+          background: #2463a0;
+          offset-path: path(&quot;M 24 64 Q 78 0 132 64&quot;);
+          offset-distance: -25%;
+          offset-anchor: center;
+          offset-rotate: reverse;
+        "
+      >
+        <div style="width: 8px; height: 8px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 384px;
+        top: 8px;
+        width: 156px;
+        height: 112px;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          width: 28px;
+          height: 16px;
+          background: #2463a0;
+          offset-path: path(&quot;M 24 64 Q 78 0 132 64&quot;);
+          offset-distance: -25%;
+          offset-anchor: left top;
+          offset-rotate: auto;
+        "
+      >
+        <div style="width: 8px; height: 8px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 572px;
+        top: 8px;
+        width: 156px;
+        height: 112px;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          width: 28px;
+          height: 16px;
+          background: #2463a0;
+          offset-path: path(&quot;M 24 64 Q 78 0 132 64&quot;);
+          offset-distance: -25%;
+          offset-anchor: left top;
+          offset-rotate: reverse;
+        "
+      >
+        <div style="width: 8px; height: 8px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 148px;
+        width: 156px;
+        height: 112px;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          width: 28px;
+          height: 16px;
+          background: #2463a0;
+          offset-path: path(&quot;M 24 64 Q 78 0 132 64&quot;);
+          offset-distance: 0%;
+          offset-anchor: center;
+          offset-rotate: auto;
+        "
+      >
+        <div style="width: 8px; height: 8px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 196px;
+        top: 148px;
+        width: 156px;
+        height: 112px;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          width: 28px;
+          height: 16px;
+          background: #2463a0;
+          offset-path: path(&quot;M 24 64 Q 78 0 132 64&quot;);
+          offset-distance: 0%;
+          offset-anchor: center;
+          offset-rotate: reverse;
+        "
+      >
+        <div style="width: 8px; height: 8px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 384px;
+        top: 148px;
+        width: 156px;
+        height: 112px;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          width: 28px;
+          height: 16px;
+          background: #2463a0;
+          offset-path: path(&quot;M 24 64 Q 78 0 132 64&quot;);
+          offset-distance: 0%;
+          offset-anchor: left top;
+          offset-rotate: auto;
+        "
+      >
+        <div style="width: 8px; height: 8px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 572px;
+        top: 148px;
+        width: 156px;
+        height: 112px;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          width: 28px;
+          height: 16px;
+          background: #2463a0;
+          offset-path: path(&quot;M 24 64 Q 78 0 132 64&quot;);
+          offset-distance: 0%;
+          offset-anchor: left top;
+          offset-rotate: reverse;
+        "
+      >
+        <div style="width: 8px; height: 8px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 288px;
+        width: 156px;
+        height: 112px;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          width: 28px;
+          height: 16px;
+          background: #2463a0;
+          offset-path: path(&quot;M 24 64 Q 78 0 132 64&quot;);
+          offset-distance: 50%;
+          offset-anchor: center;
+          offset-rotate: auto;
+        "
+      >
+        <div style="width: 8px; height: 8px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 196px;
+        top: 288px;
+        width: 156px;
+        height: 112px;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          width: 28px;
+          height: 16px;
+          background: #2463a0;
+          offset-path: path(&quot;M 24 64 Q 78 0 132 64&quot;);
+          offset-distance: 50%;
+          offset-anchor: center;
+          offset-rotate: reverse;
+        "
+      >
+        <div style="width: 8px; height: 8px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 384px;
+        top: 288px;
+        width: 156px;
+        height: 112px;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          width: 28px;
+          height: 16px;
+          background: #2463a0;
+          offset-path: path(&quot;M 24 64 Q 78 0 132 64&quot;);
+          offset-distance: 50%;
+          offset-anchor: left top;
+          offset-rotate: auto;
+        "
+      >
+        <div style="width: 8px; height: 8px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 572px;
+        top: 288px;
+        width: 156px;
+        height: 112px;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          width: 28px;
+          height: 16px;
+          background: #2463a0;
+          offset-path: path(&quot;M 24 64 Q 78 0 132 64&quot;);
+          offset-distance: 50%;
+          offset-anchor: left top;
+          offset-rotate: reverse;
+        "
+      >
+        <div style="width: 8px; height: 8px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 428px;
+        width: 156px;
+        height: 112px;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          width: 28px;
+          height: 16px;
+          background: #2463a0;
+          offset-path: path(&quot;M 24 64 Q 78 0 132 64&quot;);
+          offset-distance: 125%;
+          offset-anchor: center;
+          offset-rotate: auto;
+        "
+      >
+        <div style="width: 8px; height: 8px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 196px;
+        top: 428px;
+        width: 156px;
+        height: 112px;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          width: 28px;
+          height: 16px;
+          background: #2463a0;
+          offset-path: path(&quot;M 24 64 Q 78 0 132 64&quot;);
+          offset-distance: 125%;
+          offset-anchor: center;
+          offset-rotate: reverse;
+        "
+      >
+        <div style="width: 8px; height: 8px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 384px;
+        top: 428px;
+        width: 156px;
+        height: 112px;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          width: 28px;
+          height: 16px;
+          background: #2463a0;
+          offset-path: path(&quot;M 24 64 Q 78 0 132 64&quot;);
+          offset-distance: 125%;
+          offset-anchor: left top;
+          offset-rotate: auto;
+        "
+      >
+        <div style="width: 8px; height: 8px; background: #e0b060"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 572px;
+        top: 428px;
+        width: 156px;
+        height: 112px;
+        background: #eef3f8;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          width: 28px;
+          height: 16px;
+          background: #2463a0;
+          offset-path: path(&quot;M 24 64 Q 78 0 132 64&quot;);
+          offset-distance: 125%;
+          offset-anchor: left top;
+          offset-rotate: reverse;
+        "
+      >
+        <div style="width: 8px; height: 8px; background: #e0b060"></div>
+      </div>
+    </div>
+  </div>
+</html>

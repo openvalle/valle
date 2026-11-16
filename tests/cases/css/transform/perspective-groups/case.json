@@ -1,0 +1,17 @@
+{
+  "spec": "https://www.w3.org/TR/css-transforms-2/#grouping-property-values",
+  "assertion": "Twelve perspective controls cross perspective origin, preserve-3d/flat and an overflow grouping property. Nested Z translations expose flattening and projection order.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed projection and overlap against Chrome and Firefox; preserve-3d survives only without a flattening overflow property. WebKit captures omit this perspective effect and are retained as diagnostics. Chrome differences follow polygon edges.",
+    "pixels": {
+      "maxDifference": 60,
+      "maxPixels": 4500
+    }
+  },
+  "valle": {
+    "reason": "Reviewed projection and overlap against Chrome and Firefox; preserve-3d survives only without a flattening overflow property. WebKit captures omit this perspective effect and are retained as diagnostics. Chrome differences follow polygon edges.",
+    "maxDifference": 1
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "spec": "https://www.w3.org/TR/motion-1/#offset-distance-property",
+  "assertion": "Sixteen open-path controls cross before/start/middle/after distances, anchor and tangent direction. Out-of-range distance clamps to endpoints while reverse flips orientation.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All three browsers agree on open-path endpoint clamping, anchors and tangent/reverse orientation. Remaining differences follow curve length approximation and edge coverage, within 22 channel levels.",
+    "pixels": {
+      "maxDifference": 22,
+      "maxPixels": 1700
+    }
+  },
+  "valle": {
+    "reason": "All three browsers agree on open-path endpoint clamping, anchors and tangent/reverse orientation. Remaining differences follow curve length approximation and edge coverage, within 22 channel levels.",
+    "maxDifference": 1
+  }
+}
