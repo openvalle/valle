@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/mask/three-layer-composites</title
+  ><style>
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 768px;
+      height: 248px;
+      background: white;
+    }
+  </style>
+  <div id="canvas">
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: #c05080;
+        mask-image:
+          linear-gradient(90deg, black 60%, transparent 60%),
+          linear-gradient(white 65%, transparent 65%),
+          linear-gradient(90deg, transparent 20%, #808080 20%);
+        mask-composite: add;
+        mask-mode: alpha;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 36px;
+          top: 16px;
+          width: 100px;
+          height: 60px;
+          background: #40a080;
+        "
+      ></div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 196px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: #c05080;
+        mask-image:
+          linear-gradient(90deg, black 60%, transparent 60%),
+          linear-gradient(white 65%, transparent 65%),
+          linear-gradient(90deg, transparent 20%, #808080 20%);
+        mask-composite: add;
+        mask-mode: luminance;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 36px;
+          top: 16px;
+          width: 100px;
+          height: 60px;
+          background: #40a080;
+        "
+      ></div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 384px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: #c05080;
+        mask-image:
+          linear-gradient(90deg, black 60%, transparent 60%),
+          linear-gradient(white 65%, transparent 65%),
+          linear-gradient(90deg, transparent 20%, #808080 20%);
+        mask-composite: subtract;
+        mask-mode: alpha;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 36px;
+          top: 16px;
+          width: 100px;
+          height: 60px;
+          background: #40a080;
+        "
+      ></div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 572px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: #c05080;
+        mask-image:
+          linear-gradient(90deg, black 60%, transparent 60%),
+          linear-gradient(white 65%, transparent 65%),
+          linear-gradient(90deg, transparent 20%, #808080 20%);
+        mask-composite: subtract;
+        mask-mode: luminance;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 36px;
+          top: 16px;
+          width: 100px;
+          height: 60px;
+          background: #40a080;
+        "
+      ></div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 124px;
+        width: 156px;
+        height: 92px;
+        background: #c05080;
+        mask-image:
+          linear-gradient(90deg, black 60%, transparent 60%),
+          linear-gradient(white 65%, transparent 65%),
+          linear-gradient(90deg, transparent 20%, #808080 20%);
+        mask-composite: intersect;
+        mask-mode: alpha;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 36px;
+          top: 16px;
+          width: 100px;
+          height: 60px;
+          background: #40a080;
+        "
+      ></div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 196px;
+        top: 124px;
+        width: 156px;
+        height: 92px;
+        background: #c05080;
+        mask-image:
+          linear-gradient(90deg, black 60%, transparent 60%),
+          linear-gradient(white 65%, transparent 65%),
+          linear-gradient(90deg, transparent 20%, #808080 20%);
+        mask-composite: intersect;
+        mask-mode: luminance;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 36px;
+          top: 16px;
+          width: 100px;
+          height: 60px;
+          background: #40a080;
+        "
+      ></div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 384px;
+        top: 124px;
+        width: 156px;
+        height: 92px;
+        background: #c05080;
+        mask-image:
+          linear-gradient(90deg, black 60%, transparent 60%),
+          linear-gradient(white 65%, transparent 65%),
+          linear-gradient(90deg, transparent 20%, #808080 20%);
+        mask-composite: exclude;
+        mask-mode: alpha;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 36px;
+          top: 16px;
+          width: 100px;
+          height: 60px;
+          background: #40a080;
+        "
+      ></div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 572px;
+        top: 124px;
+        width: 156px;
+        height: 92px;
+        background: #c05080;
+        mask-image:
+          linear-gradient(90deg, black 60%, transparent 60%),
+          linear-gradient(white 65%, transparent 65%),
+          linear-gradient(90deg, transparent 20%, #808080 20%);
+        mask-composite: exclude;
+        mask-mode: luminance;
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 36px;
+          top: 16px;
+          width: 100px;
+          height: 60px;
+          background: #40a080;
+        "
+      ></div>
+    </div>
+  </div>
+</html>

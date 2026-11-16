@@ -1,0 +1,820 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/compositing/blend-families</title
+  ><style>
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 1520px;
+      height: 480px;
+      background: white;
+    }
+  </style>
+  <div id="canvas">
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: normal;
+          backdrop-filter: none;
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 196px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: normal;
+          backdrop-filter: invert(1);
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 384px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: multiply;
+          backdrop-filter: none;
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 572px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: multiply;
+          backdrop-filter: invert(1);
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 760px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: screen;
+          backdrop-filter: none;
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 948px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: screen;
+          backdrop-filter: invert(1);
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 1136px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: overlay;
+          backdrop-filter: none;
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 1324px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: overlay;
+          backdrop-filter: invert(1);
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 124px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: darken;
+          backdrop-filter: none;
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 196px;
+        top: 124px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: darken;
+          backdrop-filter: invert(1);
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 384px;
+        top: 124px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: lighten;
+          backdrop-filter: none;
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 572px;
+        top: 124px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: lighten;
+          backdrop-filter: invert(1);
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 760px;
+        top: 124px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: color-dodge;
+          backdrop-filter: none;
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 948px;
+        top: 124px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: color-dodge;
+          backdrop-filter: invert(1);
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 1136px;
+        top: 124px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: color-burn;
+          backdrop-filter: none;
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 1324px;
+        top: 124px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: color-burn;
+          backdrop-filter: invert(1);
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 240px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: hard-light;
+          backdrop-filter: none;
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 196px;
+        top: 240px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: hard-light;
+          backdrop-filter: invert(1);
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 384px;
+        top: 240px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: soft-light;
+          backdrop-filter: none;
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 572px;
+        top: 240px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: soft-light;
+          backdrop-filter: invert(1);
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 760px;
+        top: 240px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: difference;
+          backdrop-filter: none;
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 948px;
+        top: 240px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: difference;
+          backdrop-filter: invert(1);
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 1136px;
+        top: 240px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: exclusion;
+          backdrop-filter: none;
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 1324px;
+        top: 240px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: exclusion;
+          backdrop-filter: invert(1);
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 356px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: hue;
+          backdrop-filter: none;
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 196px;
+        top: 356px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: hue;
+          backdrop-filter: invert(1);
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 384px;
+        top: 356px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: saturation;
+          backdrop-filter: none;
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 572px;
+        top: 356px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: saturation;
+          backdrop-filter: invert(1);
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 760px;
+        top: 356px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: color;
+          backdrop-filter: none;
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 948px;
+        top: 356px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: color;
+          backdrop-filter: invert(1);
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 1136px;
+        top: 356px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: luminosity;
+          backdrop-filter: none;
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 1324px;
+        top: 356px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          width: 132px;
+          height: 68px;
+          background: #c05080;
+          mix-blend-mode: luminosity;
+          backdrop-filter: invert(1);
+        "
+      >
+        <div style="width: 52px; height: 28px; background: #40a080; opacity: 0.5"></div>
+      </div>
+    </div>
+  </div>
+</html>

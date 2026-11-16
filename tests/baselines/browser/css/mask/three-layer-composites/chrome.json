@@ -1,0 +1,13 @@
+{
+  "size": [
+    768,
+    248
+  ],
+  "sources": {
+    "tests/baselines/browser/css/mask/three-layer-composites/scene.html": "3789fc73ca806d083f08ed1b4dc597b325233a1de02bc52f02754047a69e84e9"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

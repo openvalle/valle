@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/compositing/backdrop-roots</title
+  ><style>
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 768px;
+      height: 364px;
+      background: white;
+    }
+  </style>
+  <div id="canvas">
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div style="position: absolute; left: 8px; top: 8px; width: 140px; height: 76px">
+        <div
+          style="
+            position: absolute;
+            left: 8px;
+            top: 8px;
+            width: 120px;
+            height: 56px;
+            background: #80403080;
+            backdrop-filter: invert(1);
+          "
+        >
+          <div
+            style="
+              position: absolute;
+              left: 16px;
+              top: 8px;
+              width: 80px;
+              height: 40px;
+              background: #40a08080;
+              backdrop-filter: none;
+            "
+          ></div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 196px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div style="position: absolute; left: 8px; top: 8px; width: 140px; height: 76px">
+        <div
+          style="
+            position: absolute;
+            left: 8px;
+            top: 8px;
+            width: 120px;
+            height: 56px;
+            background: #80403080;
+            backdrop-filter: invert(1);
+          "
+        >
+          <div
+            style="
+              position: absolute;
+              left: 16px;
+              top: 8px;
+              width: 80px;
+              height: 40px;
+              background: #40a08080;
+              backdrop-filter: invert(1);
+            "
+          ></div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 384px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="position: absolute; left: 8px; top: 8px; width: 140px; height: 76px; opacity: 0.65"
+      >
+        <div
+          style="
+            position: absolute;
+            left: 8px;
+            top: 8px;
+            width: 120px;
+            height: 56px;
+            background: #80403080;
+            backdrop-filter: invert(1);
+          "
+        >
+          <div
+            style="
+              position: absolute;
+              left: 16px;
+              top: 8px;
+              width: 80px;
+              height: 40px;
+              background: #40a08080;
+              backdrop-filter: none;
+            "
+          ></div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 572px;
+        top: 8px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="position: absolute; left: 8px; top: 8px; width: 140px; height: 76px; opacity: 0.65"
+      >
+        <div
+          style="
+            position: absolute;
+            left: 8px;
+            top: 8px;
+            width: 120px;
+            height: 56px;
+            background: #80403080;
+            backdrop-filter: invert(1);
+          "
+        >
+          <div
+            style="
+              position: absolute;
+              left: 16px;
+              top: 8px;
+              width: 80px;
+              height: 40px;
+              background: #40a08080;
+              backdrop-filter: invert(1);
+            "
+          ></div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 124px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 8px;
+          top: 8px;
+          width: 140px;
+          height: 76px;
+          filter: invert(1);
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 8px;
+            top: 8px;
+            width: 120px;
+            height: 56px;
+            background: #80403080;
+            backdrop-filter: invert(1);
+          "
+        >
+          <div
+            style="
+              position: absolute;
+              left: 16px;
+              top: 8px;
+              width: 80px;
+              height: 40px;
+              background: #40a08080;
+              backdrop-filter: none;
+            "
+          ></div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 196px;
+        top: 124px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 8px;
+          top: 8px;
+          width: 140px;
+          height: 76px;
+          filter: invert(1);
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 8px;
+            top: 8px;
+            width: 120px;
+            height: 56px;
+            background: #80403080;
+            backdrop-filter: invert(1);
+          "
+        >
+          <div
+            style="
+              position: absolute;
+              left: 16px;
+              top: 8px;
+              width: 80px;
+              height: 40px;
+              background: #40a08080;
+              backdrop-filter: invert(1);
+            "
+          ></div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 384px;
+        top: 124px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 8px;
+          top: 8px;
+          width: 140px;
+          height: 76px;
+          clip-path: inset(6px);
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 8px;
+            top: 8px;
+            width: 120px;
+            height: 56px;
+            background: #80403080;
+            backdrop-filter: invert(1);
+          "
+        >
+          <div
+            style="
+              position: absolute;
+              left: 16px;
+              top: 8px;
+              width: 80px;
+              height: 40px;
+              background: #40a08080;
+              backdrop-filter: none;
+            "
+          ></div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 572px;
+        top: 124px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 8px;
+          top: 8px;
+          width: 140px;
+          height: 76px;
+          clip-path: inset(6px);
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 8px;
+            top: 8px;
+            width: 120px;
+            height: 56px;
+            background: #80403080;
+            backdrop-filter: invert(1);
+          "
+        >
+          <div
+            style="
+              position: absolute;
+              left: 16px;
+              top: 8px;
+              width: 80px;
+              height: 40px;
+              background: #40a08080;
+              backdrop-filter: invert(1);
+            "
+          ></div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 8px;
+        top: 240px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 8px;
+          top: 8px;
+          width: 140px;
+          height: 76px;
+          mask-image: linear-gradient(black, transparent);
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 8px;
+            top: 8px;
+            width: 120px;
+            height: 56px;
+            background: #80403080;
+            backdrop-filter: invert(1);
+          "
+        >
+          <div
+            style="
+              position: absolute;
+              left: 16px;
+              top: 8px;
+              width: 80px;
+              height: 40px;
+              background: #40a08080;
+              backdrop-filter: none;
+            "
+          ></div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 196px;
+        top: 240px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 8px;
+          top: 8px;
+          width: 140px;
+          height: 76px;
+          mask-image: linear-gradient(black, transparent);
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 8px;
+            top: 8px;
+            width: 120px;
+            height: 56px;
+            background: #80403080;
+            backdrop-filter: invert(1);
+          "
+        >
+          <div
+            style="
+              position: absolute;
+              left: 16px;
+              top: 8px;
+              width: 80px;
+              height: 40px;
+              background: #40a08080;
+              backdrop-filter: invert(1);
+            "
+          ></div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 384px;
+        top: 240px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 8px;
+          top: 8px;
+          width: 140px;
+          height: 76px;
+          isolation: isolate;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 8px;
+            top: 8px;
+            width: 120px;
+            height: 56px;
+            background: #80403080;
+            backdrop-filter: invert(1);
+          "
+        >
+          <div
+            style="
+              position: absolute;
+              left: 16px;
+              top: 8px;
+              width: 80px;
+              height: 40px;
+              background: #40a08080;
+              backdrop-filter: none;
+            "
+          ></div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="
+        position: absolute;
+        left: 572px;
+        top: 240px;
+        width: 156px;
+        height: 92px;
+        background: linear-gradient(90deg, #2463a0 50%, #e0b060 50%);
+      "
+    >
+      <div
+        style="
+          position: absolute;
+          left: 8px;
+          top: 8px;
+          width: 140px;
+          height: 76px;
+          isolation: isolate;
+        "
+      >
+        <div
+          style="
+            position: absolute;
+            left: 8px;
+            top: 8px;
+            width: 120px;
+            height: 56px;
+            background: #80403080;
+            backdrop-filter: invert(1);
+          "
+        >
+          <div
+            style="
+              position: absolute;
+              left: 16px;
+              top: 8px;
+              width: 80px;
+              height: 40px;
+              background: #40a08080;
+              backdrop-filter: invert(1);
+            "
+          ></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</html>

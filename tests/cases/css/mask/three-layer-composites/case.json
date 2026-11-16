@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/css-masking-1/#the-mask-composite",
+  "assertion": "Eight controls cross all four mask-composite operators with alpha/luminance for three asymmetric layers, exposing list repetition, composition order and mask interpretation.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Chrome and Firefox agree within one channel level for all three-layer operators and both mask modes. The asymmetrical alpha/luminance controls expose source/destination order; WebKit differs on repeated mask composite values.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 3200
+    }
+  }
+}

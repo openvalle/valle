@@ -1,0 +1,13 @@
+{
+  "spec": "https://drafts.fxtf.org/filter-effects-2/#BackdropRoot",
+  "assertion": "Twelve nested backdrop controls cross root-forming properties with a second backdrop read. Transparent group content exposes whether sampling leaks through an ancestor root.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed each ancestor root and nested-filter control. Chrome agrees within one channel level. The no-root and isolation controls sample the page; opacity/filter/mask/clip bound the read. Firefox/WebKit differ for nested backdrop/root interactions; these captures are diagnostic rather than a majority oracle.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 48000
+    }
+  }
+}

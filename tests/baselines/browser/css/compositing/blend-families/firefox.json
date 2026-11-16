@@ -1,0 +1,13 @@
+{
+  "size": [
+    1520,
+    480
+  ],
+  "sources": {
+    "tests/baselines/browser/css/compositing/blend-families/scene.html": "c03a15106e8742682b90735d2ee6d58c05445c02a33b6ec51b5bcbf43d63b6f1"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

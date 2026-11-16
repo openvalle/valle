@@ -1,0 +1,13 @@
+{
+  "size": [
+    768,
+    364
+  ],
+  "sources": {
+    "tests/baselines/browser/css/compositing/backdrop-roots/scene.html": "eeaf9de77b18bc71e388c9fda11d86379785ed829bb7a735e569f4fee7729808"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

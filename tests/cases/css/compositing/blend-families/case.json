@@ -1,0 +1,13 @@
+{
+  "spec": "https://www.w3.org/TR/compositing-1/#blending",
+  "assertion": "32 controls cross every supported CSS blend mode with absent/inverted backdrop and a translucent child. Solid regions separate compositing formulas from edge antialiasing.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All 32 solid-region controls agree with Chrome within one channel level. Reviewed every blend pair; nonseparable hue/saturation/color/luminosity and backdrop content follow the blend-then-composite order. Firefox/WebKit differ in backdrop/blend interactions; their candidates are retained.",
+    "pixels": {
+      "maxDifference": 1,
+      "maxPixels": 21000
+    }
+  }
+}
