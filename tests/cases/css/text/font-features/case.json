@@ -1,0 +1,17 @@
+{
+  "spec": "https://www.w3.org/TR/css-fonts-3/#font-rend-desc",
+  "assertion": "44 keyword controls exercise kerning and every accepted font-variant longhand value. Each selected feature is paired with the same font and text at its default setting.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all 44 selected/default pairs with the pinned fonts. Chrome glyph substitutions and extents agree; remaining differences are antialiased glyph coverage. Position controls use fully supported digits; whole-run synthetic fallback remains independently asserted in the text unit tests, since browsers partially substitute mixed runs.",
+    "pixels": {
+      "maxDifference": 140,
+      "maxPixels": 48000
+    }
+  },
+  "valle": {
+    "reason": "Reviewed all 44 selected/default pairs with the pinned fonts. Chrome glyph substitutions and extents agree; remaining differences are antialiased glyph coverage. Position controls use fully supported digits; whole-run synthetic fallback remains independently asserted in the text unit tests, since browsers partially substitute mixed runs.",
+    "maxDifference": 1
+  }
+}

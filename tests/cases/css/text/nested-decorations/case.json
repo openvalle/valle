@@ -1,0 +1,17 @@
+{
+  "spec": "https://www.w3.org/TR/css-text-decor-3/#line-decoration",
+  "assertion": "Four nested decoration controls combine wrapping, mixed sizes, propagated outer decorations and an independently colored inner double underline.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed wrapping and propagated outer/inner decorations. Chrome preserves the same glyph order, line breaks and decoration colors. Differences lie on glyph edges and underline placement/thickness. Strict product PNGs and an underline-removal mutation guard propagation.",
+    "pixels": {
+      "maxDifference": 220,
+      "maxPixels": 6300
+    }
+  },
+  "valle": {
+    "reason": "Reviewed wrapping and propagated outer/inner decorations. Chrome preserves the same glyph order, line breaks and decoration colors. Differences lie on glyph edges and underline placement/thickness. Strict product PNGs and an underline-removal mutation guard propagation.",
+    "maxDifference": 1
+  }
+}

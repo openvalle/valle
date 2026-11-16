@@ -22,6 +22,28 @@ const CASES: {
   nativeResources?: Record<string, string>;
   pixels?: { maxDifference: number; maxPixels: number };
 }[] = [
+  { entry: "tests/cases/css/text/font-features/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/text/axes-synthesis/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/text/relative-inheritance/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/text/bidi-inline-atoms/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/text/breaking-products/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/text/nested-decorations/scene.motion.tsx", frames: [0] },
+  {
+    entry: "tests/cases/css/text/dynamic-axes/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
+  {
+    entry: "tests/cases/css/text/dynamic-bidi-atoms/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
+  {
+    entry: "tests/cases/css/text/dynamic-breaking/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
+  {
+    entry: "tests/cases/css/text/dynamic-nested-decorations/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
   { entry: "tests/cases/css/background/layer-lists/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/background/fractional-repeat/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/background/rounded-position/scene.motion.tsx", frames: [0] },

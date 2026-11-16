@@ -1,0 +1,14 @@
+{
+  "size": [
+    768,
+    148
+  ],
+  "sources": {
+    "tests/baselines/browser/css/text/nested-decorations/scene.html": "633f107ef2f323fdfb430d68a13b2736bf7cb36374487b41393cd0f1625ce5e7",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

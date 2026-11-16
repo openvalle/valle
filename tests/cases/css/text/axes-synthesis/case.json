@@ -1,0 +1,17 @@
+{
+  "spec": "https://www.w3.org/TR/css-fonts-4/#font-variation-settings-def",
+  "assertion": "Eight combinations cross variable axes, synthesis permission and x-height adjustment through a smaller/bolder nested run. Native variable axes remain active when synthesis is disabled.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed variable weight/width, faux-style permission and size-adjust controls. Chrome agrees on line breaks and glyph bounds; Firefox applies oblique synthesis differently. A strict product baseline guards the exact axis/synthesis effect.",
+    "pixels": {
+      "maxDifference": 150,
+      "maxPixels": 10200
+    }
+  },
+  "valle": {
+    "reason": "Reviewed variable weight/width, faux-style permission and size-adjust controls. Chrome agrees on line breaks and glyph bounds; Firefox applies oblique synthesis differently. A strict product baseline guards the exact axis/synthesis effect.",
+    "maxDifference": 1
+  }
+}

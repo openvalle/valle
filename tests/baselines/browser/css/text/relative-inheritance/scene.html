@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/text/relative-inheritance</title
+  ><style>
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 768px;
+      height: 248px;
+      background: white;
+    }
+    @font-face {
+      font-family: Test;
+      src: url(/tests/resources/NotoSans.ttf);
+      font-weight: 100 900;
+      font-stretch: 62.5% 100%;
+    }
+    @font-face {
+      font-family: Han;
+      src: url(/tests/resources/NotoSansSC.ttf);
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: Hebrew;
+      src: url(/tests/resources/NotoSansHebrew.ttf);
+    }
+  </style>
+  <div id="canvas">
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:8px;top:8px;width:176px;height:108px;font-family:Test;font-size:16px;line-height:34px;font-weight:100;color:#17365d">Base<span style="font-size:larger;font-weight:bolder"> Large</span><span style="font-size:smaller;font-weight:lighter"> small</span></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:196px;top:8px;width:176px;height:108px;font-family:Test;font-size:24px;line-height:34px;font-weight:100;color:#17365d">Base<span style="font-size:larger;font-weight:bolder"> Large</span><span style="font-size:smaller;font-weight:lighter"> small</span></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:384px;top:8px;width:176px;height:108px;font-family:Test;font-size:16px;line-height:34px;font-weight:400;color:#17365d">Base<span style="font-size:larger;font-weight:bolder"> Large</span><span style="font-size:smaller;font-weight:lighter"> small</span></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:572px;top:8px;width:176px;height:108px;font-family:Test;font-size:24px;line-height:34px;font-weight:400;color:#17365d">Base<span style="font-size:larger;font-weight:bolder"> Large</span><span style="font-size:smaller;font-weight:lighter"> small</span></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:8px;top:124px;width:176px;height:108px;font-family:Test;font-size:16px;line-height:34px;font-weight:600;color:#17365d">Base<span style="font-size:larger;font-weight:bolder"> Large</span><span style="font-size:smaller;font-weight:lighter"> small</span></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:196px;top:124px;width:176px;height:108px;font-family:Test;font-size:24px;line-height:34px;font-weight:600;color:#17365d">Base<span style="font-size:larger;font-weight:bolder"> Large</span><span style="font-size:smaller;font-weight:lighter"> small</span></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:384px;top:124px;width:176px;height:108px;font-family:Test;font-size:16px;line-height:34px;font-weight:900;color:#17365d">Base<span style="font-size:larger;font-weight:bolder"> Large</span><span style="font-size:smaller;font-weight:lighter"> small</span></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:572px;top:124px;width:176px;height:108px;font-family:Test;font-size:24px;line-height:34px;font-weight:900;color:#17365d">Base<span style="font-size:larger;font-weight:bolder"> Large</span><span style="font-size:smaller;font-weight:lighter"> small</span></div>
+  </div>
+</html>

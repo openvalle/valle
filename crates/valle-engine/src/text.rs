@@ -1408,12 +1408,14 @@ impl Text {
                         builder.push_inline_box(parley::InlineBox {
                             id: k as u64,
                             kind: parley::InlineBoxKind::InFlow,
-                            index: range.start,
+                            index: range.end,
                             width: atom.size[0],
                             height: atom.size[1],
                             baseline: Some(atom.baseline),
                             vertical_align: parley::VerticalAlign::BASELINE,
                         });
+                        builder.push(StyleProperty::FontSize(0.0), range);
+                        continue;
                     }
                     if range.is_empty() {
                         continue;

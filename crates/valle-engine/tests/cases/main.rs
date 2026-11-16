@@ -185,7 +185,10 @@ fn run_case(
                 at.seconds_text()
             )),
         }
-        snapshots.push(sample.frame);
+        snapshots.push(seek::Snapshot {
+            faces: sample.scene.faces().to_vec(),
+            frame: sample.frame,
+        });
     }
     let seek = if case.at.len() > 1 {
         Some(seek::check(

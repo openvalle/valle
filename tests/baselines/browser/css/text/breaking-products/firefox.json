@@ -1,0 +1,15 @@
+{
+  "size": [
+    1144,
+    1060
+  ],
+  "sources": {
+    "tests/baselines/browser/css/text/breaking-products/scene.html": "ce7261deace910628b127e2d9a52967e370df5373669888feca846e8a3eea5be",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97",
+    "tests/resources/NotoSansSC.ttf": "6cbd3ac22ef454e4e9bcfb67369ea94297002a218e9abebc90852534afee096a"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

@@ -466,6 +466,21 @@ fn combination_allowances_reject_missing_effects() {
             .unwrap();
         for (name, from, to) in [
             (
+                "css/text/breaking-products",
+                "whiteSpace: c.white",
+                "whiteSpace: \"nowrap\"",
+            ),
+            (
+                "css/text/nested-decorations",
+                "textDecorationLine: c.dec",
+                "textDecorationLine: \"none\"",
+            ),
+            (
+                "css/text/axes-synthesis",
+                "fontVariationSettings: c.axis",
+                "fontVariationSettings: \"normal\"",
+            ),
+            (
                 "css/background/text-effects",
                 "backgroundClip: \"text\"",
                 "backgroundClip: \"border-box\"",

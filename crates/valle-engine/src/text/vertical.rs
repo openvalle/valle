@@ -15,6 +15,7 @@ use crate::style::{
 };
 
 struct Cluster {
+    visual: usize,
     atom: Option<super::Atom>,
     range: std::ops::Range<usize>,
     edge: Option<(bool, u32)>,
@@ -210,6 +211,7 @@ fn layout(
                     c.break_after = true;
                 }
                 clusters.push(Cluster {
+                    visual: clusters.len(),
                     atom: Some(atom),
                     range: a.at as usize..a.at as usize,
                     edge: None,
@@ -233,6 +235,7 @@ fn layout(
                     c.break_after = false;
                 }
                 clusters.push(Cluster {
+                    visual: clusters.len(),
                     atom: None,
                     range: at as usize..at as usize,
                     edge: run.edge,
@@ -313,6 +316,7 @@ fn layout(
                     _ => breaks.contains(&end),
                 };
                 clusters.push(Cluster {
+                    visual: clusters.len(),
                     atom: None,
                     edge: None,
                     range: start..end,
@@ -335,6 +339,10 @@ fn layout(
                 });
             }
         }
+        // Choose line breaks in authored order, then restore the shaped visual
+        // order within each line. Breaking the whole paragraph's visual order
+        // first moves the end of an RTL paragraph into its first column.
+        clusters.sort_by_key(|c| (c.range.start, c.range.end));
         // Shape adjacent upright clusters together: vchw and vertical kerning need
         // neighboring punctuation, including across Span boundaries with equal fonts.
         let font_of = |node| {
@@ -540,7 +548,9 @@ fn layout(
             };
             let index = out.boxes.len() as u32;
             let mut cursor = indent + alignment;
-            for c in slice {
+            let mut visual: Vec<_> = slice.iter().collect();
+            visual.sort_by_key(|c| c.visual);
+            for c in visual {
                 if let Some(a) = c.atom {
                     out.atoms.push(super::InlineBox {
                         at: c.range.start as u32,

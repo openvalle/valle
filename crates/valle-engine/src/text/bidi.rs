@@ -52,7 +52,12 @@ impl Input {
                 &all[start..]
             })
             .collect();
-        if scopes.iter().all(|s| s.is_empty()) && content.pieces.iter().all(|p| p.edge.is_none()) {
+        if scopes.iter().all(|s| s.is_empty())
+            && content
+                .pieces
+                .iter()
+                .all(|p| p.edge.is_none() && p.atom.is_none())
+        {
             return Self {
                 text: source.clone(),
                 source,
@@ -81,6 +86,13 @@ impl Input {
                 controls(&mut text, &mut map, scope.controls().0, range.start);
             }
             active = next;
+            // Atomic inlines participate as neutral objects in Unicode bidi resolution.
+            // The shaper attaches a box to the preceding run's level, so give it a
+            // zero-size object run immediately before the actual box. Keep the
+            // placeholder out of authored text and glyph diagnostics.
+            if piece.atom.is_some() {
+                controls(&mut text, &mut map, "\u{fffc}", range.start);
+            }
             if let Some(edge) = &piece.edge {
                 let value = if edge.start {
                     "\u{a0}\u{2060}"
@@ -250,6 +262,46 @@ mod tests {
         }
         assert_eq!(input.map.at(input.text.len()), value.len());
         assert_eq!(input.text.matches('\u{2068}').count(), 2);
+    }
+
+    #[test]
+    fn inline_atoms_resolve_as_neutral_objects_between_opposite_scripts() {
+        let source = indoc::indoc! {r#"
+            export const composition={width:300,height:60,fps:1,duration:1};
+            export default function Scene(){return <Text style={{width:300,fontSize:20,lineHeight:"34px"}}>AB <Span style={{direction:"rtl",unicodeBidi:"bidi-override"}}>EF</Span><View style={{display:"inline-block",width:24,height:20}}/>CD</Text>}
+        "#};
+        let frame = load(source).frame(Tick::ZERO).unwrap();
+        let lines = frame.layout.lines.iter().flatten().next().unwrap();
+        assert_eq!(&*lines.string, "AB EFCD");
+        assert_eq!(lines.atoms.len(), 1);
+        let atom = &lines.atoms[0];
+        assert_eq!(atom.rect.width, 24.0);
+        for glyph in &lines.glyphs {
+            if (3..5).contains(&glyph.cluster) {
+                assert!(
+                    glyph.x < atom.rect.x,
+                    "RTL text must precede the neutral box"
+                );
+            } else if glyph.cluster >= 5 {
+                assert!(glyph.x >= atom.rect.x + 24.0, "Latin follows the box");
+            }
+        }
+    }
+
+    #[test]
+    fn vertical_rtl_wraps_logical_text_before_reordering_each_column() {
+        let source = indoc::indoc! {r#"
+            export const composition={width:180,height:80,fps:1,duration:1};
+            export default function Scene(){return <Text style={{width:150,height:60,fontSize:20,lineHeight:"30px",writingMode:"vertical-rl",direction:"rtl"}}>AAA BBB CCC</Text>}
+        "#};
+        let frame = load(source).frame(Tick::ZERO).unwrap();
+        let lines = frame.layout.lines.iter().flatten().next().unwrap();
+        let columns: Vec<_> = lines
+            .text
+            .iter()
+            .map(|r| lines.string[r.clone()].trim())
+            .collect();
+        assert_eq!(columns, ["AAA", "BBB", "CCC"]);
     }
 
     #[test]

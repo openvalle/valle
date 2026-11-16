@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/text/axes-synthesis</title
+  ><style>
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 768px;
+      height: 312px;
+      background: white;
+    }
+    @font-face {
+      font-family: Test;
+      src: url(/tests/resources/NotoSans.ttf);
+      font-weight: 100 900;
+      font-stretch: 62.5% 100%;
+    }
+    @font-face {
+      font-family: Han;
+      src: url(/tests/resources/NotoSansSC.ttf);
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: Hebrew;
+      src: url(/tests/resources/NotoSansHebrew.ttf);
+    }
+  </style>
+  <div id="canvas">
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:8px;top:8px;width:176px;height:90px;font-family:Test;font-size:24px;line-height:42px;font-style:oblique 12deg;font-weight:500;font-variation-settings:normal;font-synthesis:none;font-size-adjust:none;color:#17365d">Axis 0123<span style="font-weight:bolder;font-size:smaller">Axis 0123</span></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:196px;top:8px;width:176px;height:90px;font-family:Test;font-size:24px;line-height:42px;font-style:oblique 12deg;font-weight:500;font-variation-settings:normal;font-synthesis:none;font-size-adjust:0.7;color:#17365d">Axis 0123<span style="font-weight:bolder;font-size:smaller">Axis 0123</span></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:384px;top:8px;width:176px;height:90px;font-family:Test;font-size:24px;line-height:42px;font-style:oblique 12deg;font-weight:500;font-variation-settings:normal;font-synthesis:weight style;font-size-adjust:none;color:#17365d">Axis 0123<span style="font-weight:bolder;font-size:smaller">Axis 0123</span></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:572px;top:8px;width:176px;height:90px;font-family:Test;font-size:24px;line-height:42px;font-style:oblique 12deg;font-weight:500;font-variation-settings:normal;font-synthesis:weight style;font-size-adjust:0.7;color:#17365d">Axis 0123<span style="font-weight:bolder;font-size:smaller">Axis 0123</span></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:8px;top:156px;width:176px;height:90px;font-family:Test;font-size:24px;line-height:42px;font-style:oblique 12deg;font-weight:500;font-variation-settings:&quot;wght&quot; 750, &quot;wdth&quot; 75;font-synthesis:none;font-size-adjust:none;color:#17365d">Axis 0123<span style="font-weight:bolder;font-size:smaller">Axis 0123</span></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:196px;top:156px;width:176px;height:90px;font-family:Test;font-size:24px;line-height:42px;font-style:oblique 12deg;font-weight:500;font-variation-settings:&quot;wght&quot; 750, &quot;wdth&quot; 75;font-synthesis:none;font-size-adjust:0.7;color:#17365d">Axis 0123<span style="font-weight:bolder;font-size:smaller">Axis 0123</span></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:384px;top:156px;width:176px;height:90px;font-family:Test;font-size:24px;line-height:42px;font-style:oblique 12deg;font-weight:500;font-variation-settings:&quot;wght&quot; 750, &quot;wdth&quot; 75;font-synthesis:weight style;font-size-adjust:none;color:#17365d">Axis 0123<span style="font-weight:bolder;font-size:smaller">Axis 0123</span></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:572px;top:156px;width:176px;height:90px;font-family:Test;font-size:24px;line-height:42px;font-style:oblique 12deg;font-weight:500;font-variation-settings:&quot;wght&quot; 750, &quot;wdth&quot; 75;font-synthesis:weight style;font-size-adjust:0.7;color:#17365d">Axis 0123<span style="font-weight:bolder;font-size:smaller">Axis 0123</span></div>
+  </div>
+</html>

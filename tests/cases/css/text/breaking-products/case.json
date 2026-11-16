@@ -1,0 +1,17 @@
+{
+  "spec": "https://www.w3.org/TR/css-text-3/#line-breaking",
+  "assertion": "108 combinations exhaust the selected white-space \u00d7 word-break \u00d7 overflow-wrap values at two nearby widths, with spaces, an explicit newline, a long word and Han text.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all 108 controls and the enlarged difference grid: line membership, preserved spaces and clipping agree with Chrome. Differences follow pinned glyph coverage, with Han glyphs at mixed-font baselines. Strict product PNGs plus a missing-wrap mutation guard the layout.",
+    "pixels": {
+      "maxDifference": 215,
+      "maxPixels": 87000
+    }
+  },
+  "valle": {
+    "reason": "Reviewed all 108 controls and the enlarged difference grid: line membership, preserved spaces and clipping agree with Chrome. Differences follow pinned glyph coverage, with Han glyphs at mixed-font baselines. Strict product PNGs plus a missing-wrap mutation guard the layout.",
+    "maxDifference": 1
+  }
+}

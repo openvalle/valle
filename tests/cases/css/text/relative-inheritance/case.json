@@ -1,0 +1,17 @@
+{
+  "spec": "https://www.w3.org/TR/css-fonts-3/#font-weight-prop",
+  "assertion": "Eight parent size/weight controls exercise larger/smaller and bolder/lighter inheritance in adjacent runs and at weight-range boundaries.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all parent weight/size boundaries and nested runs. Chrome line breaks and relative weight choices agree; differences follow glyph coverage.",
+    "pixels": {
+      "maxDifference": 145,
+      "maxPixels": 7100
+    }
+  },
+  "valle": {
+    "reason": "Reviewed all parent weight/size boundaries and nested runs. Chrome line breaks and relative weight choices agree; differences follow glyph coverage.",
+    "maxDifference": 1
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "size": [
+    768,
+    312
+  ],
+  "sources": {
+    "tests/baselines/browser/css/text/axes-synthesis/scene.html": "2047ab30065d4728947b7484d3c5340537bacf9e9fd906c26c1ce8b9d8448246",
+    "tests/resources/NotoSans.ttf": "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/text/font-features</title
+  ><style>
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 1168px;
+      height: 784px;
+      background: white;
+    }
+    @font-face {
+      font-family: Test;
+      src: url(/tests/resources/NotoSans.ttf);
+      font-weight: 100 900;
+      font-stretch: 62.5% 100%;
+    }
+    @font-face {
+      font-family: Han;
+      src: url(/tests/resources/NotoSansSC.ttf);
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: Hebrew;
+      src: url(/tests/resources/NotoSansHebrew.ttf);
+    }
+  </style>
+  <div id="canvas">
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:8px;top:8px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-kerning:normal">AV ffi 12</div><div style="color:#8899aa">AV ffi 12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:200px;top:8px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-kerning:auto">AV ffi 12</div><div style="color:#8899aa">AV ffi 12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:392px;top:8px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-kerning:none">AV ffi 12</div><div style="color:#8899aa">AV ffi 12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:584px;top:8px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-ligatures:normal">AV ffi 12</div><div style="color:#8899aa">AV ffi 12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:776px;top:8px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-ligatures:none">AV ffi 12</div><div style="color:#8899aa">AV ffi 12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:968px;top:8px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-ligatures:common-ligatures">AV ffi 12</div><div style="color:#8899aa">AV ffi 12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:8px;top:104px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-ligatures:no-common-ligatures">AV ffi 12</div><div style="color:#8899aa">AV ffi 12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:200px;top:104px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-ligatures:discretionary-ligatures">AV ffi 12</div><div style="color:#8899aa">AV ffi 12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:392px;top:104px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-ligatures:no-discretionary-ligatures">AV ffi 12</div><div style="color:#8899aa">AV ffi 12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:584px;top:104px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-ligatures:historical-ligatures">AV ffi 12</div><div style="color:#8899aa">AV ffi 12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:776px;top:104px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-ligatures:no-historical-ligatures">AV ffi 12</div><div style="color:#8899aa">AV ffi 12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:968px;top:104px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-ligatures:contextual">AV ffi 12</div><div style="color:#8899aa">AV ffi 12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:8px;top:200px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-ligatures:no-contextual">AV ffi 12</div><div style="color:#8899aa">AV ffi 12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:200px;top:200px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-caps:normal">Abc DEf</div><div style="color:#8899aa">Abc DEf</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:392px;top:200px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-caps:small-caps">Abc DEf</div><div style="color:#8899aa">Abc DEf</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:584px;top:200px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-caps:all-small-caps">Abc DEf</div><div style="color:#8899aa">Abc DEf</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:776px;top:200px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-caps:petite-caps">Abc DEf</div><div style="color:#8899aa">Abc DEf</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:968px;top:200px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-caps:all-petite-caps">Abc DEf</div><div style="color:#8899aa">Abc DEf</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:8px;top:296px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-caps:unicase">Abc DEf</div><div style="color:#8899aa">Abc DEf</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:200px;top:296px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-caps:titling-caps">Abc DEf</div><div style="color:#8899aa">Abc DEf</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:392px;top:296px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-numeric:normal">0123 1/2</div><div style="color:#8899aa">0123 1/2</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:584px;top:296px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-numeric:lining-nums">0123 1/2</div><div style="color:#8899aa">0123 1/2</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:776px;top:296px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-numeric:oldstyle-nums">0123 1/2</div><div style="color:#8899aa">0123 1/2</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:968px;top:296px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-numeric:proportional-nums">0123 1/2</div><div style="color:#8899aa">0123 1/2</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:8px;top:392px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-numeric:tabular-nums">0123 1/2</div><div style="color:#8899aa">0123 1/2</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:200px;top:392px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-numeric:diagonal-fractions">0123 1/2</div><div style="color:#8899aa">0123 1/2</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:392px;top:392px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-numeric:stacked-fractions">0123 1/2</div><div style="color:#8899aa">0123 1/2</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:584px;top:392px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-numeric:ordinal">0123 1/2</div><div style="color:#8899aa">0123 1/2</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:776px;top:392px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-numeric:slashed-zero">0123 1/2</div><div style="color:#8899aa">0123 1/2</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:968px;top:392px;width:176px;height:80px;font-family:Han;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-east-asian:normal">国辺Ａ12</div><div style="color:#8899aa">国辺Ａ12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:8px;top:488px;width:176px;height:80px;font-family:Han;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-east-asian:jis78">国辺Ａ12</div><div style="color:#8899aa">国辺Ａ12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:200px;top:488px;width:176px;height:80px;font-family:Han;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-east-asian:jis83">国辺Ａ12</div><div style="color:#8899aa">国辺Ａ12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:392px;top:488px;width:176px;height:80px;font-family:Han;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-east-asian:jis90">国辺Ａ12</div><div style="color:#8899aa">国辺Ａ12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:584px;top:488px;width:176px;height:80px;font-family:Han;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-east-asian:jis04">国辺Ａ12</div><div style="color:#8899aa">国辺Ａ12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:776px;top:488px;width:176px;height:80px;font-family:Han;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-east-asian:simplified">国辺Ａ12</div><div style="color:#8899aa">国辺Ａ12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:968px;top:488px;width:176px;height:80px;font-family:Han;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-east-asian:traditional">国辺Ａ12</div><div style="color:#8899aa">国辺Ａ12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:8px;top:584px;width:176px;height:80px;font-family:Han;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-east-asian:full-width">国辺Ａ12</div><div style="color:#8899aa">国辺Ａ12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:200px;top:584px;width:176px;height:80px;font-family:Han;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-east-asian:proportional-width">国辺Ａ12</div><div style="color:#8899aa">国辺Ａ12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:392px;top:584px;width:176px;height:80px;font-family:Han;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-east-asian:ruby">国辺Ａ12</div><div style="color:#8899aa">国辺Ａ12</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:584px;top:584px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-alternates:normal">123 abc</div><div style="color:#8899aa">123 abc</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:776px;top:584px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-alternates:historical-forms">123 abc</div><div style="color:#8899aa">123 abc</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:968px;top:584px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-position:normal">123</div><div style="color:#8899aa">123</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:8px;top:680px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-position:sub">123</div><div style="color:#8899aa">123</div></div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:200px;top:680px;width:176px;height:80px;font-family:Test;font-size:24px;line-height:36px;color:#17365d"><div style="font-variant-position:super">123</div><div style="color:#8899aa">123</div></div>
+  </div>
+</html>

@@ -1,0 +1,17 @@
+{
+  "spec": "https://www.w3.org/TR/css-writing-modes-3/#inline-alignment",
+  "assertion": "18 combinations cross bidi direction, writing mode and atomic inline alignment with explicitly declared Latin, Hebrew and Han fonts and a decorated smaller run.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all 18 mixed-script cases after fixing neutral atomic objects and logical-order vertical wrapping. Inline object ordering and column membership now agree with Chrome. Remaining glyph/underline differences follow rasterization and central-baseline rounding; unit tests independently assert object order and logical column ranges.",
+    "pixels": {
+      "maxDifference": 215,
+      "maxPixels": 14200
+    }
+  },
+  "valle": {
+    "reason": "Reviewed all 18 mixed-script cases after fixing neutral atomic objects and logical-order vertical wrapping. Inline object ordering and column membership now agree with Chrome. Remaining glyph/underline differences follow rasterization and central-baseline rounding; unit tests independently assert object order and logical column ranges.",
+    "maxDifference": 1
+  }
+}

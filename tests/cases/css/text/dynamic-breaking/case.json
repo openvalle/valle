@@ -1,0 +1,9 @@
+{
+  "spec": "https://www.w3.org/TR/css-text-3/#line-breaking",
+  "assertion": "State changes and restoration for css/text/breaking-products. The eight states reuse the independently reviewed static combinations.",
+  "at": [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75],
+  "valle": {
+    "reason": "Baselines are crops of the reviewed static matrix, before rendering the dynamic scene. Fresh/forward/reverse/alternating seeks must agree exactly. Moving the static control to the common origin permits one channel level of glyph coverage rounding; seek comparisons stay exact.",
+    "maxDifference": 1
+  }
+}

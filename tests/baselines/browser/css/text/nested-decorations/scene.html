@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>css/text/nested-decorations</title
+  ><style>
+    body {
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    #canvas {
+      position: relative;
+      width: 768px;
+      height: 148px;
+      background: white;
+    }
+    @font-face {
+      font-family: Test;
+      src: url(/tests/resources/NotoSans.ttf);
+      font-weight: 100 900;
+      font-stretch: 62.5% 100%;
+    }
+    @font-face {
+      font-family: Han;
+      src: url(/tests/resources/NotoSansSC.ttf);
+      font-weight: 100 900;
+    }
+    @font-face {
+      font-family: Hebrew;
+      src: url(/tests/resources/NotoSansHebrew.ttf);
+    }
+  </style>
+  <div id="canvas">
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:8px;top:8px;width:156px;height:108px;font-family:Test;font-size:24px;line-height:36px;color:#17365d;text-decoration-line:underline;text-decoration-color:#2463a0;overflow:visible">outer <span style="font-size:16px;color:#3b856c;text-decoration-line:underline;text-decoration-style:double;text-decoration-color:#c05c30">inner <span style="font-size:28px;color:#8c407c">nested</span></span> end</div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:196px;top:8px;width:156px;height:108px;font-family:Test;font-size:24px;line-height:36px;color:#17365d;text-decoration-line:underline;text-decoration-color:#2463a0;overflow:hidden">outer <span style="font-size:16px;color:#3b856c;text-decoration-line:underline;text-decoration-style:double;text-decoration-color:#c05c30">inner <span style="font-size:28px;color:#8c407c">nested</span></span> end</div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:384px;top:8px;width:156px;height:108px;font-family:Test;font-size:24px;line-height:36px;color:#17365d;text-decoration-line:overline line-through;text-decoration-color:#2463a0;overflow:visible">outer <span style="font-size:16px;color:#3b856c;text-decoration-line:underline;text-decoration-style:double;text-decoration-color:#c05c30">inner <span style="font-size:28px;color:#8c407c">nested</span></span> end</div>
+    <!-- prettier-ignore -->
+    <div style="position:absolute;left:572px;top:8px;width:156px;height:108px;font-family:Test;font-size:24px;line-height:36px;color:#17365d;text-decoration-line:overline line-through;text-decoration-color:#2463a0;overflow:hidden">outer <span style="font-size:16px;color:#3b856c;text-decoration-line:underline;text-decoration-style:double;text-decoration-color:#c05c30">inner <span style="font-size:28px;color:#8c407c">nested</span></span> end</div>
+  </div>
+</html>
