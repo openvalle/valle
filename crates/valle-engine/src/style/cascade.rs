@@ -597,6 +597,47 @@ mod tests {
     }
 
     #[test]
+    fn inheritance_resolves_the_parents_ems_in_shapes_paths_gradients_and_text_offsets() {
+        // As above, for the rest of what holds a length: circles and ellipses, a motion path's
+        // shape and its start, conic gradients and color hints, dashes, and the offsets of
+        // vertical-align and baseline-shift. Each must equal the parent's own. A conic stop
+        // is an angle, so a hint in ems is a linear gradient's.
+        let parent = [
+            ("fontSize", num(20.0)),
+            ("clipPath", text("ellipse(1em 2em at 3em 4em)")),
+            ("offsetPath", text("circle(1em at 2em 3em)")),
+            ("offsetPosition", text("1em 2em")),
+            (
+                "backgroundImage",
+                text("conic-gradient(at 1em 2em, red, blue), linear-gradient(red, 3em, blue)"),
+            ),
+            ("strokeDasharray", text("1em 2em")),
+            ("verticalAlign", text("1em")),
+            ("baselineShift", text("1em")),
+        ];
+        let child: Vec<(&str, Prop)> = (parent.iter().skip(1))
+            .map(|&(k, _)| (k, text("inherit")))
+            .chain([("fontSize", num(10.0))])
+            .collect();
+        let s = styles(vec![view(&parent, &[1]), view(&child, &[])], &[]).unwrap();
+        let (p, c) = (&s[0], &s[1]);
+        assert_eq!(c.clip, p.clip, "clipPath");
+        assert_eq!(c.motion, p.motion, "offsetPath, offsetPosition");
+        assert_eq!(c.layers, p.layers, "backgroundImage");
+        // `resolved` replaces the frozen dashes with the parent's computed ones, so this holds
+        // whether or not `freeze` resolves them.
+        assert_eq!(c.stroke.dashes, p.stroke.dashes, "strokeDasharray");
+        assert_eq!(c.stroke.dashes[0].resolve(0.0), 20.0);
+        assert_eq!(c.vertical_align, p.vertical_align, "verticalAlign");
+        assert_eq!(c.baseline_shift, p.baseline_shift, "baselineShift");
+        // A circle's radius on its own, so a frozen center cannot hide an unfrozen radius.
+        let circle = [("fontSize", num(20.0)), ("clipPath", text("circle(1em)"))];
+        let inherits = [("clipPath", text("inherit")), ("fontSize", num(10.0))];
+        let s = styles(vec![view(&circle, &[1]), view(&inherits, &[])], &[]).unwrap();
+        assert_eq!(s[1].clip, s[0].clip, "circle radius");
+    }
+
+    #[test]
     fn initial_resets_inherited_properties_and_unset_non_inherited_ones() {
         let tree = vec![
             view(
