@@ -1,0 +1,10 @@
+{
+  "size": [768, 248],
+  "sources": {
+    "tests/baselines/browser/css/border/logical-corners/scene.html": "9416eb788dbbd9c36cd0bbbfa8b8793b0f5b5b636afa79c79649ff45a313acec"
+  },
+  "measurements": {
+    "layout": [],
+    "lines": []
+  }
+}

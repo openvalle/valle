@@ -22,6 +22,18 @@ const CASES: {
   nativeResources?: Record<string, string>;
   pixels?: { maxDifference: number; maxPixels: number };
 }[] = [
+  { entry: "tests/cases/css/border/unequal-corners/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/border/mixed-joins/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/border/logical-corners/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/shadow/outline-layers/scene.motion.tsx", frames: [0] },
+  {
+    entry: "tests/cases/css/border/dynamic-corners/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
+  {
+    entry: "tests/cases/css/shadow/dynamic-outline/scene.motion.tsx",
+    frames: [0, 7, 1, 6, 2, 5, 3, 4, 0],
+  },
   { entry: "tests/cases/css/values/inherited-units/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/sizing/indefinite-percentages/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/cascade/logical-order/scene.motion.tsx", frames: [0] },

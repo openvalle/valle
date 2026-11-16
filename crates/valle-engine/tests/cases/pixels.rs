@@ -466,6 +466,26 @@ fn combination_allowances_reject_missing_effects() {
             .unwrap();
         for (name, from, to) in [
             (
+                "css/border/unequal-corners",
+                "...c.border",
+                "...c.border, borderStyle: \"none\"",
+            ),
+            (
+                "css/border/mixed-joins",
+                "...c.border",
+                "...c.border, borderStyle: \"none\"",
+            ),
+            (
+                "css/border/logical-corners",
+                "borderStartStartRadius: 28",
+                "borderStartStartRadius: 0",
+            ),
+            (
+                "css/shadow/outline-layers",
+                "boxShadow: c.shadow",
+                "boxShadow: \"none\"",
+            ),
+            (
                 "css/compositing/filter-blend-matrix",
                 "backdropFilter: c.filter",
                 "backdropFilter: \"none\"",

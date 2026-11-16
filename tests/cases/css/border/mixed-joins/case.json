@@ -1,0 +1,17 @@
+{
+  "spec": "https://www.w3.org/TR/css-backgrounds-3/#corner-shaping",
+  "assertion": "16 mixed-style corner combinations cross the top edge style, unequal widths and asymmetric radii. Neighboring styles must not leave geometric holes.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all 16 cells and difference maps. Differences follow edge-mark phase, corner seams and coverage, without missing border sides or leaking interiors. A strict reviewed Valle baseline separately guards the geometry and complete effect.",
+    "pixels": {
+      "maxDifference": 205,
+      "maxPixels": 5000
+    }
+  },
+  "valle": {
+    "reason": "Reviewed all 16 cells and difference maps. Differences follow edge-mark phase, corner seams and coverage, without missing border sides or leaking interiors.",
+    "maxDifference": 1
+  }
+}

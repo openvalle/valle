@@ -1,0 +1,17 @@
+{
+  "spec": "https://www.w3.org/TR/css-backgrounds-3/#corner-shaping",
+  "assertion": "32 combinations cross all eight visible border styles, equal/unequal widths and square/asymmetric corners. Different edge colors expose joins and clipping.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all 32 cells and difference maps. Solid interiors agree. Differences lie on curved joins, groove/ridge seams and dotted/dashed placement; the latter is not prescribed as an exact pixel pattern. A strict reviewed Valle baseline separately guards the geometry and complete effect.",
+    "pixels": {
+      "maxDifference": 205,
+      "maxPixels": 7100
+    }
+  },
+  "valle": {
+    "reason": "Reviewed all 32 cells and difference maps. Solid interiors agree. Differences lie on curved joins, groove/ridge seams and dotted/dashed placement; the latter is not prescribed as an exact pixel pattern.",
+    "maxDifference": 1
+  }
+}

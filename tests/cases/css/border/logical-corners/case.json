@@ -1,0 +1,17 @@
+{
+  "spec": "https://www.w3.org/TR/css-logical-1/#border-radius-properties",
+  "assertion": "Six writing mode/direction combinations map four distinct logical radii to physical corners.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "All six corner mappings agree. Remaining differences are at antialiased curve edges (observed maximum 7). A strict reviewed Valle baseline separately guards the geometry and complete effect.",
+    "pixels": {
+      "maxDifference": 8,
+      "maxPixels": 740
+    }
+  },
+  "valle": {
+    "reason": "All six corner mappings agree. Remaining differences are at antialiased curve edges (observed maximum 7).",
+    "maxDifference": 1
+  }
+}
