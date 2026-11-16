@@ -266,6 +266,7 @@ const CASES: {
   { entry: "tests/cases/css/flex/constraints-matrix/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/flex/wrap-thresholds/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/layout/nested-sizing/scene.motion.tsx", frames: [0] },
+  { entry: "tests/cases/css/layout/logical-sides-matrix/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/position/logical-containing-block/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/values/absolute-units/scene.motion.tsx", frames: [0] },
   { entry: "tests/cases/css/values/font-ex/scene.motion.tsx", frames: [0] },

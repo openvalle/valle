@@ -1,0 +1,271 @@
+{
+  "spec": "https://www.w3.org/TR/css-logical-1/#box",
+  "assertion": "Six writing mode and direction combinations map inset-inline-start, inset-block-start, inline-size, block-size and the four flow-relative margins, paddings and borders, each with a different value, to their physical sides and axes.",
+  "at": [0],
+  "browser": {
+    "selected": "chrome",
+    "reason": "Reviewed all six cells and the difference maps. Chromium, Firefox and WebKit pixels are identical, and all 12 independently calculated boxes match their measurements and Valle's exactly. Each border's color is on the side its flow-relative name maps to. Valle differs from Chrome only on the antialiased diagonal joins between adjacent borders of different colors (146 pixels, observed maximum 31) and two canvas pixels by 1. A strict reviewed Valle baseline separately guards the complete picture.",
+    "pixels": {
+      "maxDifference": 32,
+      "maxPixels": 180
+    }
+  },
+  "layout": [
+    {
+      "key": "c0",
+      "border": {
+        "x": 12,
+        "y": 12,
+        "width": 150,
+        "height": 150
+      },
+      "padding": {
+        "x": 20,
+        "y": 20,
+        "width": 134,
+        "height": 134
+      },
+      "content": {
+        "x": 24,
+        "y": 24,
+        "width": 126,
+        "height": 126
+      }
+    },
+    {
+      "key": "c0/item",
+      "border": {
+        "x": 36,
+        "y": 28,
+        "width": 60,
+        "height": 30
+      },
+      "padding": {
+        "x": 41,
+        "y": 29,
+        "width": 48,
+        "height": 26
+      },
+      "content": {
+        "x": 47,
+        "y": 31,
+        "width": 34,
+        "height": 20
+      }
+    },
+    {
+      "key": "c1",
+      "border": {
+        "x": 174,
+        "y": 12,
+        "width": 150,
+        "height": 150
+      },
+      "padding": {
+        "x": 182,
+        "y": 20,
+        "width": 134,
+        "height": 134
+      },
+      "content": {
+        "x": 186,
+        "y": 24,
+        "width": 126,
+        "height": 126
+      }
+    },
+    {
+      "key": "c1/item",
+      "border": {
+        "x": 240,
+        "y": 28,
+        "width": 60,
+        "height": 30
+      },
+      "padding": {
+        "x": 247,
+        "y": 29,
+        "width": 48,
+        "height": 26
+      },
+      "content": {
+        "x": 255,
+        "y": 31,
+        "width": 34,
+        "height": 20
+      }
+    },
+    {
+      "key": "c2",
+      "border": {
+        "x": 336,
+        "y": 12,
+        "width": 150,
+        "height": 150
+      },
+      "padding": {
+        "x": 344,
+        "y": 20,
+        "width": 134,
+        "height": 134
+      },
+      "content": {
+        "x": 348,
+        "y": 24,
+        "width": 126,
+        "height": 126
+      }
+    },
+    {
+      "key": "c2/item",
+      "border": {
+        "x": 440,
+        "y": 36,
+        "width": 30,
+        "height": 60
+      },
+      "padding": {
+        "x": 443,
+        "y": 41,
+        "width": 26,
+        "height": 48
+      },
+      "content": {
+        "x": 447,
+        "y": 47,
+        "width": 20,
+        "height": 34
+      }
+    },
+    {
+      "key": "c3",
+      "border": {
+        "x": 12,
+        "y": 174,
+        "width": 150,
+        "height": 150
+      },
+      "padding": {
+        "x": 20,
+        "y": 182,
+        "width": 134,
+        "height": 134
+      },
+      "content": {
+        "x": 24,
+        "y": 186,
+        "width": 126,
+        "height": 126
+      }
+    },
+    {
+      "key": "c3/item",
+      "border": {
+        "x": 116,
+        "y": 240,
+        "width": 30,
+        "height": 60
+      },
+      "padding": {
+        "x": 119,
+        "y": 247,
+        "width": 26,
+        "height": 48
+      },
+      "content": {
+        "x": 123,
+        "y": 255,
+        "width": 20,
+        "height": 34
+      }
+    },
+    {
+      "key": "c4",
+      "border": {
+        "x": 174,
+        "y": 174,
+        "width": 150,
+        "height": 150
+      },
+      "padding": {
+        "x": 182,
+        "y": 182,
+        "width": 134,
+        "height": 134
+      },
+      "content": {
+        "x": 186,
+        "y": 186,
+        "width": 126,
+        "height": 126
+      }
+    },
+    {
+      "key": "c4/item",
+      "border": {
+        "x": 190,
+        "y": 198,
+        "width": 30,
+        "height": 60
+      },
+      "padding": {
+        "x": 191,
+        "y": 203,
+        "width": 26,
+        "height": 48
+      },
+      "content": {
+        "x": 193,
+        "y": 209,
+        "width": 20,
+        "height": 34
+      }
+    },
+    {
+      "key": "c5",
+      "border": {
+        "x": 336,
+        "y": 174,
+        "width": 150,
+        "height": 150
+      },
+      "padding": {
+        "x": 344,
+        "y": 182,
+        "width": 134,
+        "height": 134
+      },
+      "content": {
+        "x": 348,
+        "y": 186,
+        "width": 126,
+        "height": 126
+      }
+    },
+    {
+      "key": "c5/item",
+      "border": {
+        "x": 352,
+        "y": 240,
+        "width": 30,
+        "height": 60
+      },
+      "padding": {
+        "x": 353,
+        "y": 247,
+        "width": 26,
+        "height": 48
+      },
+      "content": {
+        "x": 355,
+        "y": 255,
+        "width": 20,
+        "height": 34
+      }
+    }
+  ],
+  "valle": {
+    "reason": "Reviewed against the three identical browser captures: every border is on its mapped side and only the diagonal joins between differently colored borders are antialiased differently.",
+    "maxDifference": 1
+  }
+}
