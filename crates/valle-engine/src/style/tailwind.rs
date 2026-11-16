@@ -2016,6 +2016,62 @@ mod tests {
             assert_eq!(types::infer(value, &kinds), kind, "{value}");
         }
         assert!(!valid("a;b") && valid("'a;b'") && !valid("a)"));
+        // The kinds of what goes in brackets that only some utilities ask about: whether each
+        // value is of the kind, as Tailwind 4.3's inferDataType answers.
+        for (kind, yes, no) in [
+            (
+                "ratio",
+                &["16/9", "16 / 9", "calc(4/3)"][..],
+                &["16", "4/x", "/9"][..],
+            ),
+            (
+                "bg-size",
+                &["cover", "contain,auto 10px", "auto,10%", "10px 20%"],
+                &["auto auto auto", "cover contain", "red", ""],
+            ),
+            (
+                "position",
+                &["top left", "left 10px", "10px left", "var(--a) 2px"],
+                &["red", "1px red", ""],
+            ),
+            (
+                "vector",
+                &["1 0 0", "0.5 1 -2"],
+                &["1 0", " 1 0 0", "1 0 0 ", "1px 0 0"],
+            ),
+            (
+                "angle",
+                &["45deg", "1.5rad", "100grad", "0.25turn"],
+                &["45", "45px"],
+            ),
+            (
+                "line-width",
+                &["thin", "2px", "1.5", "medium 2px"],
+                &["red", "solid"],
+            ),
+            (
+                "family-name",
+                &["Inter", "Inter, sans-serif"],
+                &["1Inter", "var(--f)"],
+            ),
+            ("generic-name", &["sans-serif", "ui-rounded"], &["Inter"]),
+            ("absolute-size", &["xx-small", "medium"], &["larger"]),
+            ("url", &["url(a.png)"], &["url(a.png", "a.png"]),
+            (
+                "image",
+                &["linear-gradient(red,blue)", "image-set(a)"],
+                &["red", "url(a"],
+            ),
+            ("integer", &["3"], &["-3", "3.5", "x"]),
+            ("unknown", &[][..], &["3"]),
+        ] {
+            for v in yes {
+                assert!(types::is(kind, v), "{v} is a {kind}");
+            }
+            for v in no {
+                assert!(!types::is(kind, v), "{v} is not a {kind}");
+            }
+        }
     }
 
     #[test]

@@ -11310,6 +11310,10 @@
       "& { --tw-gradient-position: in oklch; background-image: radial-gradient(var(--tw-gradient-stops)); }"
     ],
     ["bg-[linear-gradient(red,blue)]", "& { background-image: linear-gradient(red,blue); }"],
+    [
+      "bg-[url(resource://tile),linear-gradient(red,blue)]",
+      "& { background-image: url(resource://tile),linear-gradient(red,blue); }"
+    ],
     ["bg-none", "& { background-image: none; }"],
     ["via-none", "& { --tw-gradient-via-stops: initial; }"],
     [
@@ -39979,6 +39983,9 @@
     ["mask-radial-at-top", "& { --tw-mask-radial-position: top; }"],
     ["mask-radial-at-top-left", "& { --tw-mask-radial-position: top left; }"],
     ["mask-radial-at-top-right", "& { --tw-mask-radial-position: top right; }"],
+    ["bg-[auto,10%]", "& { background-size: auto,10%; }"],
+    ["bg-[contain,auto_10px]", "& { background-size: contain,auto 10px; }"],
+    ["bg-[cover]", "& { background-size: cover; }"],
     ["bg-[length:200px_100px]", "& { background-size: 200px 100px; }"],
     ["bg-auto", "& { background-size: auto; }"],
     ["bg-contain", "& { background-size: contain; }"],
@@ -39990,6 +39997,8 @@
     ["bg-clip-text", "& { background-clip: text; }"],
     ["bg-[10px]", "& { background-position: 10px; }"],
     ["bg-[center_top]", "& { background-position: center top; }"],
+    ["bg-[left_10px]", "& { background-position: left 10px; }"],
+    ["bg-[top_left]", "& { background-position: top left; }"],
     ["bg-bottom", "& { background-position: bottom; }"],
     ["bg-bottom-left", "& { background-position: left bottom; }"],
     ["bg-bottom-right", "& { background-position: right bottom; }"],
@@ -52407,6 +52416,10 @@
     "min-inline-max",
     "min-inline-min",
     "hover:p-4",
+    "bg-[10px_left]",
+    "bg-[1px_red]",
+    "bg-[auto_auto_auto]",
+    "bg-[var(--x)_left]",
     "border-[3]",
     "outline-[2]",
     "rotate-[45]",
