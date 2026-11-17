@@ -1,8 +1,8 @@
 # CSS support and test coverage
 
 This is the repository's CSS capability and coverage inventory. Use it to choose
-authoring syntax and to find missing tests. [Motion](motion.md#styles) explains how
-to write scenes; [Writing tests](../tests/README.md) explains how to add evidence.
+authoring syntax and to find missing tests. [Motion](../docs/motion.md#styles) explains how
+to write scenes; [Writing tests](README.md) explains how to add evidence.
 
 Property inventory audited against `cd645114`; combination coverage expanded on
 2026-11-16. The CSS suite contains **177 scenes** with **128,662 explicit
@@ -58,7 +58,7 @@ Implementation: [units](../crates/valle-engine/src/style/units.rs),
 | Math                   | `calc()`, `min()`, `max()`, `clamp()` with nested arithmetic and compatible units; percentage terms resolve against the eventual reference size. Not the entire CSS math-function family.                                                                                                                                          | `math.rs` tests; [percentage constraints][css/sizing/percentage-min-max]                                                  |
 | Colors                 | Named/hex colors, rgb/rgba, hsl/hsla, hwb, lab/lch, oklab/oklch, supported `color()` spaces, relative colors and `color-mix()`. `currentColor` resolves at the consuming element, including nested mixes. Parsing a wide-gamut color does not select a video output gamut.                                                         | `color.rs` tests; [sRGB/alpha][css/color/srgb-alpha], [currentColor mixes][css/color/current-mix]                         |
 | CSS-wide keywords      | `inherit`, `initial`, `unset`, including shorthand expansion and declaration order. Not `revert`, `revert-layer` or the `all` shorthand. Valle's element defaults can differ from CSS initial values, notably border-box sizing.                                                                                                   | `every_css_property_accepts_all_three_keywords`; [wide keywords][css/cascade/wide-keywords]                               |
-| Class/style precedence | Tailwind expansion feeds the style layer. Inline style wins over normal classes; important classes can override it. CSS custom properties supplied by authors are not supported.                                                                                                                                                   | [Tailwind spacing](../tests/cases/tailwind/spacing/case.json), official conversion suite                                  |
+| Class/style precedence | Tailwind expansion feeds the style layer. Inline style wins over normal classes; important classes can override it. CSS custom properties supplied by authors are not supported.                                                                                                                                                   | [Tailwind spacing](cases/tailwind/spacing/case.json), official conversion suite                                  |
 
 The `color()` RGB/XYZ spaces are srgb, srgb-linear, display-p3, a98-rgb,
 prophoto-rgb, rec2020, xyz/xyz-d65 and xyz-d50. The color-mix parser also supports
@@ -91,14 +91,14 @@ Implementation: [declarations](../crates/valle-engine/src/style/declaration.rs),
 | `maxWidth`, `maxHeight`, `maxInlineSize`, `maxBlockSize`                                                          | Nonnegative length/percentage or `none`. Intrinsic sizing keywords are not accepted here.                                                                                                                                                                                       | [min/max][css/sizing/percentage-min-max], [height limits][css/sizing/auto-height-limits]                                                                             |
 | `boxSizing`                                                                                                       | `border-box`, `content-box`; Valle defaults to border-box.                                                                                                                                                                                                                      | [border box][css/box-model/border-box], [content box][css/box-model/content-box]                                                                                     |
 | `aspectRatio`                                                                                                     | `auto`, nonnegative ratio, or auto plus ratio. A degenerate ratio behaves as auto.                                                                                                                                                                                              | [aspect ratio][css/sizing/aspect-ratio], [vertical grid][css/layout/vertical-grid]; `box_sizing_aspect_ratio_and_order`                                              |
-| `margin`, `marginTop`, `marginRight`, `marginBottom`, `marginLeft`                                                | Signed length/percentage or `auto`; 1–4 values in the shorthand. Margins do not apply to a Span text run.                                                                                                                                                                       | [block centering][css/layout/block-flow], [reverse/auto margins][css/flex/reverse-auto-margins], [Tailwind spacing](../tests/cases/tailwind/spacing/case.json)       |
+| `margin`, `marginTop`, `marginRight`, `marginBottom`, `marginLeft`                                                | Signed length/percentage or `auto`; 1–4 values in the shorthand. Margins do not apply to a Span text run.                                                                                                                                                                       | [block centering][css/layout/block-flow], [reverse/auto margins][css/flex/reverse-auto-margins], [Tailwind spacing](cases/tailwind/spacing/case.json)       |
 | `marginInline`, `marginBlock`, `marginInlineStart`, `marginInlineEnd`, `marginBlockStart`, `marginBlockEnd`       | Logical signed lengths/percentages/auto; pair shorthands take 1–2 values.                                                                                                                                                                                                       | [bidi][css/text/bidi], [vertical block][css/layout/vertical-block], [logical sides][css/layout/logical-sides-matrix] |
 | `padding`, `paddingTop`, `paddingRight`, `paddingBottom`, `paddingLeft`                                           | Nonnegative length/percentage; no auto. Padding and borders on Span participate in inline wrapping.                                                                                                                                                                             | [percentage padding][css/box-model/percentage-padding], [inline edges][css/text/inline-box]                                                                          |
 | `paddingInline`, `paddingBlock`, `paddingInlineStart`, `paddingInlineEnd`, `paddingBlockStart`, `paddingBlockEnd` | Logical nonnegative lengths/percentages; pair shorthands take 1–2 values.                                                                                                                                                                                                       | [vertical container][css/text/vertical-container], [vertical positioning][css/layout/vertical-position], [logical sides][css/layout/logical-sides-matrix] |
 | `overflow`, `overflowX`, `overflowY`, `overflowInline`, `overflowBlock`                                           | `visible`, `hidden`, `clip`; overflow takes one or two values. No scrolling or `auto`/`scroll`.                                                                                                                                                                                 | [clipping][css/overflow/clipping], [rounded child][css/shadow/rounded-clip]; `overflow_hidden_on_one_axis_hides_both`, `flow_relative_sizes_overflow_and_corners_follow_the_writing_mode` |
-| `order`                                                                                                           | Signed integer; affects flex/grid item order rather than source text order.                                                                                                                                                                                                     | [alignment/order][css/flex/alignment-order], [Tailwind flex](../tests/cases/tailwind/flex/case.json)                                                                 |
+| `order`                                                                                                           | Signed integer; affects flex/grid item order rather than source text order.                                                                                                                                                                                                     | [alignment/order][css/flex/alignment-order], [Tailwind flex](cases/tailwind/flex/case.json)                                                                 |
 | `zIndex`                                                                                                          | `auto` or signed integer, subject to stacking-context boundaries.                                                                                                                                                                                                               | [stacking/opacity][css/compositing/stacking-opacity]; `z_index_is_auto_or_an_integer`                                                                                |
-| `visibility`                                                                                                      | `visible`, `hidden`, `collapse`; collapse is implemented as hidden, not flex/table collapse layout.                                                                                                                                                                             | [Tailwind sizing](../tests/cases/tailwind/sizing/case.json); collapse-specific geometry not mapped                                                                   |
+| `visibility`                                                                                                      | `visible`, `hidden`, `collapse`; collapse is implemented as hidden, not flex/table collapse layout.                                                                                                                                                                             | [Tailwind sizing](cases/tailwind/sizing/case.json); collapse-specific geometry not mapped                                                                   |
 
 Coverage: [indefinite percentages][css/sizing/indefinite-percentages] crosses
 block/Flex/Grid with auto/definite heights and min/max constraints;
@@ -121,11 +121,11 @@ adapter to Taffy. Unit tests include `the_flex_shorthand_follows_css`,
 | `flexWrap`                                                                                            | `nowrap`, `wrap`, `wrap-reverse`.                                                                                                                                                                                | [wrap/gap][css/flex/wrap-gap], [vertical flex][css/layout/vertical-flex]                                                                |
 | `flexGrow`, `flexShrink`                                                                              | Nonnegative factors; constraints and automatic minimums affect distribution.                                                                                                                                     | [grow/shrink][css/flex/grow-shrink], [constrained growth][css/flex/constrained-growth], [automatic minimum][css/flex/automatic-minimum] |
 | `flexBasis`                                                                                           | Nonnegative length/percentage, `auto`, `content`, `min-content`, `max-content`, `fit-content`, `stretch`.                                                                                                        | [percentage basis][css/flex/percentage-basis], [column minimum][css/flex/column-minimum]; shorthand unit tests                          |
-| `flex`                                                                                                | `none`, `auto`, `initial`, or supported grow/shrink/basis forms; a lone factor uses a 0% basis.                                                                                                                  | `the_flex_shorthand_follows_css`; [Tailwind flex](../tests/cases/tailwind/flex/case.json)                                               |
+| `flex`                                                                                                | `none`, `auto`, `initial`, or supported grow/shrink/basis forms; a lone factor uses a 0% basis.                                                                                                                  | `the_flex_shorthand_follows_css`; [Tailwind flex](cases/tailwind/flex/case.json)                                               |
 | `justifyContent`, `alignContent`                                                                      | `normal`, `stretch`, `center`, `start`, `end`, `flex-start`, `flex-end`, `space-between`, `space-around`, `space-evenly`; safe/unsafe for supported positional values. No first/last-baseline content alignment. | [alignment][css/flex/alignment-order], [wrap/gap][css/flex/wrap-gap]; exhaustive safety/overflow matrix not mapped                      |
-| `alignItems`, `justifyItems`                                                                          | `normal`, `stretch`, `center`, `start`, `end`, `flex-start`, `flex-end`, `self-start`, `self-end`, `baseline`; safe/unsafe positional alignment. No explicit first/last-baseline syntax.                         | [alignment][css/flex/alignment-order], [Tailwind grid](../tests/cases/tailwind/grid/case.json)                                          |
-| `alignSelf`, `justifySelf`                                                                            | Item-alignment values above, plus `auto`. Applies where the layout model uses self alignment.                                                                                                                    | [alignment][css/flex/alignment-order], [Tailwind grid](../tests/cases/tailwind/grid/case.json)                                          |
-| `placeItems`, `placeSelf`, `placeContent`                                                             | One or two values from the corresponding align/justify longhands.                                                                                                                                                | [Tailwind grid](../tests/cases/tailwind/grid/case.json); individual CSS shorthand combinations not mapped                               |
+| `alignItems`, `justifyItems`                                                                          | `normal`, `stretch`, `center`, `start`, `end`, `flex-start`, `flex-end`, `self-start`, `self-end`, `baseline`; safe/unsafe positional alignment. No explicit first/last-baseline syntax.                         | [alignment][css/flex/alignment-order], [Tailwind grid](cases/tailwind/grid/case.json)                                          |
+| `alignSelf`, `justifySelf`                                                                            | Item-alignment values above, plus `auto`. Applies where the layout model uses self alignment.                                                                                                                    | [alignment][css/flex/alignment-order], [Tailwind grid](cases/tailwind/grid/case.json)                                          |
+| `placeItems`, `placeSelf`, `placeContent`                                                             | One or two values from the corresponding align/justify longhands.                                                                                                                                                | [Tailwind grid](cases/tailwind/grid/case.json); individual CSS shorthand combinations not mapped                               |
 | `gap`, `rowGap`, `columnGap`                                                                          | Nonnegative length/percentage or `normal` (zero); gap takes one or two values.                                                                                                                                   | [wrap/gap][css/flex/wrap-gap], [grid tracks][css/grid/tracks], [vertical grid][css/layout/vertical-grid]                                |
 | `gridTemplateRows`, `gridTemplateColumns`                                                             | `none`, fixed/percentage/fr tracks, auto/min/max-content, minmax, fit-content(), repeat with counts or auto-fill/auto-fit, and named lines. No subgrid or masonry.                                               | [tracks][css/grid/tracks], [auto repeat][css/grid/auto-repeat], [named lines][css/grid/named-lines-implicit]                            |
 | `gridTemplateAreas`                                                                                   | `none` or rectangular named areas with empty cells.                                                                                                                                                              | [named areas][css/grid/named-areas]; `named_areas_are_case_sensitive_rectangles_with_empty_cells`                                       |
@@ -134,7 +134,7 @@ adapter to Taffy. Unit tests include `the_flex_shorthand_follows_css`,
 | `gridRow`, `gridColumn`, `gridRowStart`, `gridRowEnd`, `gridColumnStart`, `gridColumnEnd`, `gridArea` | Auto, signed line numbers, named lines/areas and span forms; row/column/area shorthands.                                                                                                                         | [placement][css/grid/placement], [named lines][css/grid/named-lines-implicit], [named areas][css/grid/named-areas]                      |
 
 Coverage: the retained constraint/wrap matrices below and
-[1,000 generated trees](../tests/cases/css/generated/README.md) combine nested
+[1,000 generated trees](cases/css/generated/README.md) combine nested
 block/Flex/Grid, direction, alignment, gaps and box models. The generator omits
 intrinsic text, wrapping and flex growth; the hand-authored matrices cover those
 separately. No global pairwise coverage metric is claimed.
@@ -151,15 +151,15 @@ origins, clips and blend modes; `gradient.rs` tests stop/hint handling and error
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `background`                                                       | Layered shorthand with image, position/size, repeat, origin/clip and final color. It leaves backgroundBlendMode unchanged. No attachment/scroll behavior.                                          | [origin/clip][css/background/origin-clip]; `shorthand_keeps_nested_commas_and_sizes_attached_to_their_layers`                                                                            |
 | `backgroundColor`                                                  | Color or currentColor, behind background image layers.                                                                                                                                             | [sRGB/alpha][css/color/srgb-alpha], [current mixes][css/color/current-mix]                                                                                                               |
-| `backgroundImage`                                                  | Comma-separated none, resource images, linear/radial/conic gradients and repeating variants. Image URLs use declared `resource://` images, not arbitrary browser loading. No image-set/cross-fade. | [gradients][css/background/gradients], [SVG images][css/backgrounds/svg-image], [Tailwind backgrounds](../tests/cases/tailwind/backgrounds/case.json)                                    |
+| `backgroundImage`                                                  | Comma-separated none, resource images, linear/radial/conic gradients and repeating variants. Image URLs use declared `resource://` images, not arbitrary browser loading. No image-set/cross-fade. | [gradients][css/background/gradients], [SVG images][css/backgrounds/svg-image], [Tailwind backgrounds](cases/tailwind/backgrounds/case.json)                                    |
 | `backgroundSize`                                                   | Per-layer contain, cover, or one/two nonnegative lengths/percentages/auto.                                                                                                                         | [SVG images][css/backgrounds/svg-image], [origin/clip][css/background/origin-clip]; background unit tests                                                                                |
 | `backgroundPosition`, `backgroundPositionX`, `backgroundPositionY` | Per-layer positions, signed offsets, percentages and edge keywords.                                                                                                                                | [origin/clip][css/background/origin-clip]; axis/edge parser tests; rendered longhand ordering not mapped                                                                                 |
-| `backgroundRepeat`                                                 | Repeat/no-repeat/space/round, repeat-x/repeat-y, per-axis and per-layer values.                                                                                                                    | Background unit tests, [SVG images][css/backgrounds/svg-image], [Tailwind backgrounds](../tests/cases/tailwind/backgrounds/case.json); independent round/space edge cases need expansion |
-| `backgroundOrigin`, `backgroundClip`                               | Border/padding/content box; clip additionally supports text.                                                                                                                                       | [origin/clip][css/background/origin-clip], [inline directions][css/text/inline-directions], [Tailwind backgrounds](../tests/cases/tailwind/backgrounds/case.json)                        |
-| `backgroundBlendMode`                                              | Comma-separated blend modes from the blend set below, within background layers.                                                                                                                    | `background_layers_take_blend_modes_which_the_shorthand_leaves`; [Tailwind blending](../tests/cases/tailwind/blending/case.json)                                                         |
+| `backgroundRepeat`                                                 | Repeat/no-repeat/space/round, repeat-x/repeat-y, per-axis and per-layer values.                                                                                                                    | Background unit tests, [SVG images][css/backgrounds/svg-image], [Tailwind backgrounds](cases/tailwind/backgrounds/case.json); independent round/space edge cases need expansion |
+| `backgroundOrigin`, `backgroundClip`                               | Border/padding/content box; clip additionally supports text.                                                                                                                                       | [origin/clip][css/background/origin-clip], [inline directions][css/text/inline-directions], [Tailwind backgrounds](cases/tailwind/backgrounds/case.json)                        |
+| `backgroundBlendMode`                                              | Comma-separated blend modes from the blend set below, within background layers.                                                                                                                    | `background_layers_take_blend_modes_which_the_shorthand_leaves`; [Tailwind blending](cases/tailwind/blending/case.json)                                                         |
 | `objectFit`                                                        | `fill`, `contain`, `cover`, `none`, `scale-down` for replaced content.                                                                                                                             | [object fit][css/images/object-fit] explicitly checks fill/contain/cover; none/scale-down browser controls not mapped                                                                    |
 | `objectPosition`                                                   | Position keywords and signed lengths/percentages within the replaced-content box.                                                                                                                  | [object position][css/images/object-position] checks left/center/right; remaining edge forms need controls                                                                               |
-| `imageRendering`                                                   | `auto`, `pixelated`; no crisp-edges.                                                                                                                                                               | [object fit][css/images/object-fit], [embedded SVG images](../tests/cases/svg/embedded-image/file/case.json)                                                                             |
+| `imageRendering`                                                   | `auto`, `pixelated`; no crisp-edges.                                                                                                                                                               | [object fit][css/images/object-fit], [embedded SVG images](cases/svg/embedded-image/file/case.json)                                                                             |
 
 Coverage: [layer lists][css/background/layer-lists],
 [fractional tiling][css/background/fractional-repeat],
@@ -181,14 +181,14 @@ Unit tests include `borders_take_lines_widths_styles_and_colors`,
 | Properties                                                                                                                                                                                                                             | Implemented scope and restrictions                                                                                                          | Existing evidence                                                                                                                                 |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `border`, `borderTop`, `borderRight`, `borderBottom`, `borderLeft`                                                                                                                                                                     | Width/style/color shorthand, omitted parts reset.                                                                                           | [styles/radii][css/border/styles-radius]; border unit tests                                                                                       |
-| `borderInline`, `borderBlock`, `borderInlineStart`, `borderInlineEnd`, `borderBlockStart`, `borderBlockEnd`                                                                                                                            | Logical edge/pair line shorthands.                                                                                                          | [bidi][css/text/bidi], [Tailwind borders](../tests/cases/tailwind/borders/case.json); every shorthand in all directions not mapped, [logical sides][css/layout/logical-sides-matrix]; `flow_relative_and_physical_border_declarations_cascade_in_written_order` |
+| `borderInline`, `borderBlock`, `borderInlineStart`, `borderInlineEnd`, `borderBlockStart`, `borderBlockEnd`                                                                                                                            | Logical edge/pair line shorthands.                                                                                                          | [bidi][css/text/bidi], [Tailwind borders](cases/tailwind/borders/case.json); every shorthand in all directions not mapped, [logical sides][css/layout/logical-sides-matrix]; `flow_relative_and_physical_border_declarations_cascade_in_written_order` |
 | `borderWidth`, `borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, `borderLeftWidth`, `borderInlineWidth`, `borderBlockWidth`, `borderInlineStartWidth`, `borderInlineEndWidth`, `borderBlockStartWidth`, `borderBlockEndWidth` | Nonnegative lengths; thin=1px, medium=3px, thick=5px. No percentages. Physical all-edge shorthand takes 1–4 values; logical pairs take 1–2. | [styles/radii][css/border/styles-radius], border unit tests, [logical sides][css/layout/logical-sides-matrix]; `flow_relative_sides_are_the_physical_ones_of_every_writing_mode_and_direction`, `physical_border_longhands_set_their_own_side` |
 | `borderStyle`, `borderTopStyle`, `borderRightStyle`, `borderBottomStyle`, `borderLeftStyle`, `borderInlineStyle`, `borderBlockStyle`, `borderInlineStartStyle`, `borderInlineEndStyle`, `borderBlockStartStyle`, `borderBlockEndStyle` | none, hidden, solid, double, dotted, dashed, groove, ridge, inset, outset. None/hidden draw no border.                                      | [styles/radii][css/border/styles-radius] targets solid/double/dotted/dashed; other styles have parser evidence, targeted browser cases not mapped, `flow_relative_border_styles_and_colors_reach_their_physical_sides`, `physical_border_longhands_set_their_own_side` |
 | `borderColor`, `borderTopColor`, `borderRightColor`, `borderBottomColor`, `borderLeftColor`, `borderInlineColor`, `borderBlockColor`, `borderInlineStartColor`, `borderInlineEndColor`, `borderBlockStartColor`, `borderBlockEndColor` | Colors/currentColor, physical and logical shorthand spreading.                                                                              | [current mixes][css/color/current-mix], [bidi][css/text/bidi], border unit tests, `flow_relative_border_styles_and_colors_reach_their_physical_sides`, `physical_border_longhands_set_their_own_side` |
 | `borderRadius`, `borderTopLeftRadius`, `borderTopRightRadius`, `borderBottomRightRadius`, `borderBottomLeftRadius`                                                                                                                     | Nonnegative lengths/percentages; elliptical radii, 1–4 corners and slash-separated axes.                                                    | [styles/radii][css/border/styles-radius], [rounded clipping][css/shadow/rounded-clip]                                                             |
 | `borderStartStartRadius`, `borderStartEndRadius`, `borderEndEndRadius`, `borderEndStartRadius`                                                                                                                                         | Logical corner radii resolved with writing mode/direction.                                                                                  | [bidi][css/text/bidi]; exhaustive corner/direction combinations not mapped, `flow_relative_sizes_overflow_and_corners_follow_the_writing_mode` |
-| `outline`, `outlineWidth`, `outlineStyle`, `outlineColor`                                                                                                                                                                              | Border-like width/style/color. Outline style excludes hidden and auto focus rings.                                                          | Outline unit tests; [Tailwind borders](../tests/cases/tailwind/borders/case.json)                                                                 |
-| `outlineOffset`                                                                                                                                                                                                                        | Signed length, no percentage.                                                                                                               | Outline unit tests; [Tailwind borders](../tests/cases/tailwind/borders/case.json)                                                                 |
+| `outline`, `outlineWidth`, `outlineStyle`, `outlineColor`                                                                                                                                                                              | Border-like width/style/color. Outline style excludes hidden and auto focus rings.                                                          | Outline unit tests; [Tailwind borders](cases/tailwind/borders/case.json)                                                                 |
+| `outlineOffset`                                                                                                                                                                                                                        | Signed length, no percentage.                                                                                                               | Outline unit tests; [Tailwind borders](cases/tailwind/borders/case.json)                                                                 |
 | `boxShadow`                                                                                                                                                                                                                            | none or comma-separated shadows with x/y offsets, optional nonnegative blur, signed spread, color/currentColor and inset.                   | [outer/inset][css/shadow/outer-inset], [blur][css/shadow/blur], [rounded clip][css/shadow/rounded-clip]                                           |
 
 Coverage: [unequal corners][css/border/unequal-corners],
@@ -210,15 +210,15 @@ saturation, color, luminosity and plus-lighter. Plus-darker is not in the table.
 | Properties                               | Implemented scope and restrictions                                                                                                                                                                                                                                              | Existing evidence                                                                                                                                                                                                               |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `opacity`                                | Number/percentage clamped to 0–1; applied to the composited group.                                                                                                                                                                                                              | [group opacity][css/compositing/group-opacity], [stacking][css/compositing/stacking-opacity]                                                                                                                                    |
-| `mixBlendMode`, `isolation`              | Blend set above; isolation auto/isolate.                                                                                                                                                                                                                                        | [isolation/blend][css/compositing/isolation-blend], [rounded blend][css/compositing/rounded-blend], [Tailwind blending](../tests/cases/tailwind/blending/case.json)                                                             |
-| `filter`                                 | none or ordered blur, brightness, contrast, grayscale, hue-rotate, invert, saturate, sepia, drop-shadow, opacity; also the six Valle functions described below. A single url(#id) graph is limited to supported SVG descendants, not CSS boxes/outer SVG or URL/function lists. | [function order][css/filter/order], [opacity][css/filter/opacity], [blur/overflow][css/filter/blur-overflow], [SVG CSS effects](../tests/cases/svg/css-effects/inline/case.json)                                                |
+| `mixBlendMode`, `isolation`              | Blend set above; isolation auto/isolate.                                                                                                                                                                                                                                        | [isolation/blend][css/compositing/isolation-blend], [rounded blend][css/compositing/rounded-blend], [Tailwind blending](cases/tailwind/blending/case.json)                                                             |
+| `filter`                                 | none or ordered blur, brightness, contrast, grayscale, hue-rotate, invert, saturate, sepia, drop-shadow, opacity; also the six Valle functions described below. A single url(#id) graph is limited to supported SVG descendants, not CSS boxes/outer SVG or URL/function lists. | [function order][css/filter/order], [opacity][css/filter/opacity], [blur/overflow][css/filter/blur-overflow], [SVG CSS effects](cases/svg/css-effects/inline/case.json)                                                |
 | `backdropFilter`                         | Same function list applied to the backdrop; no SVG filter URL.                                                                                                                                                                                                                  | [backdrop/blend basic][css/compositing/backdrop-blend/basic], [controls][css/compositing/backdrop-blend/controls], [nested][css/compositing/backdrop-blend/nested], [empty bounds][css/compositing/backdrop-blend/empty-bounds] |
-| `clipPath`                               | none; inset/circle/ellipse/polygon/path/shape; border/padding/content reference boxes. Local SVG clip references apply in SVG. No arbitrary HTML reference to a clip definition.                                                                                                | [responsive shape][css/mask/shape], [transform/clip][css/transform/clip], [SVG clip intersection](../tests/cases/svg/clip-intersection/inline/case.json)                                                                        |
+| `clipPath`                               | none; inset/circle/ellipse/polygon/path/shape; border/padding/content reference boxes. Local SVG clip references apply in SVG. No arbitrary HTML reference to a clip definition.                                                                                                | [responsive shape][css/mask/shape], [transform/clip][css/transform/clip], [SVG clip intersection](cases/svg/clip-intersection/inline/case.json)                                                                        |
 | `maskImage`                              | Layers of none, gradients or declared resource images.                                                                                                                                                                                                                          | [clip/mask][css/mask/clip], [mask composites][css/mask/composite], mask unit tests                                                                                                                                              |
-| `maskSize`, `maskPosition`, `maskRepeat` | Per-layer image sizing, positioning and repeat forms, as supported by their background counterparts.                                                                                                                                                                            | Mask unit tests; [Tailwind masks](../tests/cases/tailwind/masks/case.json); rendered per-longhand edge cases not mapped                                                                                                         |
-| `maskMode`                               | alpha, luminance, match-source; match-source maps to alpha for this image-layer path.                                                                                                                                                                                           | `masks_are_layers_of_images_shown_by_alpha_or_luminance`; [Tailwind masks](../tests/cases/tailwind/masks/case.json)                                                                                                             |
+| `maskSize`, `maskPosition`, `maskRepeat` | Per-layer image sizing, positioning and repeat forms, as supported by their background counterparts.                                                                                                                                                                            | Mask unit tests; [Tailwind masks](cases/tailwind/masks/case.json); rendered per-longhand edge cases not mapped                                                                                                         |
+| `maskMode`                               | alpha, luminance, match-source; match-source maps to alpha for this image-layer path.                                                                                                                                                                                           | `masks_are_layers_of_images_shown_by_alpha_or_luminance`; [Tailwind masks](cases/tailwind/masks/case.json)                                                                                                             |
 | `maskComposite`                          | add, subtract, intersect, exclude, as layer lists.                                                                                                                                                                                                                              | [four operators][css/mask/composite]                                                                                                                                                                                            |
-| `maskClip`, `maskOrigin`                 | Border/padding/content box. No no-clip/fill-box/stroke-box/view-box values in the CSS image-layer path.                                                                                                                                                                         | Mask unit tests; [Tailwind masks](../tests/cases/tailwind/masks/case.json)                                                                                                                                                      |
+| `maskClip`, `maskOrigin`                 | Border/padding/content box. No no-clip/fill-box/stroke-box/view-box values in the CSS image-layer path.                                                                                                                                                                         | Mask unit tests; [Tailwind masks](cases/tailwind/masks/case.json)                                                                                                                                                      |
 
 Standard filter parameters:
 
@@ -235,7 +235,7 @@ and `declaration.rs`.
 
 Valle extensions are **not additional CSS properties**: bloom, displacement,
 film-grain, chromatic-aberration, lens-distortion and radial-blur are values of
-filter/backdropFilter. [Motion](motion.md#valle-filters) documents their parameters.
+filter/backdropFilter. [Motion](../docs/motion.md#valle-filters) documents their parameters.
 `motionBlur` is a separate Valle-only property; `xmlSpace` belongs to SVG/XML.
 Neither is included in the 284-name inventory.
 
@@ -255,12 +255,12 @@ order and path longhands. These are not all browser-rendered combinations.
 
 | Properties                             | Implemented scope and restrictions                                                                                                                | Existing evidence                                                                                                                                                                                 |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `transform`                            | none or ordered matrix/matrix3d, translate/translateX/Y/Z/3d, scale/scaleX/Y/Z/3d, rotate/rotateX/Y/Z/3d, skew/skewX/Y and perspective functions. | [origin/order][css/transform/origin-order], [clip][css/transform/clip], [Tailwind transforms](../tests/cases/tailwind/transforms/case.json)                                                       |
-| `translate`, `rotate`, `scale`         | Individual transforms including supported 3D forms; applied before the transform list.                                                            | `translate_rotate_and_scale_come_before_transform`; [SVG CSS transforms](../tests/cases/svg/css-transforms/inline/case.json), [Tailwind transforms](../tests/cases/tailwind/transforms/case.json) |
+| `transform`                            | none or ordered matrix/matrix3d, translate/translateX/Y/Z/3d, scale/scaleX/Y/Z/3d, rotate/rotateX/Y/Z/3d, skew/skewX/Y and perspective functions. | [origin/order][css/transform/origin-order], [clip][css/transform/clip], [Tailwind transforms](cases/tailwind/transforms/case.json)                                                       |
+| `translate`, `rotate`, `scale`         | Individual transforms including supported 3D forms; applied before the transform list.                                                            | `translate_rotate_and_scale_come_before_transform`; [SVG CSS transforms](cases/svg/css-transforms/inline/case.json), [Tailwind transforms](cases/tailwind/transforms/case.json) |
 | `transformOrigin`                      | Position with optional z length; percentage x/y use the transform reference box.                                                                  | [origin/order][css/transform/origin-order], transform unit tests                                                                                                                                  |
-| `transformBox`                         | content-box, border-box, fill-box, stroke-box, view-box; SVG mappings are context-dependent.                                                      | [SVG CSS transforms](../tests/cases/svg/css-transforms/inline/case.json) and file counterpart                                                                                                     |
-| `perspective`, `perspectiveOrigin`     | none or supported nonnegative distance, and a 2D origin; not a browser camera API.                                                                | 3D transform unit tests; [Tailwind transforms](../tests/cases/tailwind/transforms/case.json)                                                                                                      |
-| `backfaceVisibility`, `transformStyle` | visible/hidden; flat/preserve-3d, subject to grouping effects that flatten a scene.                                                               | [scene isolation][css/compositing/scene-blend-isolation], [backdrop planes][css/compositing/backdrop-blend/planes], [Tailwind transforms](../tests/cases/tailwind/transforms/case.json)           |
+| `transformBox`                         | content-box, border-box, fill-box, stroke-box, view-box; SVG mappings are context-dependent.                                                      | [SVG CSS transforms](cases/svg/css-transforms/inline/case.json) and file counterpart                                                                                                     |
+| `perspective`, `perspectiveOrigin`     | none or supported nonnegative distance, and a 2D origin; not a browser camera API.                                                                | 3D transform unit tests; [Tailwind transforms](cases/tailwind/transforms/case.json)                                                                                                      |
+| `backfaceVisibility`, `transformStyle` | visible/hidden; flat/preserve-3d, subject to grouping effects that flatten a scene.                                                               | [scene isolation][css/compositing/scene-blend-isolation], [backdrop planes][css/compositing/backdrop-blend/planes], [Tailwind transforms](cases/tailwind/transforms/case.json)           |
 | `offsetPath`                           | none, path, ray, inset, circle, ellipse, polygon, shape, and supported border/padding/content reference boxes. No url() path reference.           | [shape path][css/transforms/shape-path]; `motion_paths_take_paths_rays_and_shapes_with_their_longhands`                                                                                           |
 | `offsetDistance`, `offsetRotate`       | Signed length/percentage along the route; auto/reverse with optional angle, or a fixed angle.                                                     | [shape path][css/transforms/shape-path], motion-path unit tests                                                                                                                                   |
 | `offsetAnchor`, `offsetPosition`       | Anchor auto/position; route start normal/auto/position.                                                                                           | Motion-path unit tests; independent rendered anchor/start matrix not mapped                                                                                                                       |
@@ -286,8 +286,8 @@ accepting a feature tag does not create glyphs missing from that font.
 | `fontFamily`                                   | Ordered declared font-family names and built-in sans-serif, serif, monospace, emoji. Other browser/system generic families are rejected. No discovery of arbitrary installed fonts.           | [mixed runs][css/text/mixed-runs], font-family parsing/shaping tests; [mixed-script breaking][css/text/breaking-products]                                                                  |
 | `fontSize`                                     | Nonnegative length/percentage; xx-small=9px, x-small=10px, small=13px, medium=16px, large=18px, x-large=24px, xx-large=32px; larger/smaller multiply/divide parent size by 1.2. No xxx-large. | [keywords][css/text/font-size-keywords]; `size_keywords_resolve_before_relative_units_and_shorthand`                                                                              |
 | `fontSizeAdjust`                               | none or nonnegative x-height/em ratio; adjusts glyphs/ex, not computed fontSize/em.                                                                                                           | [size adjust][css/text/font-size-adjust]; `size_adjust_inherits_and_font_shorthand_resets_it`                                                                                     |
-| `fontWeight`                                   | 1–1000, normal/bold/bolder/lighter; font matching and synthesis follow available faces.                                                                                                       | [mixed runs][css/text/mixed-runs], [synthesis][css/text/font-synthesis], [Tailwind text](../tests/cases/tailwind/text/case.json); [relative inheritance][css/text/relative-inheritance] |
-| `fontStretch`                                  | Nine width keywords from ultra-condensed to ultra-expanded, or nonnegative percentage.                                                                                                        | `font_stretch_is_a_keyword_or_a_percentage`; [Tailwind text](../tests/cases/tailwind/text/case.json)                                                                              |
+| `fontWeight`                                   | 1–1000, normal/bold/bolder/lighter; font matching and synthesis follow available faces.                                                                                                       | [mixed runs][css/text/mixed-runs], [synthesis][css/text/font-synthesis], [Tailwind text](cases/tailwind/text/case.json); [relative inheritance][css/text/relative-inheritance] |
+| `fontStretch`                                  | Nine width keywords from ultra-condensed to ultra-expanded, or nonnegative percentage.                                                                                                        | `font_stretch_is_a_keyword_or_a_percentage`; [Tailwind text](cases/tailwind/text/case.json)                                                                              |
 | `fontStyle`                                    | normal, italic, oblique with optional angle in −90deg…90deg; default oblique is 14deg.                                                                                                        | [mixed runs][css/text/mixed-runs], [synthesis][css/text/font-synthesis]; `font_style_is_italic_or_oblique_by_an_angle`                                                            |
 | `fontSynthesis`                                | none, weight, style, or weight style. Controls simulated bold/italic; does not disable native faces or variable axes.                                                                         | [synthesis][css/text/font-synthesis]; `synthesis_accepts_only_css_fonts_three_permissions`                                                                                        |
 | `fontKerning`                                  | normal, auto, none; normal resets the longhand's feature override.                                                                                                                            | `font_variants_set_their_features_one_longhand_at_a_time`; [paired features][css/text/font-features]                                                                             |
@@ -295,7 +295,7 @@ accepting a feature tag does not create glyphs missing from that font.
 | `fontVariant`                                  | normal/none or supported longhand keyword combinations; not arbitrary feature-value functions.                                                                                                | Font-variant unit tests; [caps][css/text/caps], [font position][css/text/font-position]                                                                                           |
 | `fontVariantLigatures`                         | normal/none; common, discretionary, historical and contextual enable/disable keywords.                                                                                                        | Font-variant unit tests; [paired feature controls][css/text/font-features]                                                                                                                 |
 | `fontVariantCaps`                              | normal, small-caps, all-small-caps, petite-caps, all-petite-caps, unicase, titling-caps. Native forms, supported fallback forms, then synthesized small capitals where needed.                | [caps][css/text/caps]; synthetic/caseless shaping unit tests                                                                                                                      |
-| `fontVariantNumeric`                           | normal; lining/oldstyle, proportional/tabular, diagonal/stacked fractions, ordinal, slashed-zero.                                                                                             | Font-variant unit tests; [Tailwind text](../tests/cases/tailwind/text/case.json); [paired browser controls][css/text/font-features]                                                         |
+| `fontVariantNumeric`                           | normal; lining/oldstyle, proportional/tabular, diagonal/stacked fractions, ordinal, slashed-zero.                                                                                             | Font-variant unit tests; [Tailwind text](cases/tailwind/text/case.json); [paired browser controls][css/text/font-features]                                                         |
 | `fontVariantEastAsian`                         | normal; jis78/83/90/04, simplified/traditional, full-width/proportional-width, ruby.                                                                                                          | Font-variant unit tests; [keyword controls][css/text/font-features] (actual substitutions depend on the pinned font)                                                                                                        |
 | `fontVariantAlternates`                        | normal, historical-forms. Feature-value functions such as stylistic()/styleset() are not supported.                                                                                           | Font-variant unit tests; targeted rendering not mapped                                                                                                                            |
 | `fontVariantPosition`                          | normal, sub, super; synthesize a run when the font lacks the complete native variant. Separate from verticalAlign, which moves inline boxes.                                                  | [font position][css/text/font-position], font/text unit tests                                                                                                                     |
@@ -320,28 +320,28 @@ Implementation: [font](../crates/valle-engine/src/style/font.rs),
 | `lineHeight`                                                                     | normal, nonnegative unitless factor, length or percentage. A unitless factor inherits differently from a resolved length.                                                     | [mixed runs][css/text/mixed-runs], [vertical align][css/text/vertical-align], font inheritance unit tests                                                               |
 | `textAlign`, `textAlignLast`                                                     | start, end, left, right, center, justify; last also auto.                                                                                                                     | [alignment][css/text/alignment], [paragraph][css/text/paragraph]                                                                                                        |
 | `verticalAlign`                                                                  | baseline, middle, sub, super, text-top, text-bottom, top, bottom, signed length/percentage of own line-height. Not inherited unless explicitly requested.                     | [12 alignment controls][css/text/vertical-align], [inline writing][css/text/inline-writing]; `inline_alignment_parses_units_and_inherits_only_explicitly`               |
-| `textIndent`                                                                     | Signed length/percentage; first-line indent. No hanging/each-line keywords.                                                                                                   | [spacing/indent][css/text/spacing-indent], [Tailwind paragraphs](../tests/cases/tailwind/paragraphs/case.json)                                                          |
+| `textIndent`                                                                     | Signed length/percentage; first-line indent. No hanging/each-line keywords.                                                                                                   | [spacing/indent][css/text/spacing-indent], [Tailwind paragraphs](cases/tailwind/paragraphs/case.json)                                                          |
 | `letterSpacing`, `wordSpacing`                                                   | normal or signed length; percentages are not accepted.                                                                                                                        | [spacing/indent][css/text/spacing-indent], [ex units][css/values/font-ex]                                                                                               |
 | `whiteSpace`, `whiteSpaceCollapse`                                               | normal/nowrap/pre/pre-wrap/pre-line and supported collapse+wrap combinations. Collapse values: collapse, preserve, preserve-breaks, break-spaces. No discard/preserve-spaces. | [preserved spaces][css/text/preserved-spaces], [word wrap][css/text/word-wrap]; `white_space_sets_its_collapsing_and_wrapping`                                          |
-| `textWrap`, `textWrapMode`, `textWrapStyle`                                      | wrap/nowrap; auto, balance, stable, pretty; shorthand accepts mode and style. Stable uses the stateless auto behavior.                                                        | [paragraph][css/text/paragraph], [Tailwind text](../tests/cases/tailwind/text/case.json); `text_wrap_sets_its_mode_and_style_or_refuses`                                |
+| `textWrap`, `textWrapMode`, `textWrapStyle`                                      | wrap/nowrap; auto, balance, stable, pretty; shorthand accepts mode and style. Stable uses the stateless auto behavior.                                                        | [paragraph][css/text/paragraph], [Tailwind text](cases/tailwind/text/case.json); `text_wrap_sets_its_mode_and_style_or_refuses`                                |
 | `wordBreak`                                                                      | normal, break-all, keep-all, break-word; no auto-phrase/manual.                                                                                                               | [break-all][css/text/wrapping], [paragraph][css/text/paragraph]                                                                                                         |
 | `overflowWrap`, `wordWrap`                                                       | normal, anywhere, break-word; wordWrap aliases overflowWrap.                                                                                                                  | [overflow wrap][css/text/overflow-wrap]; alias-specific rendering not separately counted                                                                                |
 | `lineBreak`                                                                      | auto, normal, strict, loose, anywhere; auto uses strict in this implementation.                                                                                               | [paragraph][css/text/paragraph]                                                                                                                                         |
 | `writingMode`, `textOrientation`                                                 | horizontal-tb, vertical-rl, vertical-lr; mixed/upright/sideways glyph orientation. No sideways-rl/sideways-lr writing modes.                                                  | [vertical text][css/text/vertical], [vertical container][css/text/vertical-container], vertical layout cases                                                            |
-| `direction`, `unicodeBidi`                                                       | ltr/rtl; normal, embed, bidi-override, isolate, isolate-override, plaintext.                                                                                                  | [bidi][css/text/bidi], [SVG text direction](../tests/cases/svg/text-direction/inline/case.json)                                                                         |
+| `direction`, `unicodeBidi`                                                       | ltr/rtl; normal, embed, bidi-override, isolate, isolate-override, plaintext.                                                                                                  | [bidi][css/text/bidi], [SVG text direction](cases/svg/text-direction/inline/case.json)                                                                         |
 | `textCombineUpright`                                                             | none/all; no digits keyword with a count.                                                                                                                                     | [combined vertical text][css/text/combine]                                                                                                                              |
-| `textTransform`                                                                  | none, uppercase, lowercase, capitalize. No full-width/full-size-kana forms.                                                                                                   | [Tailwind text](../tests/cases/tailwind/text/case.json); independent Unicode casing image matrix not mapped                                                             |
+| `textTransform`                                                                  | none, uppercase, lowercase, capitalize. No full-width/full-size-kana forms.                                                                                                   | [Tailwind text](cases/tailwind/text/case.json); independent Unicode casing image matrix not mapped                                                             |
 | `textOverflow`                                                                   | clip/ellipsis; no custom string or two-value form. Requires the applicable overflow/no-wrap configuration.                                                                    | [ellipsis][css/text/ellipsis]; `text_overflow_is_clip_or_an_ellipsis_of_the_box_alone`                                                                                  |
-| `WebkitBoxOrient`, `WebkitLineClamp`                                             | horizontal/vertical/inline-axis/block-axis; none or positive line count. Line clamp requires a vertical -webkit-box Text. Not a general legacy box layout implementation.     | `line_clamp_needs_a_vertical_webkit_box_of_a_text`; [Tailwind text](../tests/cases/tailwind/text/case.json), [paragraphs](../tests/cases/tailwind/paragraphs/case.json) |
+| `WebkitBoxOrient`, `WebkitLineClamp`                                             | horizontal/vertical/inline-axis/block-axis; none or positive line count. Line clamp requires a vertical -webkit-box Text. Not a general legacy box layout implementation.     | `line_clamp_needs_a_vertical_webkit_box_of_a_text`; [Tailwind text](cases/tailwind/text/case.json), [paragraphs](cases/tailwind/paragraphs/case.json) |
 | `textEmphasis`, `textEmphasisStyle`, `textEmphasisColor`, `textEmphasisPosition` | none, filled/open dot/circle/double-circle/triangle/sesame or a quoted custom mark; color; over/under with optional left/right placement.                                     | [emphasis][css/text/emphasis], [combined text][css/text/combine]                                                                                                        |
-| `textDecoration`, `textDecorationLine`                                           | none or underline/overline/line-through combinations; shorthand also sets style/color/thickness.                                                                              | [CJK decorations][css/text/decoration-cjk], [Tailwind text](../tests/cases/tailwind/text/case.json); decoration unit tests                                              |
-| `textDecorationColor`, `textDecorationStyle`                                     | Color/currentColor; solid, double, dotted, dashed, wavy.                                                                                                                      | [CJK decorations][css/text/decoration-cjk], [SVG text baselines](../tests/cases/svg/text-baselines/inline/case.json)                                                    |
+| `textDecoration`, `textDecorationLine`                                           | none or underline/overline/line-through combinations; shorthand also sets style/color/thickness.                                                                              | [CJK decorations][css/text/decoration-cjk], [Tailwind text](cases/tailwind/text/case.json); decoration unit tests                                              |
+| `textDecorationColor`, `textDecorationStyle`                                     | Color/currentColor; solid, double, dotted, dashed, wavy.                                                                                                                      | [CJK decorations][css/text/decoration-cjk], [SVG text baselines](cases/svg/text-baselines/inline/case.json)                                                    |
 | `textDecorationThickness`                                                        | auto or nonnegative length/percentage; from-font is explicitly rejected.                                                                                                      | `text_decoration_sets_its_longhands_or_refuses`; [CJK decorations][css/text/decoration-cjk]                                                                             |
 | `textDecorationSkipInk`                                                          | auto, all, none; auto treats CJK differently from Latin descenders.                                                                                                           | [CJK decorations][css/text/decoration-cjk]; `ink_skipping_distinguishes_auto_all_and_none_and_inherits`                                                                 |
 | `textUnderlineOffset`, `textUnderlinePosition`                                   | Offset auto or signed length/percentage; position auto or under with optional left/right physical side.                                                                       | [underline position][css/text/underline-position]; `underline_position_parses_and_is_not_reset_by_decoration`                                                           |
 | `WebkitTextFillColor`, `WebkitTextStrokeColor`                                   | Color/currentColor for text fill/stroke.                                                                                                                                      | [paint order][css/text/paint-order], [CJK decorations][css/text/decoration-cjk]                                                                                         |
 | `WebkitTextStroke`, `WebkitTextStrokeWidth`                                      | Nonnegative length or thin/medium/thick, plus color in the shorthand. Centered glyph-outline stroke.                                                                          | [paint order][css/text/paint-order]; `text_stroke_sets_its_longhands_or_refuses`                                                                                        |
-| `textShadow`                                                                     | none or multiple x/y/optional-blur/color shadows; no spread or inset.                                                                                                         | `text_shadows_inherit_in_px_with_currentcolor_kept`; [Tailwind shadows](../tests/cases/tailwind/shadows/case.json)                                                      |
+| `textShadow`                                                                     | none or multiple x/y/optional-blur/color shadows; no spread or inset.                                                                                                         | `text_shadows_inherit_in_px_with_currentcolor_kept`; [Tailwind shadows](cases/tailwind/shadows/case.json)                                                      |
 
 Span supports sliced inline backgrounds/borders/padding across wrapped lines,
 including nested/empty spans; it is not a separate width/height/margin box.
@@ -360,7 +360,7 @@ shaping/layout caches. Arbitrary scripts and all Unicode break classes are not e
 These names are included in the 284-name count because they use the same style
 table. Their SVG-only semantics do not become box CSS capabilities. Geometry
 attributes such as d, cx and viewBox, and SVG tag counts, are not part of this
-inventory. See [Motion's SVG sections](motion.md) for element syntax.
+inventory. See [Motion's SVG sections](../docs/motion.md#svg-elements) for element syntax.
 
 Implementation: [SVG](../crates/valle-engine/src/svg.rs),
 [SVG text](../crates/valle-engine/src/svg/text.rs),
@@ -369,26 +369,26 @@ The linked inline cases have adjacent file cases unless noted otherwise.
 
 | Properties                                                           | Implemented scope and restrictions                                                                                                               | Existing evidence                                                                                                                                                                                        |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fill`, `stroke`                                                     | none, colors/currentColor, local paint-server references. No context-fill/context-stroke or paint fallback suffix.                               | [inheritance](../tests/cases/svg/use-inheritance/inline/case.json), [current mixes][css/color/current-mix]                                                                                               |
-| `fillOpacity`, `strokeOpacity`, `stopOpacity`, `floodOpacity`        | Number/percentage clamped to 0–1; fill/stroke alpha is separate from group opacity.                                                              | [paint opacity](../tests/cases/svg/group-paint-opacity/inline/case.json), filter/gradient cases                                                                                                          |
-| `fillRule`, `clipRule`                                               | nonzero/evenodd. Clip rule is independent of fill rule.                                                                                          | [clip rules](../tests/cases/svg/clip-rule-transform/inline/case.json), [viewBox/dashes](../tests/cases/svg/viewbox-dashes/inline/case.json)                                                              |
+| `fill`, `stroke`                                                     | none, colors/currentColor, local paint-server references. No context-fill/context-stroke or paint fallback suffix.                               | [inheritance](cases/svg/use-inheritance/inline/case.json), [current mixes][css/color/current-mix]                                                                                               |
+| `fillOpacity`, `strokeOpacity`, `stopOpacity`, `floodOpacity`        | Number/percentage clamped to 0–1; fill/stroke alpha is separate from group opacity.                                                              | [paint opacity](cases/svg/group-paint-opacity/inline/case.json), filter/gradient cases                                                                                                          |
+| `fillRule`, `clipRule`                                               | nonzero/evenodd. Clip rule is independent of fill rule.                                                                                          | [clip rules](cases/svg/clip-rule-transform/inline/case.json), [viewBox/dashes](cases/svg/viewbox-dashes/inline/case.json)                                                              |
 | `paintOrder`                                                         | normal or a nonrepeating subset/order of fill, stroke, markers; omitted operations follow in normal order. Also used by Text paint.              | [Text paint order][css/text/paint-order]; `inline_and_file_shapes_order_fill_stroke_and_markers` in [SVG painting](../crates/valle-engine/src/paint/svg.rs); targeted SVG browser case not mapped        |
-| `strokeWidth`, `strokeLinecap`, `strokeLinejoin`, `strokeMiterlimit` | Nonnegative SVG length/percentage; butt/round/square caps; miter/round/bevel joins; miterlimit at least 1. No arcs/miter-clip joins.             | [caps/joins](../tests/cases/svg/stroke-caps-joins/inline/case.json)                                                                                                                                      |
-| `strokeDasharray`, `strokeDashoffset`                                | none or nonnegative dash-length lists; signed offset. SVG percentages and pathLength calibration use the SVG geometry path.                      | [dash offsets](../tests/cases/svg/dashes-offset/inline/case.json), [viewBox/dashes](../tests/cases/svg/viewbox-dashes/inline/case.json)                                                                  |
-| `vectorEffect`                                                       | none/non-scaling-stroke; applies to stroke scaling inside SVG, not an exemption from outer CSS image transforms.                                 | [non-scaling stroke](../tests/cases/svg/non-scaling-stroke/inline/case.json)                                                                                                                             |
-| `marker`, `markerStart`, `markerMid`, `markerEnd`                    | none or local marker reference; shorthand assigns all three positions.                                                                           | [markers](../tests/cases/svg/markers/inline/case.json)                                                                                                                                                   |
-| `stopColor`, `floodColor`, `lightingColor`                           | Colors/currentColor on gradient stops and filter primitives.                                                                                     | [interpolation](../tests/cases/svg/color-interpolation/inline/case.json), [diffuse](../tests/cases/svg/filter-diffuse/inline/case.json), [specular](../tests/cases/svg/filter-specular/inline/case.json) |
-| `colorInterpolation`, `colorInterpolationFilters`                    | auto, sRGB, linearRGB; auto selects sRGB for gradients and linearRGB for filters.                                                                | [gradient interpolation](../tests/cases/svg/color-interpolation/inline/case.json), SVG filter cases                                                                                                      |
-| `mask`, `maskType`                                                   | mask is none/url(#id) for an SVG mask, **not the CSS image-mask shorthand**. maskType is luminance/alpha. Boxes use maskImage and its longhands. | [clip/mask/opacity](../tests/cases/svg/clip-mask-opacity/inline/case.json), [mask modes](../tests/cases/svg/masks/inline/case.json)                                                                      |
-| `textAnchor`                                                         | start/middle/end, accounting for direction and SVG text chunks.                                                                                  | [SVG text](../tests/cases/svg/text/inline/case.json), [direction](../tests/cases/svg/text-direction/inline/case.json)                                                                                    |
-| `dominantBaseline`, `alignmentBaseline`, `baselineShift`             | SVG baseline keywords and baseline/sub/super or signed length/percentage shifts; details below. These do not replace CSS verticalAlign.          | [SVG baselines](../tests/cases/svg/text-baselines/inline/case.json), [vertical text](../tests/cases/svg/vertical-text/inline/case.json)                                                                  |
+| `strokeWidth`, `strokeLinecap`, `strokeLinejoin`, `strokeMiterlimit` | Nonnegative SVG length/percentage; butt/round/square caps; miter/round/bevel joins; miterlimit at least 1. No arcs/miter-clip joins.             | [caps/joins](cases/svg/stroke-caps-joins/inline/case.json)                                                                                                                                      |
+| `strokeDasharray`, `strokeDashoffset`                                | none or nonnegative dash-length lists; signed offset. SVG percentages and pathLength calibration use the SVG geometry path.                      | [dash offsets](cases/svg/dashes-offset/inline/case.json), [viewBox/dashes](cases/svg/viewbox-dashes/inline/case.json)                                                                  |
+| `vectorEffect`                                                       | none/non-scaling-stroke; applies to stroke scaling inside SVG, not an exemption from outer CSS image transforms.                                 | [non-scaling stroke](cases/svg/non-scaling-stroke/inline/case.json)                                                                                                                             |
+| `marker`, `markerStart`, `markerMid`, `markerEnd`                    | none or local marker reference; shorthand assigns all three positions.                                                                           | [markers](cases/svg/markers/inline/case.json)                                                                                                                                                   |
+| `stopColor`, `floodColor`, `lightingColor`                           | Colors/currentColor on gradient stops and filter primitives.                                                                                     | [interpolation](cases/svg/color-interpolation/inline/case.json), [diffuse](cases/svg/filter-diffuse/inline/case.json), [specular](cases/svg/filter-specular/inline/case.json) |
+| `colorInterpolation`, `colorInterpolationFilters`                    | auto, sRGB, linearRGB; auto selects sRGB for gradients and linearRGB for filters.                                                                | [gradient interpolation](cases/svg/color-interpolation/inline/case.json), SVG filter cases                                                                                                      |
+| `mask`, `maskType`                                                   | mask is none/url(#id) for an SVG mask, **not the CSS image-mask shorthand**. maskType is luminance/alpha. Boxes use maskImage and its longhands. | [clip/mask/opacity](cases/svg/clip-mask-opacity/inline/case.json), [mask modes](cases/svg/masks/inline/case.json)                                                                      |
+| `textAnchor`                                                         | start/middle/end, accounting for direction and SVG text chunks.                                                                                  | [SVG text](cases/svg/text/inline/case.json), [direction](cases/svg/text-direction/inline/case.json)                                                                                    |
+| `dominantBaseline`, `alignmentBaseline`, `baselineShift`             | SVG baseline keywords and baseline/sub/super or signed length/percentage shifts; details below. These do not replace CSS verticalAlign.          | [SVG baselines](cases/svg/text-baselines/inline/case.json), [vertical text](cases/svg/vertical-text/inline/case.json)                                                                  |
 
 Baseline keywords: auto, alphabetic, middle, central, hanging, mathematical,
 text-before-edge/text-top, text-after-edge/text-bottom and ideographic.
 AlignmentBaseline additionally accepts baseline; auto/baseline clear its override.
 BaselineShift takes baseline, sub, super or a signed SVG length/percentage.
 
-Coverage: [SVG combinations](../tests/cases/svg/combinations/) retains matching
+Coverage: [SVG combinations](cases/svg/combinations/) retains matching
 inline/file inputs for marker strokes and paint order, gradient/clip/filter
 chains, text paths and baseline shifts, and viewports/use references. All four
 families have independent browser captures; two changing fixtures check marker
@@ -487,7 +487,7 @@ a strict Valle image and a missing-round mutation protect against geometric
 regressions. Its original browser captures have not been rewritten.
 
 Capture metadata for these new static references is retained once in
-[coverage-environment.json](../tests/baselines/browser/coverage-environment.json),
+[coverage-environment.json](baselines/browser/coverage-environment.json),
 with an explicit fixture list. Older references retain their original metadata;
 they are not represented as recaptured with the newer browsers.
 
@@ -715,244 +715,244 @@ retain the listed number of sampled frames and run seek checks automatically.
 | [values/font-ex][css/values/font-ex] | 1 | 4 / 0 | Listed | ex uses the selected font x-height. Pinned Noto Sans has 536/1000 units/em at weight 400 and 546/1000 at weight 700. Checks calc, inherited font size and font variation against pixel controls. |
 | [values/inherited-units][css/values/inherited-units] | 1 | 48 / 0 | Listed | 24 combinations cross inherited font size, em/rem/px/percentage lengths and writing mode. Physical percentage width remains relative to the 160px containing width. |
 
-[css/background/gradients]: ../tests/cases/css/background/gradients/case.json
-[css/background/origin-clip]: ../tests/cases/css/background/origin-clip/case.json
-[css/backgrounds/svg-image]: ../tests/cases/css/backgrounds/svg-image/case.json
-[css/border/styles-radius]: ../tests/cases/css/border/styles-radius/case.json
-[css/box-model/border-box]: ../tests/cases/css/box-model/border-box/case.json
-[css/box-model/content-box]: ../tests/cases/css/box-model/content-box/case.json
-[css/box-model/percentage-padding]: ../tests/cases/css/box-model/percentage-padding/case.json
-[css/cascade/wide-keywords]: ../tests/cases/css/cascade/wide-keywords/case.json
-[css/color/current-mix]: ../tests/cases/css/color/current-mix/case.json
-[css/color/srgb-alpha]: ../tests/cases/css/color/srgb-alpha/case.json
-[css/compositing/backdrop-blend/basic]: ../tests/cases/css/compositing/backdrop-blend/basic/case.json
-[css/compositing/backdrop-blend/clips]: ../tests/cases/css/compositing/backdrop-blend/clips/case.json
-[css/compositing/backdrop-blend/controls]: ../tests/cases/css/compositing/backdrop-blend/controls/case.json
-[css/compositing/backdrop-blend/empty-bounds]: ../tests/cases/css/compositing/backdrop-blend/empty-bounds/case.json
-[css/compositing/backdrop-blend/nested]: ../tests/cases/css/compositing/backdrop-blend/nested/case.json
-[css/compositing/backdrop-blend/overflow]: ../tests/cases/css/compositing/backdrop-blend/overflow/case.json
-[css/compositing/backdrop-blend/planes]: ../tests/cases/css/compositing/backdrop-blend/planes/case.json
-[css/compositing/clip-mask-matrix]: ../tests/cases/css/compositing/clip-mask-matrix/case.json
-[css/compositing/dynamic-layers]: ../tests/cases/css/compositing/dynamic-layers/case.json
-[css/compositing/filter-blend-matrix]: ../tests/cases/css/compositing/filter-blend-matrix/case.json
-[css/compositing/group-opacity]: ../tests/cases/css/compositing/group-opacity/case.json
-[css/compositing/isolation-blend]: ../tests/cases/css/compositing/isolation-blend/case.json
-[css/compositing/nested-matrix]: ../tests/cases/css/compositing/nested-matrix/case.json
-[css/compositing/rounded-blend]: ../tests/cases/css/compositing/rounded-blend/case.json
-[css/compositing/scene-blend-isolation]: ../tests/cases/css/compositing/scene-blend-isolation/case.json
-[css/compositing/stacking-opacity]: ../tests/cases/css/compositing/stacking-opacity/case.json
-[css/compositing/visibility-backdrop]: ../tests/cases/css/compositing/visibility-backdrop/case.json
-[css/filter/blur-overflow]: ../tests/cases/css/filter/blur-overflow/case.json
-[css/filter/opacity]: ../tests/cases/css/filter/opacity/case.json
-[css/filter/order]: ../tests/cases/css/filter/order/case.json
-[css/filter/transformed-bounds]: ../tests/cases/css/filter/transformed-bounds/case.json
-[css/flex/alignment-order]: ../tests/cases/css/flex/alignment-order/case.json
-[css/flex/automatic-minimum]: ../tests/cases/css/flex/automatic-minimum/case.json
-[css/flex/column-minimum]: ../tests/cases/css/flex/column-minimum/case.json
-[css/flex/constrained-growth]: ../tests/cases/css/flex/constrained-growth/case.json
-[css/flex/constraints-matrix]: ../tests/cases/css/flex/constraints-matrix/case.json
-[css/flex/dynamic-constraints]: ../tests/cases/css/flex/dynamic-constraints/case.json
-[css/flex/grid-child]: ../tests/cases/css/flex/grid-child/case.json
-[css/flex/grow-shrink]: ../tests/cases/css/flex/grow-shrink/case.json
-[css/flex/percentage-basis]: ../tests/cases/css/flex/percentage-basis/case.json
-[css/flex/reverse-auto-margins]: ../tests/cases/css/flex/reverse-auto-margins/case.json
-[css/flex/wrap-gap]: ../tests/cases/css/flex/wrap-gap/case.json
-[css/flex/wrap-thresholds]: ../tests/cases/css/flex/wrap-thresholds/case.json
-[css/grid/auto-placement-dense]: ../tests/cases/css/grid/auto-placement-dense/case.json
-[css/grid/auto-repeat]: ../tests/cases/css/grid/auto-repeat/case.json
-[css/grid/flex-child]: ../tests/cases/css/grid/flex-child/case.json
-[css/grid/named-areas]: ../tests/cases/css/grid/named-areas/case.json
-[css/grid/named-lines-implicit]: ../tests/cases/css/grid/named-lines-implicit/case.json
-[css/grid/placement]: ../tests/cases/css/grid/placement/case.json
-[css/grid/tracks]: ../tests/cases/css/grid/tracks/case.json
-[css/images/object-fit]: ../tests/cases/css/images/object-fit/case.json
-[css/images/object-position]: ../tests/cases/css/images/object-position/case.json
-[css/layout/block-flow]: ../tests/cases/css/layout/block-flow/case.json
-[css/layout/logical-sides-matrix]: ../tests/cases/css/layout/logical-sides-matrix/case.json
-[css/layout/nested-sizing]: ../tests/cases/css/layout/nested-sizing/case.json
-[css/layout/vertical-block]: ../tests/cases/css/layout/vertical-block/case.json
-[css/layout/vertical-flex]: ../tests/cases/css/layout/vertical-flex/case.json
-[css/layout/vertical-grid]: ../tests/cases/css/layout/vertical-grid/case.json
-[css/layout/vertical-position]: ../tests/cases/css/layout/vertical-position/case.json
-[css/mask/backdrop]: ../tests/cases/css/mask/backdrop/case.json
-[css/mask/clip]: ../tests/cases/css/mask/clip/case.json
-[css/mask/composite]: ../tests/cases/css/mask/composite/case.json
-[css/mask/shape]: ../tests/cases/css/mask/shape/case.json
-[css/overflow/clipping]: ../tests/cases/css/overflow/clipping/case.json
-[css/position/absolute-padding]: ../tests/cases/css/position/absolute-padding/case.json
-[css/position/absolute-relative]: ../tests/cases/css/position/absolute-relative/case.json
-[css/position/logical-containing-block]: ../tests/cases/css/position/logical-containing-block/case.json
-[css/shadow/blur]: ../tests/cases/css/shadow/blur/case.json
-[css/shadow/outer-inset]: ../tests/cases/css/shadow/outer-inset/case.json
-[css/shadow/rounded-clip]: ../tests/cases/css/shadow/rounded-clip/case.json
-[css/sizing/aspect-ratio]: ../tests/cases/css/sizing/aspect-ratio/case.json
-[css/sizing/auto-height-limits]: ../tests/cases/css/sizing/auto-height-limits/case.json
-[css/sizing/intrinsic-width]: ../tests/cases/css/sizing/intrinsic-width/case.json
-[css/sizing/percentage-min-max]: ../tests/cases/css/sizing/percentage-min-max/case.json
-[css/text/alignment]: ../tests/cases/css/text/alignment/case.json
-[css/text/alignment-matrix]: ../tests/cases/css/text/alignment-matrix/case.json
-[css/text/bidi]: ../tests/cases/css/text/bidi/case.json
-[css/text/caps]: ../tests/cases/css/text/caps/case.json
-[css/text/combine]: ../tests/cases/css/text/combine/case.json
-[css/text/decoration-cjk]: ../tests/cases/css/text/decoration-cjk/case.json
-[css/text/decoration-matrix]: ../tests/cases/css/text/decoration-matrix/case.json
-[css/text/dynamic-inheritance]: ../tests/cases/css/text/dynamic-inheritance/case.json
-[css/text/ellipsis]: ../tests/cases/css/text/ellipsis/case.json
-[css/text/emphasis]: ../tests/cases/css/text/emphasis/case.json
-[css/text/font-position]: ../tests/cases/css/text/font-position/case.json
-[css/text/font-shorthand]: ../tests/cases/css/text/font-shorthand/case.json
-[css/text/font-size-adjust]: ../tests/cases/css/text/font-size-adjust/case.json
-[css/text/font-size-keywords]: ../tests/cases/css/text/font-size-keywords/case.json
-[css/text/font-synthesis]: ../tests/cases/css/text/font-synthesis/case.json
-[css/text/inline-box]: ../tests/cases/css/text/inline-box/case.json
-[css/text/inline-boxes]: ../tests/cases/css/text/inline-boxes/case.json
-[css/text/inline-directions]: ../tests/cases/css/text/inline-directions/case.json
-[css/text/inline-writing]: ../tests/cases/css/text/inline-writing/case.json
-[css/text/mixed-runs]: ../tests/cases/css/text/mixed-runs/case.json
-[css/text/mixed-size-matrix]: ../tests/cases/css/text/mixed-size-matrix/case.json
-[css/text/overflow-wrap]: ../tests/cases/css/text/overflow-wrap/case.json
-[css/text/paint-order]: ../tests/cases/css/text/paint-order/case.json
-[css/text/paragraph]: ../tests/cases/css/text/paragraph/case.json
-[css/text/preserved-spaces]: ../tests/cases/css/text/preserved-spaces/case.json
-[css/text/spacing-indent]: ../tests/cases/css/text/spacing-indent/case.json
-[css/text/truncation-matrix]: ../tests/cases/css/text/truncation-matrix/case.json
-[css/text/underline-position]: ../tests/cases/css/text/underline-position/case.json
-[css/text/vertical]: ../tests/cases/css/text/vertical/case.json
-[css/text/vertical-align]: ../tests/cases/css/text/vertical-align/case.json
-[css/text/vertical-container]: ../tests/cases/css/text/vertical-container/case.json
-[css/text/word-wrap]: ../tests/cases/css/text/word-wrap/case.json
-[css/text/wrap-matrix]: ../tests/cases/css/text/wrap-matrix/case.json
-[css/text/wrapping]: ../tests/cases/css/text/wrapping/case.json
-[css/transform/clip]: ../tests/cases/css/transform/clip/case.json
-[css/transform/origin-order]: ../tests/cases/css/transform/origin-order/case.json
-[css/transforms/shape-path]: ../tests/cases/css/transforms/shape-path/case.json
-[css/values/absolute-units]: ../tests/cases/css/values/absolute-units/case.json
-[css/values/font-ex]: ../tests/cases/css/values/font-ex/case.json
+[css/background/gradients]: cases/css/background/gradients/case.json
+[css/background/origin-clip]: cases/css/background/origin-clip/case.json
+[css/backgrounds/svg-image]: cases/css/backgrounds/svg-image/case.json
+[css/border/styles-radius]: cases/css/border/styles-radius/case.json
+[css/box-model/border-box]: cases/css/box-model/border-box/case.json
+[css/box-model/content-box]: cases/css/box-model/content-box/case.json
+[css/box-model/percentage-padding]: cases/css/box-model/percentage-padding/case.json
+[css/cascade/wide-keywords]: cases/css/cascade/wide-keywords/case.json
+[css/color/current-mix]: cases/css/color/current-mix/case.json
+[css/color/srgb-alpha]: cases/css/color/srgb-alpha/case.json
+[css/compositing/backdrop-blend/basic]: cases/css/compositing/backdrop-blend/basic/case.json
+[css/compositing/backdrop-blend/clips]: cases/css/compositing/backdrop-blend/clips/case.json
+[css/compositing/backdrop-blend/controls]: cases/css/compositing/backdrop-blend/controls/case.json
+[css/compositing/backdrop-blend/empty-bounds]: cases/css/compositing/backdrop-blend/empty-bounds/case.json
+[css/compositing/backdrop-blend/nested]: cases/css/compositing/backdrop-blend/nested/case.json
+[css/compositing/backdrop-blend/overflow]: cases/css/compositing/backdrop-blend/overflow/case.json
+[css/compositing/backdrop-blend/planes]: cases/css/compositing/backdrop-blend/planes/case.json
+[css/compositing/clip-mask-matrix]: cases/css/compositing/clip-mask-matrix/case.json
+[css/compositing/dynamic-layers]: cases/css/compositing/dynamic-layers/case.json
+[css/compositing/filter-blend-matrix]: cases/css/compositing/filter-blend-matrix/case.json
+[css/compositing/group-opacity]: cases/css/compositing/group-opacity/case.json
+[css/compositing/isolation-blend]: cases/css/compositing/isolation-blend/case.json
+[css/compositing/nested-matrix]: cases/css/compositing/nested-matrix/case.json
+[css/compositing/rounded-blend]: cases/css/compositing/rounded-blend/case.json
+[css/compositing/scene-blend-isolation]: cases/css/compositing/scene-blend-isolation/case.json
+[css/compositing/stacking-opacity]: cases/css/compositing/stacking-opacity/case.json
+[css/compositing/visibility-backdrop]: cases/css/compositing/visibility-backdrop/case.json
+[css/filter/blur-overflow]: cases/css/filter/blur-overflow/case.json
+[css/filter/opacity]: cases/css/filter/opacity/case.json
+[css/filter/order]: cases/css/filter/order/case.json
+[css/filter/transformed-bounds]: cases/css/filter/transformed-bounds/case.json
+[css/flex/alignment-order]: cases/css/flex/alignment-order/case.json
+[css/flex/automatic-minimum]: cases/css/flex/automatic-minimum/case.json
+[css/flex/column-minimum]: cases/css/flex/column-minimum/case.json
+[css/flex/constrained-growth]: cases/css/flex/constrained-growth/case.json
+[css/flex/constraints-matrix]: cases/css/flex/constraints-matrix/case.json
+[css/flex/dynamic-constraints]: cases/css/flex/dynamic-constraints/case.json
+[css/flex/grid-child]: cases/css/flex/grid-child/case.json
+[css/flex/grow-shrink]: cases/css/flex/grow-shrink/case.json
+[css/flex/percentage-basis]: cases/css/flex/percentage-basis/case.json
+[css/flex/reverse-auto-margins]: cases/css/flex/reverse-auto-margins/case.json
+[css/flex/wrap-gap]: cases/css/flex/wrap-gap/case.json
+[css/flex/wrap-thresholds]: cases/css/flex/wrap-thresholds/case.json
+[css/grid/auto-placement-dense]: cases/css/grid/auto-placement-dense/case.json
+[css/grid/auto-repeat]: cases/css/grid/auto-repeat/case.json
+[css/grid/flex-child]: cases/css/grid/flex-child/case.json
+[css/grid/named-areas]: cases/css/grid/named-areas/case.json
+[css/grid/named-lines-implicit]: cases/css/grid/named-lines-implicit/case.json
+[css/grid/placement]: cases/css/grid/placement/case.json
+[css/grid/tracks]: cases/css/grid/tracks/case.json
+[css/images/object-fit]: cases/css/images/object-fit/case.json
+[css/images/object-position]: cases/css/images/object-position/case.json
+[css/layout/block-flow]: cases/css/layout/block-flow/case.json
+[css/layout/logical-sides-matrix]: cases/css/layout/logical-sides-matrix/case.json
+[css/layout/nested-sizing]: cases/css/layout/nested-sizing/case.json
+[css/layout/vertical-block]: cases/css/layout/vertical-block/case.json
+[css/layout/vertical-flex]: cases/css/layout/vertical-flex/case.json
+[css/layout/vertical-grid]: cases/css/layout/vertical-grid/case.json
+[css/layout/vertical-position]: cases/css/layout/vertical-position/case.json
+[css/mask/backdrop]: cases/css/mask/backdrop/case.json
+[css/mask/clip]: cases/css/mask/clip/case.json
+[css/mask/composite]: cases/css/mask/composite/case.json
+[css/mask/shape]: cases/css/mask/shape/case.json
+[css/overflow/clipping]: cases/css/overflow/clipping/case.json
+[css/position/absolute-padding]: cases/css/position/absolute-padding/case.json
+[css/position/absolute-relative]: cases/css/position/absolute-relative/case.json
+[css/position/logical-containing-block]: cases/css/position/logical-containing-block/case.json
+[css/shadow/blur]: cases/css/shadow/blur/case.json
+[css/shadow/outer-inset]: cases/css/shadow/outer-inset/case.json
+[css/shadow/rounded-clip]: cases/css/shadow/rounded-clip/case.json
+[css/sizing/aspect-ratio]: cases/css/sizing/aspect-ratio/case.json
+[css/sizing/auto-height-limits]: cases/css/sizing/auto-height-limits/case.json
+[css/sizing/intrinsic-width]: cases/css/sizing/intrinsic-width/case.json
+[css/sizing/percentage-min-max]: cases/css/sizing/percentage-min-max/case.json
+[css/text/alignment]: cases/css/text/alignment/case.json
+[css/text/alignment-matrix]: cases/css/text/alignment-matrix/case.json
+[css/text/bidi]: cases/css/text/bidi/case.json
+[css/text/caps]: cases/css/text/caps/case.json
+[css/text/combine]: cases/css/text/combine/case.json
+[css/text/decoration-cjk]: cases/css/text/decoration-cjk/case.json
+[css/text/decoration-matrix]: cases/css/text/decoration-matrix/case.json
+[css/text/dynamic-inheritance]: cases/css/text/dynamic-inheritance/case.json
+[css/text/ellipsis]: cases/css/text/ellipsis/case.json
+[css/text/emphasis]: cases/css/text/emphasis/case.json
+[css/text/font-position]: cases/css/text/font-position/case.json
+[css/text/font-shorthand]: cases/css/text/font-shorthand/case.json
+[css/text/font-size-adjust]: cases/css/text/font-size-adjust/case.json
+[css/text/font-size-keywords]: cases/css/text/font-size-keywords/case.json
+[css/text/font-synthesis]: cases/css/text/font-synthesis/case.json
+[css/text/inline-box]: cases/css/text/inline-box/case.json
+[css/text/inline-boxes]: cases/css/text/inline-boxes/case.json
+[css/text/inline-directions]: cases/css/text/inline-directions/case.json
+[css/text/inline-writing]: cases/css/text/inline-writing/case.json
+[css/text/mixed-runs]: cases/css/text/mixed-runs/case.json
+[css/text/mixed-size-matrix]: cases/css/text/mixed-size-matrix/case.json
+[css/text/overflow-wrap]: cases/css/text/overflow-wrap/case.json
+[css/text/paint-order]: cases/css/text/paint-order/case.json
+[css/text/paragraph]: cases/css/text/paragraph/case.json
+[css/text/preserved-spaces]: cases/css/text/preserved-spaces/case.json
+[css/text/spacing-indent]: cases/css/text/spacing-indent/case.json
+[css/text/truncation-matrix]: cases/css/text/truncation-matrix/case.json
+[css/text/underline-position]: cases/css/text/underline-position/case.json
+[css/text/vertical]: cases/css/text/vertical/case.json
+[css/text/vertical-align]: cases/css/text/vertical-align/case.json
+[css/text/vertical-container]: cases/css/text/vertical-container/case.json
+[css/text/word-wrap]: cases/css/text/word-wrap/case.json
+[css/text/wrap-matrix]: cases/css/text/wrap-matrix/case.json
+[css/text/wrapping]: cases/css/text/wrapping/case.json
+[css/transform/clip]: cases/css/transform/clip/case.json
+[css/transform/origin-order]: cases/css/transform/origin-order/case.json
+[css/transforms/shape-path]: cases/css/transforms/shape-path/case.json
+[css/values/absolute-units]: cases/css/values/absolute-units/case.json
+[css/values/font-ex]: cases/css/values/font-ex/case.json
 
-[css/background/dynamic-layer-lists]: ../tests/cases/css/background/dynamic-layer-lists/case.json
+[css/background/dynamic-layer-lists]: cases/css/background/dynamic-layer-lists/case.json
 
-[css/background/dynamic-rounded-position]: ../tests/cases/css/background/dynamic-rounded-position/case.json
+[css/background/dynamic-rounded-position]: cases/css/background/dynamic-rounded-position/case.json
 
-[css/background/fractional-repeat]: ../tests/cases/css/background/fractional-repeat/case.json
+[css/background/fractional-repeat]: cases/css/background/fractional-repeat/case.json
 
-[css/background/layer-lists]: ../tests/cases/css/background/layer-lists/case.json
+[css/background/layer-lists]: cases/css/background/layer-lists/case.json
 
-[css/background/position-order]: ../tests/cases/css/background/position-order/case.json
+[css/background/position-order]: cases/css/background/position-order/case.json
 
-[css/background/rounded-position]: ../tests/cases/css/background/rounded-position/case.json
+[css/background/rounded-position]: cases/css/background/rounded-position/case.json
 
-[css/background/text-effects]: ../tests/cases/css/background/text-effects/case.json
+[css/background/text-effects]: cases/css/background/text-effects/case.json
 
-[css/border/dynamic-corners]: ../tests/cases/css/border/dynamic-corners/case.json
+[css/border/dynamic-corners]: cases/css/border/dynamic-corners/case.json
 
-[css/border/logical-corners]: ../tests/cases/css/border/logical-corners/case.json
+[css/border/logical-corners]: cases/css/border/logical-corners/case.json
 
-[css/border/mixed-joins]: ../tests/cases/css/border/mixed-joins/case.json
+[css/border/mixed-joins]: cases/css/border/mixed-joins/case.json
 
-[css/border/unequal-corners]: ../tests/cases/css/border/unequal-corners/case.json
+[css/border/unequal-corners]: cases/css/border/unequal-corners/case.json
 
-[css/cascade/logical-order]: ../tests/cases/css/cascade/logical-order/case.json
+[css/cascade/logical-order]: cases/css/cascade/logical-order/case.json
 
-[css/color/dynamic-spaces-opacity]: ../tests/cases/css/color/dynamic-spaces-opacity/case.json
+[css/color/dynamic-spaces-opacity]: cases/css/color/dynamic-spaces-opacity/case.json
 
-[css/color/spaces-opacity]: ../tests/cases/css/color/spaces-opacity/case.json
+[css/color/spaces-opacity]: cases/css/color/spaces-opacity/case.json
 
-[css/compositing/backdrop-roots]: ../tests/cases/css/compositing/backdrop-roots/case.json
+[css/compositing/backdrop-roots]: cases/css/compositing/backdrop-roots/case.json
 
-[css/compositing/blend-families]: ../tests/cases/css/compositing/blend-families/case.json
+[css/compositing/blend-families]: cases/css/compositing/blend-families/case.json
 
-[css/compositing/dynamic-backdrop-roots]: ../tests/cases/css/compositing/dynamic-backdrop-roots/case.json
+[css/compositing/dynamic-backdrop-roots]: cases/css/compositing/dynamic-backdrop-roots/case.json
 
-[css/generated/boxes-00]: ../tests/cases/css/generated/boxes-00/case.json
+[css/generated/boxes-00]: cases/css/generated/boxes-00/case.json
 
-[css/generated/boxes-01]: ../tests/cases/css/generated/boxes-01/case.json
+[css/generated/boxes-01]: cases/css/generated/boxes-01/case.json
 
-[css/generated/boxes-02]: ../tests/cases/css/generated/boxes-02/case.json
+[css/generated/boxes-02]: cases/css/generated/boxes-02/case.json
 
-[css/generated/boxes-03]: ../tests/cases/css/generated/boxes-03/case.json
+[css/generated/boxes-03]: cases/css/generated/boxes-03/case.json
 
-[css/generated/boxes-04]: ../tests/cases/css/generated/boxes-04/case.json
+[css/generated/boxes-04]: cases/css/generated/boxes-04/case.json
 
-[css/generated/boxes-05]: ../tests/cases/css/generated/boxes-05/case.json
+[css/generated/boxes-05]: cases/css/generated/boxes-05/case.json
 
-[css/generated/boxes-06]: ../tests/cases/css/generated/boxes-06/case.json
+[css/generated/boxes-06]: cases/css/generated/boxes-06/case.json
 
-[css/generated/boxes-07]: ../tests/cases/css/generated/boxes-07/case.json
+[css/generated/boxes-07]: cases/css/generated/boxes-07/case.json
 
-[css/generated/boxes-08]: ../tests/cases/css/generated/boxes-08/case.json
+[css/generated/boxes-08]: cases/css/generated/boxes-08/case.json
 
-[css/generated/boxes-09]: ../tests/cases/css/generated/boxes-09/case.json
+[css/generated/boxes-09]: cases/css/generated/boxes-09/case.json
 
-[css/generated/boxes-10]: ../tests/cases/css/generated/boxes-10/case.json
+[css/generated/boxes-10]: cases/css/generated/boxes-10/case.json
 
-[css/generated/boxes-11]: ../tests/cases/css/generated/boxes-11/case.json
+[css/generated/boxes-11]: cases/css/generated/boxes-11/case.json
 
-[css/generated/boxes-12]: ../tests/cases/css/generated/boxes-12/case.json
+[css/generated/boxes-12]: cases/css/generated/boxes-12/case.json
 
-[css/generated/boxes-13]: ../tests/cases/css/generated/boxes-13/case.json
+[css/generated/boxes-13]: cases/css/generated/boxes-13/case.json
 
-[css/generated/boxes-14]: ../tests/cases/css/generated/boxes-14/case.json
+[css/generated/boxes-14]: cases/css/generated/boxes-14/case.json
 
-[css/generated/boxes-15]: ../tests/cases/css/generated/boxes-15/case.json
+[css/generated/boxes-15]: cases/css/generated/boxes-15/case.json
 
-[css/generated/boxes-16]: ../tests/cases/css/generated/boxes-16/case.json
+[css/generated/boxes-16]: cases/css/generated/boxes-16/case.json
 
-[css/generated/boxes-17]: ../tests/cases/css/generated/boxes-17/case.json
+[css/generated/boxes-17]: cases/css/generated/boxes-17/case.json
 
-[css/generated/boxes-18]: ../tests/cases/css/generated/boxes-18/case.json
+[css/generated/boxes-18]: cases/css/generated/boxes-18/case.json
 
-[css/generated/boxes-19]: ../tests/cases/css/generated/boxes-19/case.json
+[css/generated/boxes-19]: cases/css/generated/boxes-19/case.json
 
-[css/images/dynamic-fit-extremes]: ../tests/cases/css/images/dynamic-fit-extremes/case.json
+[css/images/dynamic-fit-extremes]: cases/css/images/dynamic-fit-extremes/case.json
 
-[css/images/fit-extremes]: ../tests/cases/css/images/fit-extremes/case.json
+[css/images/fit-extremes]: cases/css/images/fit-extremes/case.json
 
-[css/mask/dynamic-three-layers]: ../tests/cases/css/mask/dynamic-three-layers/case.json
+[css/mask/dynamic-three-layers]: cases/css/mask/dynamic-three-layers/case.json
 
-[css/mask/three-layer-composites]: ../tests/cases/css/mask/three-layer-composites/case.json
+[css/mask/three-layer-composites]: cases/css/mask/three-layer-composites/case.json
 
-[css/shadow/dynamic-outline]: ../tests/cases/css/shadow/dynamic-outline/case.json
+[css/shadow/dynamic-outline]: cases/css/shadow/dynamic-outline/case.json
 
-[css/shadow/outline-layers]: ../tests/cases/css/shadow/outline-layers/case.json
+[css/shadow/outline-layers]: cases/css/shadow/outline-layers/case.json
 
-[css/sizing/dynamic-percentages]: ../tests/cases/css/sizing/dynamic-percentages/case.json
+[css/sizing/dynamic-percentages]: cases/css/sizing/dynamic-percentages/case.json
 
-[css/sizing/indefinite-percentages]: ../tests/cases/css/sizing/indefinite-percentages/case.json
+[css/sizing/indefinite-percentages]: cases/css/sizing/indefinite-percentages/case.json
 
-[css/sizing/intrinsic-constraints]: ../tests/cases/css/sizing/intrinsic-constraints/case.json
+[css/sizing/intrinsic-constraints]: cases/css/sizing/intrinsic-constraints/case.json
 
-[css/text/axes-synthesis]: ../tests/cases/css/text/axes-synthesis/case.json
+[css/text/axes-synthesis]: cases/css/text/axes-synthesis/case.json
 
-[css/text/bidi-inline-atoms]: ../tests/cases/css/text/bidi-inline-atoms/case.json
+[css/text/bidi-inline-atoms]: cases/css/text/bidi-inline-atoms/case.json
 
-[css/text/breaking-products]: ../tests/cases/css/text/breaking-products/case.json
+[css/text/breaking-products]: cases/css/text/breaking-products/case.json
 
-[css/text/dynamic-axes]: ../tests/cases/css/text/dynamic-axes/case.json
+[css/text/dynamic-axes]: cases/css/text/dynamic-axes/case.json
 
-[css/text/dynamic-bidi-atoms]: ../tests/cases/css/text/dynamic-bidi-atoms/case.json
+[css/text/dynamic-bidi-atoms]: cases/css/text/dynamic-bidi-atoms/case.json
 
-[css/text/dynamic-breaking]: ../tests/cases/css/text/dynamic-breaking/case.json
+[css/text/dynamic-breaking]: cases/css/text/dynamic-breaking/case.json
 
-[css/text/dynamic-nested-decorations]: ../tests/cases/css/text/dynamic-nested-decorations/case.json
+[css/text/dynamic-nested-decorations]: cases/css/text/dynamic-nested-decorations/case.json
 
-[css/text/font-features]: ../tests/cases/css/text/font-features/case.json
+[css/text/font-features]: cases/css/text/font-features/case.json
 
-[css/text/nested-decorations]: ../tests/cases/css/text/nested-decorations/case.json
+[css/text/nested-decorations]: cases/css/text/nested-decorations/case.json
 
-[css/text/relative-inheritance]: ../tests/cases/css/text/relative-inheritance/case.json
+[css/text/relative-inheritance]: cases/css/text/relative-inheritance/case.json
 
-[css/transform/dynamic-order-clipping]: ../tests/cases/css/transform/dynamic-order-clipping/case.json
+[css/transform/dynamic-order-clipping]: cases/css/transform/dynamic-order-clipping/case.json
 
-[css/transform/dynamic-perspective]: ../tests/cases/css/transform/dynamic-perspective/case.json
+[css/transform/dynamic-perspective]: cases/css/transform/dynamic-perspective/case.json
 
-[css/transform/order-clipping]: ../tests/cases/css/transform/order-clipping/case.json
+[css/transform/order-clipping]: cases/css/transform/order-clipping/case.json
 
-[css/transform/perspective-groups]: ../tests/cases/css/transform/perspective-groups/case.json
+[css/transform/perspective-groups]: cases/css/transform/perspective-groups/case.json
 
-[css/transforms/dynamic-path-extents]: ../tests/cases/css/transforms/dynamic-path-extents/case.json
+[css/transforms/dynamic-path-extents]: cases/css/transforms/dynamic-path-extents/case.json
 
-[css/transforms/path-extents]: ../tests/cases/css/transforms/path-extents/case.json
+[css/transforms/path-extents]: cases/css/transforms/path-extents/case.json
 
-[css/values/dynamic-inherited-units]: ../tests/cases/css/values/dynamic-inherited-units/case.json
+[css/values/dynamic-inherited-units]: cases/css/values/dynamic-inherited-units/case.json
 
-[css/values/inherited-units]: ../tests/cases/css/values/inherited-units/case.json
+[css/values/inherited-units]: cases/css/values/inherited-units/case.json

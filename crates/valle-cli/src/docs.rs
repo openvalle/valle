@@ -20,7 +20,7 @@ pub const GUIDES: [Guide; 5] = [
     },
     Guide {
         topic: "motion",
-        title: "Motion scenes: components, CSS, animation, controls and effects",
+        title: "Motion scenes: components, animation, CSS and SVG, filters, shaders and paths",
         content: include_str!("../../../docs/motion.md"),
     },
     Guide {

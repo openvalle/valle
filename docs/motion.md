@@ -10,6 +10,9 @@ Scene entries use the `.motion.tsx` suffix, including components used as Timelin
 caption presenters. Imported helpers keep ordinary names such as `Card.tsx` and `math.ts`;
 they are modules, not entries. CLI and browser playback reject other entry suffixes.
 
+The guide goes from writing a scene, through what of CSS and SVG it takes (from *Styles* to
+*Not yet supported*), to the elements and functions Valle adds (from *Motion blur* on).
+
 ## A first scene
 
 ```tsx scene title.motion.tsx
@@ -141,14 +144,208 @@ gives `width`, `height`, `fps`, `duration` and `clipDuration`.
 
 HTML tags (`div`, `span`, `img`, `h1`…) are errors that name the tag to use instead.
 
+## Animation
+
+Animate by computing values from the time:
+
+```tsx
+const { seconds } = useCurrentTime();
+const x = interpolate(seconds, [0, 1, 2], [0, 400, 300], { easing: "ease-in-out" });
+const tint = interpolate(seconds, [0, 2], ["#22d3ee", "#a855f7"], { colorSpace: "oklch" });
+const pop = spring(seconds - 0.5, { preset: "bouncy" });
+```
+
+- `interpolate(t, inputs, outputs, options)` maps rising `inputs` to `outputs`: numbers,
+  colors, lengths (`"24px"`) or angles (`"90deg"`). Options: `easing` (CSS easing or a named
+  preset below), `colorSpace`, `hue`, `extrapolateLeft` and
+  `extrapolateRight` (`clamp`, the default, or `extend`).
+- `spring(t, options)` goes from 0 to 1 like a spring: `preset`, or `duration` and
+  `bounce`, or `mass`, `stiffness`, `damping`; `springVelocity` gives its speed.
+- `defineSequence({ name: { at, duration } | { after, overlap, delay, duration } })` lays out
+  stages in time; `stageProgress(t, stage)` and `staggerProgress(t, stage, index, gap)` give
+  their 0 to 1 progress.
+- `wiggle(t, { seed, frequency, amplitude })`, `wiggle2D`, `noise1d`, `noise2d`,
+  `seededRandom(seed, count, [low, high])` for organic movement.
+- `freezeTime`, `pingPong`, `repeatProgress`, `yoyoProgress`, `clamp`, `mod` reshape time.
+- `<Text split="char" perUnit={(unit) => style}>` (or `"word"`, `"line"`) with
+  `rangeSelector(unit, { start, end, softness, shape })` animates text unit by unit; a split
+  `Text` holds plain text, no `Span`s.
+
+For movement, animate `transform` or `translate`, and keep the layout still: animating
+`left`, `top` or margins moves the layout itself, which is slower and can step.
+
+### Easing presets
+
+`easing` accepts CSS keywords such as `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`,
+`step-start` and `step-end`, as well as `cubic-bezier(…)`, `steps(…)` and `linear(…)`.
+It also accepts these 33 case-sensitive preset names:
+
+- `easeIn`, `easeOut`, `easeInOut`: aliases for `ease-in`, `ease-out`, `ease-in-out`.
+- `easeIn` / `easeOut` / `easeInOut` followed by any family below, such as `easeOutCubic`
+  or `easeInOutElastic`. `In` eases into movement, `Out` eases into the end, and `InOut`
+  eases both ends.
+
+| Family                            | Motion                                                    |
+| --------------------------------- | --------------------------------------------------------- |
+| `Sine`                            | Gentle acceleration and deceleration                      |
+| `Quad`, `Cubic`, `Quart`, `Quint` | Progressively stronger acceleration and deceleration      |
+| `Expo`                            | An abrupt start or finish to the change in speed          |
+| `Circ`                            | Circular-arc-style acceleration and deceleration          |
+| `Back`                            | Pulls back before starting, or overshoots before settling |
+| `Elastic`                         | Oscillates around the endpoint                            |
+| `Bounce`                          | Bounces toward the endpoint                               |
+
+```tsx
+const x = interpolate(seconds, [0, 1], [0, 400], { easing: "easeOutCubic" });
+```
+
+`easeOutCubic` is the same preset as `cubic-bezier(0.33, 1, 0.68, 1)`. These names select
+fixed approximations, not exact evaluations of the named mathematical functions: the
+first eight families use cubic Béziers, and `Elastic`/`Bounce` use `linear()` curves with
+41 evenly spaced samples rounded to three decimal places. Back and Elastic can go below
+0 or above 1. Presets are resolved when parsed, not looked up each frame. Timeline keyframes
+accept the same names, including audio gain and pan automation.
+
+## Text and fonts
+
+`font` accepts the CSS shorthand, for example `font: "italic 700 24px/1.4 sans-serif"`.
+Give a size and family; style, small caps, weight, stretch and line height are
+optional. Omitted font longhands reset to their defaults. Later longhands can
+override the shorthand. Family names remain case-sensitive resource names;
+quote names containing spaces. System UI font keywords such as `caption` are
+not supported: declare the font resource explicitly.
+
+Built-in fonts, used without declaring them: Noto Sans (the default, and `sans-serif`), Noto
+Serif (`serif`), Noto Sans Mono (`monospace`), Noto Sans SC and KR for Chinese and Korean, and
+Noto Color Emoji. They are downloaded once into the cache on first use.
+
+Other fonts are resources of kind `font`, used by their name in `fontFamily`:
+
+```tsx
+export const controls = {
+  resources: {
+    brand: resource({ kind: "font", default: ["fonts/Inter-Regular.ttf", "fonts/Inter-Bold.ttf"] }),
+  },
+};
+// style={{ fontFamily: "brand", fontWeight: 700 }}
+```
+
+`measureText` and `textOutline` measure text and give its outline as a path.
+
+## Controls
+
+`controls` declares what can be bound from outside: by `--props`, `--data` and `--resource`
+on the command line, by a timeline clip, and by Studio's form.
+
+```tsx scene card.motion.tsx
+export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
+
+export const controls = {
+  props: {
+    title: string({ default: "Quarterly results", label: "Title" }),
+    accent: color({ default: "#f97316" }),
+    size: number({ default: 64, min: 12, max: 160, step: 1 }),
+  },
+  data: {
+    rows: {
+      default: [
+        { label: "A", value: 3 },
+        { label: "B", value: 5 },
+      ],
+    },
+  },
+};
+
+export default function Card({ title, accent, size, rows }) {
+  return (
+    <View style={{ width: 640, height: 360, padding: 32, backgroundColor: "#0f172a", gap: 12 }}>
+      <Text style={{ fontSize: size, color: accent }}>{title}</Text>
+      {rows.map((row) => (
+        <Text key={row.label} style={{ fontSize: 28, color: "white" }}>
+          {row.label}: {row.value}
+        </Text>
+      ))}
+    </View>
+  );
+}
+```
+
+- Prop kinds: `number`, `string`, `boolean`, `color`, `select({ values })`, `point`,
+  `length`, `angle`, `rect`. Each takes `default`, `label`, and `required` for one without a
+  default.
+- `data` entries take any JSON default, such as a chart's rows. The root component receives
+  props and data as its props.
+- `resources` entries are `resource({ kind, default })`, kinds `image`, `video`, `font`,
+  `shader`, read as `resource://name` (a font by its name in `fontFamily`).
+
+```sh
+valle motion render card.motion.tsx --props '{"title":"Q3"}' --data @rows.json -o card.png
+valle motion render scene.motion.tsx --resource photo=me.jpg -o out.mp4
+```
+
+## Timeline roles
+
+A scene declares how a timeline uses it:
+
+```tsx
+export const role = overlay({ intro: 0.5, outro: 0.5, hold: "once" });
+```
+
+| Role                                 | Used as                                   | What it reads                                                                |
+| ------------------------------------ | ----------------------------------------- | ---------------------------------------------------------------------------- |
+| none                                 | a `motion` clip, played as it is          |                                                                              |
+| `overlay({ intro, outro, hold })`    | a title or lower third of any length      | its intro and outro keep their length; `hold` is `once`, `loop` or `stretch` |
+| `transition()`                       | a timeline `motion` transition            | `<Image src="input://from">` and `input://to`                                |
+| `effect()`                           | a clip's `effects`, or an adjustment clip | `input://source`: the clip, or all under it                                  |
+| `captionPresenter({ intro, outro })` | a caption track's `presenter`             | its `caption` prop: `{ text, runs }`                                         |
+
+A transition or an effect fills its composition with what it reads and draws over it; use
+`clipProgress` for how far it is.
+
 ## Styles
 
 `style` takes CSS properties in camelCase, as React writes them: `backgroundColor`,
 `borderRadius`. Numbers are pixels. `className` takes Tailwind classes (v4), including
 arbitrary values such as `w-[340px]`; both can be used together, `style` winning.
 
-The repository's [CSS support and test coverage inventory](css.md) lists accepted
-properties, value restrictions, existing test evidence and combination gaps.
+Most of CSS works: flex and grid layout, positioning, backgrounds and gradients, borders,
+shadows, transforms including 3D, filters, clipping and masks, blending, and text with
+vertical writing and bidirectional scripts. Inline SVG works too, including text, patterns
+and filter graphs. What a video cannot have, such as hover states, scrolling, CSS animations
+and CSS variables, is an error that says what to write instead. The sections that follow describe what
+is supported and how it differs from a browser.
+
+CSS properties accept `inherit`, `initial` and `unset`, including shorthands.
+`inherit` copies the parent's computed value (for example, `2em` padding on a
+20px parent becomes 40px); `initial` uses the property's CSS initial value;
+`unset` inherits inherited properties and resets the others. Later declarations
+override earlier shorthand longhands as usual. This does not enable otherwise
+unsupported layout modes: `display: initial` means inline and therefore still
+requires a flex/grid parent, an out-of-flow box, or an Image/SVG inside a Text paragraph. `boxSizing: initial` means
+`content-box`, although Valle's default element style is `border-box`.
+
+The repository's [CSS support and test coverage inventory](../tests/css-coverage.md) lists
+every accepted property, its values and restrictions, and the tests that show it works.
+
+## Differences from a browser
+
+A scene has no browser, document or screen. The CSS it accepts means what it means in CSS,
+measured against the scene instead:
+
+- The viewport is the composition: `vw`, `vh`, `vmin`, `vmax`, `vi`, `vb` and their small,
+  large and dynamic variants use the canvas size. `rem` is always 16px.
+- Fonts are the built-in ones and those the scene declares as resources; no installed or
+  system font is read. Generic families other than `sans-serif`, `serif`, `monospace` and
+  `emoji` are errors.
+- Elements default to `boxSizing: "border-box"`, unlike CSS's `content-box`.
+- Text lives in `Text` and `Span`. A `Span` is a styled run inside a paragraph, not a box:
+  width, height and margins do not apply to it.
+- Layout is the same on every machine. Where CSS leaves the algorithm open, as for
+  `textWrap: "pretty"`, Valle's result need not match a given browser's.
+- There is no time in CSS: every value is computed for the frame. Animate by computing
+  values from the time (see *Animation*).
+
+## Values and units
 
 Lengths also accept `cm`, `mm`, `in`, `pt` and `pc`, including inside `calc()`.
 They use CSS reference pixels: `1in = 96px = 2.54cm = 25.4mm = 72pt = 6pc`.
@@ -156,6 +353,48 @@ Output resolution scales the result; these units do not read screen DPI.
 `ex` uses the selected font’s x-height, including in `calc()`, transforms and
 spacing. In `fontSize` it uses the parent font; other lengths use the element’s
 font. Explicitly inherited lengths keep their resolved size.
+
+`color-mix()` can include `currentColor`, including nested mixtures. It works in
+backgrounds, borders, outlines, gradients, shadows, text paints, and SVG fill,
+stroke and gradient stops. For example:
+
+```tsx
+<View style={{ color: "#2563eb", background: "color-mix(in srgb, currentColor 15%, white)" }} />
+```
+
+Inherited mixtures use the consuming element's `color`. When `color` itself
+contains a mixture with `currentColor`, that reference uses the inherited color.
+Mixing supports the same color spaces, hue directions and alpha weighting as
+constant `color-mix()` values; a color has to be resolved before it is passed to
+standalone color-interpolation helpers outside an element.
+
+## Supported properties
+
+Supported, among others:
+
+- Layout: `display` `flex`, `grid`, `block`, `none`; flexbox and grid properties, `gap`,
+  `position` `relative`/`absolute` with `inset`, `left`…, sizes with `min-`/`max-`, `margin`,
+  `padding`, `aspectRatio`, `overflow: "hidden"`, `zIndex`.
+- Paint: colors in every CSS form, `background` with gradients (linear, radial, conic) and
+  images, `border`, `borderRadius`, `boxShadow`, `outline`, `opacity`, `mixBlendMode`,
+  `clipPath`, `maskImage`.
+- Transforms: `transform`, `translate`, `rotate`, `scale`, `transformOrigin`, and 3D ones
+  with `perspective`.
+- Filters: `filter` and `backdropFilter`: `blur`, `brightness`, `contrast`, `grayscale`,
+  `hue-rotate`, `invert`, `saturate`, `sepia`, `drop-shadow`, `opacity`, plus Valle's
+  `bloom`, `displacement`, `film-grain`, `chromatic-aberration`, `lens-distortion` and
+  `radial-blur`, described under *Valle filters*.
+- Text: `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `lineHeight`, `letterSpacing`,
+  `textAlign`, `textTransform`, `textDecoration`, `textShadow`, `WebkitTextStroke`,
+  `fontVariationSettings`, `whiteSpace`.
+- `motionBlur: "auto"`: blur along the element's movement.
+
+## Font properties
+
+Font sizes accept `xx-small`, `x-small`, `small`, `medium`, `large`, `x-large`,
+and `xx-large`, mapped to 9, 10, 13, 16, 18, 24, and 32px. `larger` multiplies
+the parent computed size by 1.2; `smaller` divides it by 1.2. These keywords also
+work in the `font` shorthand and resolve before `em`, `ex`, and line heights.
 
 `fontSynthesis` accepts `none`, `weight`, `style` or `weight style` (the default).
 It inherits. `none` disables simulated bold and italic when the selected family
@@ -173,119 +412,13 @@ small capitals; missing unicase forms apply small capitals to uppercase letters.
 If the font lacks small-cap forms, cased letters are synthesized; caseless text
 stays unchanged. `fontVariant` accepts the same keywords.
 
-Supported, among others:
-
-- Layout: `display` `flex`, `grid`, `block`, `none`; flexbox and grid properties, `gap`,
-  `position` `relative`/`absolute` with `inset`, `left`…, sizes with `min-`/`max-`, `margin`,
-  `padding`, `aspectRatio`, `overflow: "hidden"`, `zIndex`.
-- Paint: colors in every CSS form, `background` with gradients (linear, radial, conic) and
-  images, `border`, `borderRadius`, `boxShadow`, `outline`, `opacity`, `mixBlendMode`,
-  `clipPath`, `maskImage`.
-- Transforms: `transform`, `translate`, `rotate`, `scale`, `transformOrigin`, and 3D ones
-  with `perspective`.
-- Filters: `filter` and `backdropFilter`: `blur`, `brightness`, `contrast`, `grayscale`,
-  `hue-rotate`, `invert`, `saturate`, `sepia`, `drop-shadow`, `opacity`, plus Valle's
-  `bloom`, `displacement`, `film-grain`, `chromatic-aberration`, `lens-distortion` and
-  `radial-blur`, documented below.
-- Text: `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `lineHeight`, `letterSpacing`,
-  `textAlign`, `textTransform`, `textDecoration`, `textShadow`, `WebkitTextStroke`,
-  `fontVariationSettings`, `whiteSpace`.
-- `motionBlur: "auto"`: blur along the element's movement.
-
-CSS properties accept `inherit`, `initial` and `unset`, including shorthands.
-`inherit` copies the parent's computed value (for example, `2em` padding on a
-20px parent becomes 40px); `initial` uses the property's CSS initial value;
-`unset` inherits inherited properties and resets the others. Later declarations
-override earlier shorthand longhands as usual. This does not enable otherwise
-unsupported layout modes: `display: initial` means inline and therefore still
-requires a flex/grid parent, an out-of-flow box, or an Image/SVG inside a Text paragraph. `boxSizing: initial` means
-`content-box`, although Valle's default element style is `border-box`.
-
-Not supported: CSS variables (use JavaScript constants), `@keyframes` and CSS transitions
-(animate with values over time), `position: sticky`, hover and other states. An
-unsupported property or class is an error that says so.
-
-`vectorEffect="non-scaling-stroke"` keeps stroke widths and dash lengths in the outer
-SVG viewport units through SVG transforms and viewBox scaling. It is not inherited:
-set it on each shape. Ordinary CSS transforms outside the SVG still transform the
-complete SVG image. `none` restores normal scaling.
-
-SVG shapes and groups accept CSS `transform`, `translate`, `rotate`, `scale`,
-`transformOrigin` and `transformBox`. CSS `transform` overrides the SVG `transform`
-attribute, including `"none"`. SVG child elements default to an origin of `0 0`.
-Use `transformBox: "fill-box", transformOrigin: "center"` to rotate a shape about
-its own center; `"stroke-box"` includes its stroke, and `"view-box"` uses the SVG
-viewport. On SVG children, `"content-box"` means `"fill-box"` and `"border-box"`
-means `"stroke-box"`. Values can be time expressions, just like other styles.
-
-SVG shapes and groups also accept `filter`, `mixBlendMode` and `isolation`. A filter
-processes the whole element/group before its clip path and mask; opacity and blending
-then apply to that result. `isolation: "isolate"` keeps descendant blends inside the
-group. The outer SVG isolates its contents from the page. CSS filter functions use
-SVG user units and follow the element's transform. SVG descendants can also use
-`filter="url(#id)"` to reference a local SVG filter graph (see below).
-
-`color-mix()` can include `currentColor`, including nested mixtures. It works in
-backgrounds, borders, outlines, gradients, shadows, text paints, and SVG fill,
-stroke and gradient stops. For example:
-
-```tsx
-<View style={{ color: "#2563eb", background: "color-mix(in srgb, currentColor 15%, white)" }} />
-```
-
-Inherited mixtures use the consuming element's `color`. When `color` itself
-contains a mixture with `currentColor`, that reference uses the inherited color.
-Mixing supports the same color spaces, hue directions and alpha weighting as
-constant `color-mix()` values; a color has to be resolved before it is passed to
-standalone color-interpolation helpers outside an element.
-
-### Responsive curve clipping
-
-`clipPath: "shape(…)"` describes curves in CSS lengths, percentages and `calc()`.
-Unlike `path()`, percentages follow the chosen reference box when its size changes.
-The shape begins with `from` and a position, then comma-separated commands:
-`move`, `line`, `hline`, `vline`, `curve`, `smooth`, `arc` and `close`.
-Use `to` for absolute coordinates and `by` for relative lengths. A `curve` takes
-one quadratic control point or two cubic controls separated by `/`, after `with`.
-Controls can explicitly use `from start`, `from end` or `from origin`.
-
-```tsx
-<View
-  style={{
-    width: 240,
-    height: 140,
-    background: "royalblue",
-    clipPath:
-      "shape(from 0 30%, curve to 100% 30% with 25% 0 / 75% 60%, line to 100% 100%, line to 0 100%, close)",
-  }}
-/>
-```
-
-`arc to … of …` takes one or two radii, optional `cw`/`ccw`, `large`/`small`,
-and `rotate <angle>`. A single percentage radius uses the box's normalized diagonal;
-two use its width and height. Prefix `evenodd` before `from` for holes. Append
-`padding-box` or `content-box` to change the reference box; the default is
-`border-box`. Animate the string's numeric values or the element's dimensions with
-the usual time expressions. This implements clipping, not `shape-outside` text flow.
-
-The same `shape(…)` syntax works in `offsetPath`. Its percentages use the containing
-block's reference box, optionally `border-box`, `padding-box` or `content-box`.
-Animate `offsetDistance` to move along it; `offsetRotate: "auto"` follows the tangent
-and `offsetAnchor` chooses the point on the moving element. Unlike clipping, an
-open path stays open: distances clamp at its ends; a closed path wraps.
-
-Font sizes accept `xx-small`, `x-small`, `small`, `medium`, `large`, `x-large`,
-and `xx-large`, mapped to 9, 10, 13, 16, 18, 24, and 32px. `larger` multiplies
-the parent computed size by 1.2; `smaller` divides it by 1.2. These keywords also
-work in the `font` shorthand and resolve before `em`, `ex`, and line heights.
-
 `fontVariantPosition: "sub"` or `"super"` uses native OpenType variants when
 every character in the run has one. Otherwise the entire run uses synthesized
 smaller glyphs, preserving computed font size, line height and authored indices.
 Synthesis does not accumulate through inherited spans. Font-size adjustment and
 vertical text also apply to these glyphs.
 
-### Inline text boxes
+## Inline text boxes
 
 `Span` accepts CSS background, padding and border properties, including gradients
 and rounded borders. Inline padding and border widths participate in line breaking;
@@ -347,7 +480,7 @@ A normal block View and absolute/fixed boxes directly inside a paragraph are
 rejected. Put independently positioned content beside the Text, or inside an
 inline View. A Span itself remains a styled text run, not an independent box.
 
-### Vertical text
+## Vertical text
 
 On `Text`, set `writingMode: "vertical-rl"` (columns run right to left) or
 `"vertical-lr"` (left to right). `"horizontal-tb"` is the default. A vertical
@@ -394,7 +527,7 @@ and receives one emphasis mark. Nested box boundaries interrupt an inherited
 combination; use separate explicit spans for separate cells. The Level 4 `digits`
 value is not supported.
 
-### Emphasis marks
+## Emphasis marks
 
 `Text` and `Span` support `textEmphasis`, `textEmphasisStyle`, `textEmphasisColor`
 and `textEmphasisPosition`. Marks inherit, stay upright in vertical text, and
@@ -417,7 +550,7 @@ and text clips. Adjacent lines gain space when necessary; marks on the first and
 last lines can extend outside the text box. Use explicit roomy `lineHeight` when
 matching layouts across browsers, whose annotation spacing and mark fonts differ.
 
-### Text direction
+## Text direction
 
 `direction: "ltr" | "rtl"` inherits through boxes and text. It sets the inline
 start/end sides, flex/grid order, logical padding/margin/inset/border properties
@@ -442,7 +575,7 @@ new built-in fallback fonts. Source character offsets remain unchanged by the
 internal bidi controls. SVG also accepts these properties; its logical character
 positions and directional anchors are described under SVG text.
 
-### Paragraph alignment and wrapping
+## Paragraph alignment and wrapping
 
 `textAlignLast` sets alignment on the last line of each paragraph, including a line
 before a preserved newline: `"auto"` (default), `"start"`, `"end"`, `"left"`,
@@ -467,7 +600,64 @@ All three properties inherit and also apply to vertical text columns.
 </Text>
 ```
 
-### Nested SVG viewports
+## Responsive curve clipping
+
+`clipPath: "shape(…)"` describes curves in CSS lengths, percentages and `calc()`.
+Unlike `path()`, percentages follow the chosen reference box when its size changes.
+The shape begins with `from` and a position, then comma-separated commands:
+`move`, `line`, `hline`, `vline`, `curve`, `smooth`, `arc` and `close`.
+Use `to` for absolute coordinates and `by` for relative lengths. A `curve` takes
+one quadratic control point or two cubic controls separated by `/`, after `with`.
+Controls can explicitly use `from start`, `from end` or `from origin`.
+
+```tsx
+<View
+  style={{
+    width: 240,
+    height: 140,
+    background: "royalblue",
+    clipPath:
+      "shape(from 0 30%, curve to 100% 30% with 25% 0 / 75% 60%, line to 100% 100%, line to 0 100%, close)",
+  }}
+/>
+```
+
+`arc to … of …` takes one or two radii, optional `cw`/`ccw`, `large`/`small`,
+and `rotate <angle>`. A single percentage radius uses the box's normalized diagonal;
+two use its width and height. Prefix `evenodd` before `from` for holes. Append
+`padding-box` or `content-box` to change the reference box; the default is
+`border-box`. Animate the string's numeric values or the element's dimensions with
+the usual time expressions. This implements clipping, not `shape-outside` text flow.
+
+The same `shape(…)` syntax works in `offsetPath`. Its percentages use the containing
+block's reference box, optionally `border-box`, `padding-box` or `content-box`.
+Animate `offsetDistance` to move along it; `offsetRotate: "auto"` follows the tangent
+and `offsetAnchor` chooses the point on the moving element. Unlike clipping, an
+open path stays open: distances clamp at its ends; a closed path wraps.
+
+## SVG elements
+
+`vectorEffect="non-scaling-stroke"` keeps stroke widths and dash lengths in the outer
+SVG viewport units through SVG transforms and viewBox scaling. It is not inherited:
+set it on each shape. Ordinary CSS transforms outside the SVG still transform the
+complete SVG image. `none` restores normal scaling.
+
+SVG shapes and groups accept CSS `transform`, `translate`, `rotate`, `scale`,
+`transformOrigin` and `transformBox`. CSS `transform` overrides the SVG `transform`
+attribute, including `"none"`. SVG child elements default to an origin of `0 0`.
+Use `transformBox: "fill-box", transformOrigin: "center"` to rotate a shape about
+its own center; `"stroke-box"` includes its stroke, and `"view-box"` uses the SVG
+viewport. On SVG children, `"content-box"` means `"fill-box"` and `"border-box"`
+means `"stroke-box"`. Values can be time expressions, just like other styles.
+
+SVG shapes and groups also accept `filter`, `mixBlendMode` and `isolation`. A filter
+processes the whole element/group before its clip path and mask; opacity and blending
+then apply to that result. `isolation: "isolate"` keeps descendant blends inside the
+group. The outer SVG isolates its contents from the page. CSS filter functions use
+SVG user units and follow the element's transform. SVG descendants can also use
+`filter="url(#id)"` to reference a local SVG filter graph (see below).
+
+## Nested SVG viewports
 
 An `<svg>` inside another SVG establishes its own viewport. `x` and `y` place it
 in the parent; `width` and `height` default to 100% of the parent viewport and can
@@ -541,7 +731,7 @@ not from the element being painted or the gradient named by `href`. It controls
 both linear and radial gradient stop interpolation, including translucent stops;
 `colorInterpolationFilters` controls filter operations separately.
 
-### SVG patterns
+## SVG patterns
 
 Use `<pattern id="dots" width={20} height={20} patternUnits="userSpaceOnUse">`
 inside `<defs>`, then `fill="url(#dots)"` or `stroke="url(#dots)"`. Its children
@@ -567,7 +757,7 @@ to show artwork outside that viewport; `hidden` clips it. This does not change
 the marker's `viewBox`, reference point, orientation or scaling with stroke width.
 CSS style overrides the presentation attribute.
 
-### SVG text
+## SVG text
 
 SVG text accepts `writingMode="vertical-rl"` / `"vertical-lr"` and
 `style={{ textOrientation: "mixed" }}` / `"upright"` / `"sideways"`.
@@ -673,7 +863,7 @@ The referenced region intersects that silhouette before it is combined with
 the other children. Transforms and `objectBoundingBox` coordinates apply in
 each reference's own space. Cyclic clipping references produce an empty clip.
 
-### SVG filter graphs
+## SVG filter graphs
 
 Define `<filter id="…">` inside `<defs>` and apply `filter="url(#…)"` to an SVG
 shape or group. Both inline SVG and SVG files support these primitives:
@@ -768,12 +958,54 @@ URL/function lists, `BackgroundImage`/`BackgroundAlpha`,
 blur
 edge modes other than `none`. These produce errors rather than a partial effect.
 
+## Never supported
+
+A video has no interaction, scrolling or document, and a frame depends on nothing but the
+time. So these are errors, with what to write instead:
+
+| What                                                                                                                                             | Instead                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| `@keyframes`, `animation*`, `transition*`                                                                                                        | Compute values from the time: `interpolate`, `spring`                     |
+| `:hover`, `:focus` and other states; `cursor`, `pointerEvents`, `userSelect`, `touchAction`, `resize`, `caretColor`, `accentColor`, `appearance` | Remove them                                                               |
+| `position: sticky`, `scroll*`, `overscroll*`, `backgroundAttachment`                                                                             | `overflow: "hidden"`, and translate to move content                       |
+| `float`, `clear`, `columns` and `column*`, tables, `breakBefore`/`After`/`Inside`                                                                | Flex or grid layout                                                       |
+| `listStyle*`, `counter*`, `content`                                                                                                              | Flex or grid layout; make markers and numbers in JS; put text in a `Text` |
+| CSS variables (`--name`)                                                                                                                         | JavaScript constants                                                      |
+| `willChange`, `contain`, `contentVisibility`                                                                                                     | Remove them: the engine needs no hints                                    |
+| `borderImage*`                                                                                                                                   | A border with a gradient background, or an `Image`                        |
+| `zoom`                                                                                                                                           | `scale`                                                                   |
+| System font keywords such as `caption`                                                                                                           | Declare the font as a resource                                            |
+
+## Not yet supported
+
+These are CSS or SVG that Valle could take but does not in this version:
+
+- Values: `revert`, `revert-layer` and the `all` shorthand; `ch` and `lh` units; container
+  units and container queries; `image-set()` and `cross-fade()`.
+- Layout: `display: contents`, `flow-root`, `table` and `list-item`; subgrid and masonry;
+  `visibility: collapse` lays nothing out differently from `hidden`; `overflow` `auto` and
+  `scroll`.
+- Text: `boxDecorationBreak: "clone"`, the `sideways-rl` and `sideways-lr` writing modes,
+  `textCombineUpright: "digits"`, `textDecorationThickness: "from-font"`, `xxx-large`,
+  feature-value functions such as `stylistic()`, hanging and each-line `textIndent`.
+- Paint: `plus-darker`, `imageRendering: "crisp-edges"`, SVG files as `maskImage`.
+- SVG: filter URLs on CSS boxes or the outer `svg`, lists of filter URLs and functions,
+  `BackgroundImage` and `BackgroundAlpha`, blur edge modes other than `none`; `context-fill`
+  and `context-stroke`; interactive pseudo-classes, at-rules and media queries in SVG
+  stylesheets.
+
+## Motion blur
+
+`motionBlur: "auto"` in `style` blurs an element along its own movement during the frame.
+`Shutter` instead draws several sub-frame samples of its children; it costs more and also
+blurs what changes other than position.
+
 ## Valle filters
 
 Use these in `style.filter` for the element and its children, or `style.backdropFilter`
 for the picture behind its box. Functions run from left to right; separate functions and
-their arguments with spaces, not commas. These six functions are Valle extensions, not
-browser CSS.
+their arguments with spaces, not commas. These six functions are Valle's own,
+not browser CSS.
 
 Lengths below take `px`, such as `2px`, not `2`, `2em` or `20%`. A unitless `0` is accepted
 where the range includes zero. Lengths are layout pixels and scale with the output size.
@@ -922,145 +1154,6 @@ keys. Use `textureDimensions(texture)` when you need a supplied image's dimensio
 can differ from the layer's size. Time is not an implicit shader global; pass `seconds`
 through `uniforms` when needed.
 
-## Animation
-
-Animate by computing values from the time:
-
-```tsx
-const { seconds } = useCurrentTime();
-const x = interpolate(seconds, [0, 1, 2], [0, 400, 300], { easing: "ease-in-out" });
-const tint = interpolate(seconds, [0, 2], ["#22d3ee", "#a855f7"], { colorSpace: "oklch" });
-const pop = spring(seconds - 0.5, { preset: "bouncy" });
-```
-
-- `interpolate(t, inputs, outputs, options)` maps rising `inputs` to `outputs`: numbers,
-  colors, lengths (`"24px"`) or angles (`"90deg"`). Options: `easing` (CSS easing or a named
-  preset below), `colorSpace`, `hue`, `extrapolateLeft` and
-  `extrapolateRight` (`clamp`, the default, or `extend`).
-- `spring(t, options)` goes from 0 to 1 like a spring: `preset`, or `duration` and
-  `bounce`, or `mass`, `stiffness`, `damping`; `springVelocity` gives its speed.
-- `defineSequence({ name: { at, duration } | { after, overlap, delay, duration } })` lays out
-  stages in time; `stageProgress(t, stage)` and `staggerProgress(t, stage, index, gap)` give
-  their 0 to 1 progress.
-- `wiggle(t, { seed, frequency, amplitude })`, `wiggle2D`, `noise1d`, `noise2d`,
-  `seededRandom(seed, count, [low, high])` for organic movement.
-- `freezeTime`, `pingPong`, `repeatProgress`, `yoyoProgress`, `clamp`, `mod` reshape time.
-- `<Text split="char" perUnit={(unit) => style}>` (or `"word"`, `"line"`) with
-  `rangeSelector(unit, { start, end, softness, shape })` animates text unit by unit; a split
-  `Text` holds plain text, no `Span`s.
-
-For movement, animate `transform` or `translate`, and keep the layout still: animating
-`left`, `top` or margins moves the layout itself, which is slower and can step.
-
-### Easing presets
-
-`easing` accepts CSS keywords such as `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`,
-`step-start` and `step-end`, as well as `cubic-bezier(…)`, `steps(…)` and `linear(…)`.
-It also accepts these 33 case-sensitive preset names:
-
-- `easeIn`, `easeOut`, `easeInOut`: aliases for `ease-in`, `ease-out`, `ease-in-out`.
-- `easeIn` / `easeOut` / `easeInOut` followed by any family below, such as `easeOutCubic`
-  or `easeInOutElastic`. `In` eases into movement, `Out` eases into the end, and `InOut`
-  eases both ends.
-
-| Family                            | Motion                                                    |
-| --------------------------------- | --------------------------------------------------------- |
-| `Sine`                            | Gentle acceleration and deceleration                      |
-| `Quad`, `Cubic`, `Quart`, `Quint` | Progressively stronger acceleration and deceleration      |
-| `Expo`                            | An abrupt start or finish to the change in speed          |
-| `Circ`                            | Circular-arc-style acceleration and deceleration          |
-| `Back`                            | Pulls back before starting, or overshoots before settling |
-| `Elastic`                         | Oscillates around the endpoint                            |
-| `Bounce`                          | Bounces toward the endpoint                               |
-
-```tsx
-const x = interpolate(seconds, [0, 1], [0, 400], { easing: "easeOutCubic" });
-```
-
-`easeOutCubic` is the same preset as `cubic-bezier(0.33, 1, 0.68, 1)`. These names select
-fixed approximations, not exact evaluations of the named mathematical functions: the
-first eight families use cubic Béziers, and `Elastic`/`Bounce` use `linear()` curves with
-41 evenly spaced samples rounded to three decimal places. Back and Elastic can go below
-0 or above 1. Presets are resolved when parsed, not looked up each frame. Timeline keyframes
-accept the same names, including audio gain and pan automation.
-
-## Text and fonts
-
-`font` accepts the CSS shorthand, for example `font: "italic 700 24px/1.4 sans-serif"`.
-Give a size and family; style, small caps, weight, stretch and line height are
-optional. Omitted font longhands reset to their defaults. Later longhands can
-override the shorthand. Family names remain case-sensitive resource names;
-quote names containing spaces. System UI font keywords such as `caption` are
-not supported: declare the font resource explicitly.
-
-Built-in fonts, used without declaring them: Noto Sans (the default, and `sans-serif`), Noto
-Serif (`serif`), Noto Sans Mono (`monospace`), Noto Sans SC and KR for Chinese and Korean, and
-Noto Color Emoji. They are downloaded once into the cache on first use.
-
-Other fonts are resources of kind `font`, used by their name in `fontFamily`:
-
-```tsx
-export const controls = {
-  resources: {
-    brand: resource({ kind: "font", default: ["fonts/Inter-Regular.ttf", "fonts/Inter-Bold.ttf"] }),
-  },
-};
-// style={{ fontFamily: "brand", fontWeight: 700 }}
-```
-
-`measureText` and `textOutline` measure text and give its outline as a path.
-
-## Controls
-
-`controls` declares what can be bound from outside: by `--props`, `--data` and `--resource`
-on the command line, by a timeline clip, and by Studio's form.
-
-```tsx scene card.motion.tsx
-export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-
-export const controls = {
-  props: {
-    title: string({ default: "Quarterly results", label: "Title" }),
-    accent: color({ default: "#f97316" }),
-    size: number({ default: 64, min: 12, max: 160, step: 1 }),
-  },
-  data: {
-    rows: {
-      default: [
-        { label: "A", value: 3 },
-        { label: "B", value: 5 },
-      ],
-    },
-  },
-};
-
-export default function Card({ title, accent, size, rows }) {
-  return (
-    <View style={{ width: 640, height: 360, padding: 32, backgroundColor: "#0f172a", gap: 12 }}>
-      <Text style={{ fontSize: size, color: accent }}>{title}</Text>
-      {rows.map((row) => (
-        <Text key={row.label} style={{ fontSize: 28, color: "white" }}>
-          {row.label}: {row.value}
-        </Text>
-      ))}
-    </View>
-  );
-}
-```
-
-- Prop kinds: `number`, `string`, `boolean`, `color`, `select({ values })`, `point`,
-  `length`, `angle`, `rect`. Each takes `default`, `label`, and `required` for one without a
-  default.
-- `data` entries take any JSON default, such as a chart's rows. The root component receives
-  props and data as its props.
-- `resources` entries are `resource({ kind, default })`, kinds `image`, `video`, `font`,
-  `shader`, read as `resource://name` (a font by its name in `fontFamily`).
-
-```sh
-valle motion render card.motion.tsx --props '{"title":"Q3"}' --data @rows.json -o card.png
-valle motion render scene.motion.tsx --resource photo=me.jpg -o out.mp4
-```
-
 ## Shapes, paths and charts
 
 - Inline `<svg>` draws shapes; animate their attributes with values over time.
@@ -1077,25 +1170,6 @@ valle motion render scene.motion.tsx --resource photo=me.jpg -o out.mp4
   from one arrangement to another with a stagger.
 - `formatNumber(v, { decimals, grouping })`, `formatPercent` and `padNumber(v, { width })`
   format numbers the same everywhere.
-
-## Timeline roles
-
-A scene declares how a timeline uses it:
-
-```tsx
-export const role = overlay({ intro: 0.5, outro: 0.5, hold: "once" });
-```
-
-| Role                                 | Used as                                   | What it reads                                                                |
-| ------------------------------------ | ----------------------------------------- | ---------------------------------------------------------------------------- |
-| none                                 | a `motion` clip, played as it is          |                                                                              |
-| `overlay({ intro, outro, hold })`    | a title or lower third of any length      | its intro and outro keep their length; `hold` is `once`, `loop` or `stretch` |
-| `transition()`                       | a timeline `motion` transition            | `<Image src="input://from">` and `input://to`                                |
-| `effect()`                           | a clip's `effects`, or an adjustment clip | `input://source`: the clip, or all under it                                  |
-| `captionPresenter({ intro, outro })` | a caption track's `presenter`             | its `caption` prop: `{ text, runs }`                                         |
-
-A transition or an effect fills its composition with what it reads and draws over it; use
-`clipProgress` for how far it is.
 
 ## Not in this version
 

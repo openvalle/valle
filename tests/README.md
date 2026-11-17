@@ -31,7 +31,7 @@ and UI interaction.
 ## Retained combination tests
 
 The CSS combinations are ordinary permanent cases. See the
-[coverage inventory](../docs/css.md#combination-coverage-and-gaps) for the layout,
+[coverage inventory](css-coverage.md#combination-coverage-and-gaps) for the layout,
 text, compositing and dynamic batches and their explicitly bounded factors.
 
 - Enumerate independent factors in a small TSX matrix; keep arithmetic box/line
@@ -61,7 +61,7 @@ it never updates expected images. To expand the grammar, regenerate the inputs,
 capture all three browsers, inspect differences and explicitly review any new
 baselines. Keep minimized failures as focused cases under the affected feature.
 
-Use the [CSS support and coverage inventory](../docs/css.md) to find existing
+Use the [CSS support and coverage inventory](css-coverage.md) to find existing
 evidence and missing value/combination checks. Update it when changing supported
 syntax or adding coverage; a property appearing in a scene is not itself an
 assertion that the property works.
