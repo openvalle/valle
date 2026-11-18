@@ -649,6 +649,32 @@ const PAGE = `<!doctype html>
       return error.code;
     }
   };
+  // Neither image is delivered until the worker has asked for both.
+  window.openSharedImages = async () => {
+    const entry = "batch.motion.tsx";
+    const source = 'export const composition = {width:16,height:16,fps:1,duration:1};' +
+      'export const controls = {resources:{a:resource({kind:"image",default:"a.png"}),' +
+      'b:resource({kind:"image",default:"b.png"})}}; export default function Scene(){return <View/>}';
+    const seen = [];
+    let release;
+    const both = new Promise(resolve => { release = resolve; });
+    const player = await createPlayer({
+      entry, canvas: document.createElement("canvas"), base: "/",
+      files: { [entry]: new Blob([source]) },
+      async fetch(url, init) {
+        const name = new URL(url).pathname;
+        if (name === "/a.png" || name === "/b.png") {
+          seen.push(name);
+          if (seen.length === 2) release();
+          await both;
+          return fetch("/tests/resources/svg/pixels.png");
+        }
+        return fetch(url, init);
+      },
+    });
+    await player.close();
+    return seen.sort().join(",");
+  };
   window.edited = async (entry) => {
     await window.player?.close();
     const canvas = document.createElement("canvas");
@@ -1235,6 +1261,8 @@ async function main() {
     if (!heard.sound || heard.most > 1e-6 || heard.advanced < 0.5) {
       failed.push(`sound: ${JSON.stringify(heard)}`);
     }
+    const batch = await evaluate("openSharedImages()");
+    if (batch !== "/a.png,/b.png") failed.push(`declared resource batch: ${batch}`);
     const edited = await evaluate('edited("/sound/sound.timeline.json")');
     console.log(`timeline updates and OPFS: ${JSON.stringify(edited)}`);
     if (

@@ -99,7 +99,7 @@ pub const BUILT_IN_FAMILIES: [&str; 4] = ["sans-serif", "serif", "monospace", "e
 
 /// What a resource holds: an image, an SVG file among them, a font, whose family is the
 /// resource's name, a shader's WGSL code, or a video, which the host decodes.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Holds {
     Image,
     Font,

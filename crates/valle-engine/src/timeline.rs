@@ -141,6 +141,8 @@ struct Shared {
     /// The files bound to each.
     bound: BTreeMap<String, Vec<String>>,
     origins: BTreeMap<String, String>,
+    /// Immutable resources shared by clips, including across nested timelines.
+    shared_resources: HashMap<(Holds, Vec<String>), String>,
     /// The components imported, by the name the scene gives each, and their files.
     imports: Vec<(String, String)>,
     declared: HashMap<String, Rc<Declared>>,
@@ -217,6 +219,13 @@ impl Lowering<'_> {
     /// A new resource of the scene holding `kind`, bound to `files`.
     fn resource(&mut self, kind: Holds, files: Vec<String>, origin: &str) -> String {
         let name = format!("r{}", self.s.slots.len());
+        if kind != Holds::Video {
+            let key = (kind, files.clone());
+            match self.s.shared_resources.entry(key) {
+                std::collections::hash_map::Entry::Occupied(slot) => return slot.get().clone(),
+                std::collections::hash_map::Entry::Vacant(slot) => slot.insert(name.clone()),
+            };
+        }
         self.s.slots.push((name.clone(), kind));
         self.s.bound.insert(name.clone(), files);
         self.s.origins.insert(
@@ -1625,6 +1634,34 @@ mod tests {
                 assert!(error.contains(suffix), "{error}");
             }
         }
+    }
+
+    #[test]
+    fn repeated_images_share_a_slot_and_videos_keep_their_own_decoders() {
+        let doc = Document::read(&json!({
+            "canvas": { "width": 64, "height": 64, "fps": 30 },
+            "resources": { "cover": "picture.png", "poster": "picture.png", "movie": "clip.mp4" },
+            "tracks": { "visual": [{ "items": [
+                { "id": "a", "kind": "image", "src": "cover", "duration": 1 },
+                { "id": "b", "kind": "image", "src": "poster", "duration": 1 },
+                { "id": "first", "kind": "video", "src": "movie", "duration": 1 },
+                { "id": "second", "kind": "video", "src": "movie", "duration": 1 }
+            ] }] }
+        }))
+        .unwrap();
+        let host = Host {
+            read: &|_| None,
+            length: &|_| Tick::from_seconds(5.0).ok(),
+        };
+        let lowered = lower("edit.timeline.json", &doc, &host).unwrap();
+        let files: Vec<_> = lowered
+            .inputs
+            .resources
+            .values()
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(files, ["picture.png", "clip.mp4", "clip.mp4"]);
     }
 
     fn run(test: impl FnOnce() + Send + 'static) {

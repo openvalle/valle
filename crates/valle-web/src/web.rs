@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 use valle_engine::audio::{Mixer, PagedPcm, RATE};
-use valle_engine::front::{self, Inputs, controls};
+use valle_engine::front::{self, Front, Holds, Inputs, controls};
 use valle_engine::gpu::{Gpu, Renderer};
 use valle_engine::image::Image;
 use valle_engine::mix::{self, Source};
@@ -100,6 +100,42 @@ impl Files {
             }),
             _ => Err(format!("engine bug: {file}: probed as {probed}")),
         }
+    }
+
+    /// Ask for all declared resources before decoding the first one. A known missing file
+    /// is left to the scene loader so its error still names the resource and its owner.
+    fn scene(
+        &self,
+        entry: &str,
+        read: &dyn Fn(&str) -> Option<Vec<u8>>,
+        inputs: &Inputs,
+    ) -> Result<Scene, String> {
+        let text = |p: &str| read(p).and_then(|b| String::from_utf8(b).ok());
+        let front = Front::load(entry, &text, inputs)?;
+        let mut waiting = false;
+        for slot in &front.resources {
+            for path in inputs.resources.get(&slot.name).unwrap_or(&slot.default) {
+                waiting |= match slot.kind {
+                    Holds::Video => self.request(&format!("{VIDEO_INFO}{path}")),
+                    _ => self.request(path),
+                };
+            }
+        }
+        if waiting {
+            return Err("resources not loaded yet".into());
+        }
+        let mut scene = Scene::from_front(front, entry, read, inputs, self.fonts())?;
+        self.videos(&mut scene, inputs)?;
+        Ok(scene)
+    }
+
+    /// Queues a path whose existence the worker has not resolved yet.
+    fn request(&self, path: &str) -> bool {
+        if self.given.borrow().contains_key(path) || self.absent.borrow().contains(path) {
+            return false;
+        }
+        self.wanted.borrow_mut().insert(path.to_string());
+        true
     }
 
     /// Gives the scene's video resources their decoders: the worker's.
@@ -479,13 +515,10 @@ impl Engine {
                     Some(t) => Some(t.clone().into_bytes()),
                     None => read(p),
                 };
-                let mut scene =
-                    Scene::load(&lowered.entry, &read, &lowered.inputs, self.files.fonts())?;
-                self.files.videos(&mut scene, &lowered.inputs)?;
+                let scene = self.files.scene(&lowered.entry, &read, &lowered.inputs)?;
                 return Ok((scene, json!({ "props": {}, "data": {}, "resources": {} })));
             }
-            let mut scene = Scene::load(&entry, &read, &bound, self.files.fonts())?;
-            self.files.videos(&mut scene, &bound)?;
+            let scene = self.files.scene(&entry, &read, &bound)?;
             let declared = front::declared(&entry, &text)?;
             let described =
                 controls::describe(&declared.props, &declared.data, &declared.resources);

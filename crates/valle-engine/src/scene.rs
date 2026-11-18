@@ -113,6 +113,17 @@ impl Scene {
     ) -> Result<Scene, Error> {
         let text = |path: &str| read(path).and_then(|b| String::from_utf8(b).ok());
         let front = Front::load(entry, &text, inputs)?;
+        Self::from_front(front, entry, read, inputs, fonts)
+    }
+
+    /// Finishes loading a scene once its declared resource files are available.
+    pub fn from_front(
+        front: Front,
+        entry: &str,
+        read: &dyn Fn(&str) -> Option<Vec<u8>>,
+        inputs: &Inputs,
+        fonts: Fonts,
+    ) -> Result<Scene, Error> {
         let mut images = Vec::new();
         let mut pictures = Vec::new();
         let mut text = Text::new(fonts.clone());
