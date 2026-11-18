@@ -578,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    fn components_keep_to_their_folders() {
+    fn components_can_share_files_inside_the_project() {
         let scene =
             |import: &str| format!("{import}\nexport default function C() {{ return null; }}\n");
         let p = project(
@@ -586,7 +586,7 @@ mod tests {
             json!({
                 "lone": "components/lone.motion.tsx",
                 "inside": "components/ok/ok.motion.tsx",
-                "outside": "components/bad/bad.motion.tsx",
+                "shared": "components/shared/title.motion.tsx",
                 "gone": "media/gone.mp4",
                 "web": "https://example.com/a.png",
             }),
@@ -602,17 +602,27 @@ mod tests {
         );
         put(&p.root.join("components/ok/k.ts"), "export const K = 1;\n");
         put(
-            &p.root.join("components/bad/bad.motion.tsx"),
+            &p.root.join("components/shared/title.motion.tsx"),
             &scene("import { K } from \"../k\";"),
+        );
+        let (problems, _) = p.check("main.timeline.json").expect("checked");
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        p.add(&[p.root.join("components/lone.motion.tsx")], false)
+            .expect("reuse project component");
+        let outside = p.root.parent().unwrap().join("shared.ts");
+        put(&outside, "export const Shared = 1;");
+        put(
+            &p.root.join("components/k.ts"),
+            "import { Shared } from \"../../shared.ts\"; export const K = Shared;",
         );
         let (problems, external) = p.check("main.timeline.json").expect("checked");
         let has = |what: &str| problems.iter().any(|m| m.contains(what));
         assert!(
-            has("components/lone.motion.tsx reads components/k.ts"),
+            has("components/lone.motion.tsx reads") && has("outside the project"),
             "{problems:?}"
         );
         assert!(
-            has("components/bad/bad.motion.tsx reads components/k.ts"),
+            has("components/shared/title.motion.tsx reads"),
             "{problems:?}"
         );
         assert!(

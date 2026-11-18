@@ -1,6 +1,6 @@
 //! `valle project show` and the project's part of `valle project check`: the timelines, the
 //! files their resources name, which of those are out of the project or missing, and whether
-//! each component keeps to its folder.
+//! components read local files from the project.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -142,7 +142,7 @@ impl Project {
     }
 
     /// What is wrong with the timeline at `rel` and the timelines it nests, that the project
-    /// sees: missing files and components out of their folders; and its external files.
+    /// sees: missing files and component dependencies outside the project; and its external files.
     pub fn check(&self, rel: &str) -> Result<(Vec<String>, Vec<Value>), Error> {
         let (mut problems, mut external) = (Vec::new(), Vec::new());
         let doc = self.document(rel)?;
@@ -167,47 +167,33 @@ impl Project {
         Ok((problems, external))
     }
 
-    /// A component in `components/` keeps to its folder: a lone file reads nothing of its own,
-    /// and one in a folder reads only what is in it, so it can be copied to another project.
+    /// Components can share project files. An implicit local dependency outside the project
+    /// would be lost when the project is moved.
     fn boundary(&self, component: &str) -> Vec<String> {
-        let Some(rest) = component.strip_prefix("components/") else {
-            return Vec::new();
-        };
-        let root = self.root.to_string_lossy().replace('\\', "/");
-        let entry = format!("{root}/{component}");
+        let entry = self
+            .root
+            .join(component)
+            .to_string_lossy()
+            .replace('\\', "/");
         let read = |p: &str| fs::read_to_string(p).ok();
         let files = match valle_engine::front::files(&entry, &read) {
             Ok(files) => files,
             Err(e) => return vec![e],
         };
-        let shown = |f: &str| {
-            let full = absolute(Path::new(f));
-            self.relative(&full).unwrap_or_else(|| f.to_string())
-        };
-        let mut problems = Vec::new();
-        match rest.split_once('/') {
-            None => {
-                if let Some(f) = files.iter().find(|f| **f != entry) {
-                    problems.push(format!(
-                        "{component} reads {}: a lone component file reads nothing of its own; \
-                         make it a folder, components/{}/, with what it reads",
-                        shown(f),
-                        rest.trim_end_matches(".motion.tsx")
-                    ));
-                }
-            }
-            Some((folder, _)) => {
-                let within = format!("{root}/components/{folder}/");
-                for f in files.iter().filter(|f| !f.starts_with(&within)) {
-                    problems.push(format!(
-                        "{component} reads {}, out of its folder components/{folder}/: a \
-                         component reads only its own files; a timeline binds the project's \
-                         media to its resources",
-                        shown(f)
-                    ));
-                }
-            }
-        }
-        problems
+        let root = self
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| self.root.clone());
+        files
+            .into_iter()
+            .filter_map(|file| {
+                let path = Path::new(&file);
+                let inside = path.canonicalize().map_or_else(
+                    |_| self.relative(path).is_some(),
+                    |target| target.starts_with(&root),
+                );
+                (!inside).then(|| format!("{component} reads {file}, outside the project"))
+            })
+            .collect()
     }
 }

@@ -106,7 +106,7 @@ impl Project {
             true => top_level_component(source).is_some(),
             false => name.ends_with(".motion.tsx"),
         };
-        if component && !meta.is_dir() {
+        if component && !meta.is_dir() && self.relative(source).is_none() {
             lone(source)?;
         }
         if link {

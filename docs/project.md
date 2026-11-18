@@ -30,7 +30,8 @@ valle project add /Volumes/shoot --link                # left where they are
 `add` copies each file in, or with `--link` refers to it where it is, and names it in the
 entry timeline's `resources`, by its file name without the extension (`title.motion.tsx` is
 `title`; a second `title` is `title-2`). A file already in the project is reused. Clips then
-use that name: `"src": "intro"` for footage, `"component": "title"` for a scene.
+use that name: `"src": "intro"` for footage, `"component": "title"` for a scene. When
+copying a component from another project, add its folder if it needs accompanying files.
 
 For local video and audio files, `add` and `show` include `media`: source `duration` in
 seconds, display `width` and `height` after rotation, rational `fps` as text (for example
@@ -44,11 +45,12 @@ downloaded just to display their metadata.
 
 ```sh
 valle project show            # timelines, resources, files out of the project or missing, snapshots
-valle project check           # the entry timeline, its files and its components' folders
+valle project check           # the entry timeline, its files and component dependencies
 valle project check timelines/teaser.timeline.json --cost   # plan every frame too
 ```
 
-`check` reports missing files and component boundaries, validates the timeline and requires
+`check` reports missing files and local component dependencies outside the project. Components can
+import shared modules and use assets anywhere inside the project. The command validates the timeline and requires
 an audio stream for audio-track sources, including nested timelines. It warns about tagged
 HDR footage. `--cost` also checks every frame and retains those warnings in both text and
 `warnings` in JSON. Fix reported problems and check again.
