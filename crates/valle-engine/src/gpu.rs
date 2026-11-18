@@ -625,7 +625,7 @@ pub struct Renderer<'a> {
     mapping: Matrix,
     frame: Surface,
     output: Surface,
-    readback: wgpu::Buffer,
+    readback: Option<wgpu::Buffer>,
     screen: wgpu::Buffer,
     transforms: Store,
     rects: Store,
@@ -662,6 +662,16 @@ pub struct Renderer<'a> {
 }
 
 impl<'a> Renderer<'a> {
+    /// Face indices belong to a scene. Keep textures and stores when replacing a scene,
+    /// but discard glyphs if those indices now name different faces.
+    pub fn reset_glyphs(&mut self) {
+        self.atlas_len = [0, 0];
+        self.outlines.clear();
+        self.colored.clear();
+        self.colors.clear();
+        self.used.clear();
+    }
+
     /// The bytes of GPU memory the renderer holds: its stores, its frame and output textures,
     /// its layers and the images it shows.
     pub fn bytes(&self) -> u64 {
@@ -686,7 +696,7 @@ impl<'a> Renderer<'a> {
                 * s.texture.format().block_copy_size(None).unwrap_or(4) as u64
         };
         stores.iter().map(|s| s.buffer.size()).sum::<u64>()
-            + self.readback.size()
+            + self.readback.as_ref().map_or(0, wgpu::Buffer::size)
             + textures.map(texture).sum::<u64>()
     }
 
@@ -694,12 +704,6 @@ impl<'a> Renderer<'a> {
         let device = &gpu.device;
         let size = [width, height];
         let frame = Surface::new(gpu, texture(device, size, WORK));
-        let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"),
-            size: u64::from(row(width) * height),
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         let screen = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("screen"),
             size: 16,
@@ -715,7 +719,7 @@ impl<'a> Renderer<'a> {
             mapping: Matrix::IDENTITY,
             frame,
             output: Surface::new(gpu, texture(device, size, OUTPUT)),
-            readback,
+            readback: None,
             screen,
             transforms: Store::new(device, "transforms"),
             rects: Store::new(device, "rects"),
@@ -893,10 +897,18 @@ impl<'a> Renderer<'a> {
         mapped: impl FnOnce(Result<(), wgpu::BufferAsyncError>) + wgpu::WasmNotSend + 'static,
     ) {
         let [width, height] = self.size;
+        let readback = self.readback.get_or_insert_with(|| {
+            self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("RGBA readback"),
+                size: u64::from(row(width)) * u64::from(height),
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
         encoder.copy_texture_to_buffer(
             self.output.texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
-                buffer: &self.readback,
+                buffer: readback,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(row(width)),
@@ -906,23 +918,23 @@ impl<'a> Renderer<'a> {
             self.output.texture.size(),
         );
         self.gpu.queue.submit([encoder.finish()]);
-        self.readback.map_async(wgpu::MapMode::Read, .., mapped);
+        readback.map_async(wgpu::MapMode::Read, .., mapped);
     }
 
     /// The frame copied back: straight sRGB, 4 bytes a pixel, rows top down.
     pub fn pixels(&mut self) -> Result<Vec<u8>, Error> {
         let [width, height] = self.size;
+        let readback = self.readback.as_ref().ok_or("no RGBA frame to read")?;
         let mut pixels = Vec::with_capacity((width * height * 4) as usize);
         {
-            let view = self
-                .readback
+            let view = readback
                 .get_mapped_range(..)
                 .map_err(|e| format!("engine bug: readback: {e}"))?;
             for line in view.chunks(row(width) as usize) {
                 pixels.extend_from_slice(&line[..(width * 4) as usize]);
             }
         }
-        self.readback.unmap();
+        readback.unmap();
         Ok(pixels)
     }
 
@@ -973,6 +985,19 @@ impl<'a> Renderer<'a> {
         images: &[Image],
         [luma, chroma]: [&wgpu::TextureView; 2],
     ) -> Result<wgpu::SubmissionIndex, Error> {
+        let encoder = self.encode_planes(items, pictures, faces, images, [luma, chroma])?;
+        Ok(self.gpu.queue.submit([encoder.finish()]))
+    }
+
+    /// Records the same NV12 passes as native export, so a host can append copies before submission.
+    pub fn encode_planes(
+        &mut self,
+        items: &[Item],
+        pictures: &[(u32, Vec<Item>)],
+        faces: &[Face],
+        images: &[Image],
+        [luma, chroma]: [&wgpu::TextureView; 2],
+    ) -> Result<wgpu::CommandEncoder, Error> {
         let mut encoder = self.encode_frame(items, pictures, faces, images)?;
         if let Some(draw) = &self.draw {
             for (view, pipeline) in [(luma, &self.gpu.luma), (chroma, &self.gpu.chroma)] {
@@ -983,7 +1008,7 @@ impl<'a> Renderer<'a> {
                 pass.draw(0..3, 0..1);
             }
         }
-        Ok(self.gpu.queue.submit([encoder.finish()]))
+        Ok(encoder)
     }
 
     /// Submits the pictures boxes draw, and encodes drawing the frame into the output.

@@ -505,7 +505,7 @@ const PAGE = `<!doctype html>
   import "/web/packages/engine/dist/element.js";
   /** The files players fetched through the page's \`fetch\`. */
   window.fetched = 0;
-  const fetching = (url) => (window.fetched++, fetch(url));
+  const fetching = (url, init) => (window.fetched++, fetch(url, init));
   /** The pixels of a frame the native engine drew. */
   const decoded = async (url) => {
     const bitmap = await createImageBitmap(await (await fetch(url)).blob(), {
@@ -649,6 +649,136 @@ const PAGE = `<!doctype html>
       return error.code;
     }
   };
+  window.edited = async (entry) => {
+    await window.player?.close();
+    const canvas = document.createElement("canvas");
+    document.querySelector("canvas").replaceWith(canvas);
+    const source = await (await fetch(entry)).json();
+    let ranges = 0;
+    let starts = 0;
+    const player = (window.player = await createPlayer({
+      canvas,
+      entry,
+      fetch(url, init) {
+        if (new Headers(init?.headers).has("Range") && new URL(url).pathname.endsWith("/tone.wav")) {
+          ranges++;
+        }
+        return fetch(url, init);
+      },
+    }));
+    player.on("play", () => starts++);
+    player.muted = true;
+    await player.draw(24);
+    const baseline = await player.renderSound(0.4, 0.2);
+    const checks = ranges;
+    const edit = structuredClone(source);
+    edit.canvas.fps = 60;
+    edit.tracks.visual[0].clips[0].color = "#ff0000ff";
+    const changed = player.updateTimeline(edit);
+    player.play();
+    await changed;
+    const at = player.currentTime;
+    const resumed = player.playing && starts === 1;
+    player.pause();
+    const [r, g, b] = await player.pixels();
+    const after = await player.renderSound(0.4, 0.2);
+    const keptAudio = baseline.every((s, i) => s === after[i]) && baseline.some((s) => s !== 0);
+    const reused = checks > 0 && ranges === checks;
+    const rejected = await player.updateTimeline(edit, {
+      files: { "/sound/tone.wav": new Blob(["broken audio"]) },
+    }).then(() => false, () => true);
+    const stillEdited = player.info.frames === 120 && (await player.pixels())[0] === r;
+    const restoredAudio = (await player.renderSound(0.4, 0.2)).every((s, i) => s === baseline[i]);
+
+    const snapshot = exportBrowserVideo(player, { target: { type: "opfs" } });
+    edit.tracks.visual[0].clips[0].duration = 1;
+    delete edit.tracks.audio;
+    await player.updateTimeline(edit);
+    const saved = await snapshot;
+    const file = await saved.fileHandle.getFile();
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.src = URL.createObjectURL(file);
+    try {
+      await new Promise((resolve, reject) => {
+        video.onloadedmetadata = resolve;
+        video.onerror = () => reject(video.error);
+      });
+      const duration = video.duration;
+      const root = await navigator.storage.getDirectory();
+      const folder = await root.getDirectoryHandle("valle-exports");
+      const abort = new AbortController();
+      const cancelled = await exportBrowserVideo(player, {
+        target: { type: "opfs" },
+        signal: abort.signal,
+        onProgress: ({ framesCompleted }) => { if (framesCompleted === 3) abort.abort(); },
+      }).then(() => false, (error) => error.code === "cancelled");
+      await saved.cleanup();
+      const empty = (await folder.keys().next()).done;
+      return { at, resumed, r, g, b, keptAudio, reused, rejected, stillEdited, restoredAudio, duration,
+        bytes: file.size, cancelled, empty, editedDuration: player.info.frames / 60 };
+    } finally {
+      video.removeAttribute("src");
+      await saved.cleanup();
+    }
+  };
+  window.mediaRegressions = async () => {
+    const entry = "/sound/surround.timeline.json";
+    const old = await (await fetch(entry)).json();
+    let downloads = 0;
+    const player = await createPlayer({
+      entry, canvas: document.createElement("canvas"),
+      fetch(url, init) {
+        if (new URL(url).pathname.endsWith("/surround.wav")) downloads++;
+        return fetch(url, init);
+      },
+    });
+    try {
+      const directory = await (await navigator.storage.getDirectory()).getDirectoryHandle("valle-inputs");
+      const countFiles = async () => { let count = 0; for await (const _ of directory.keys()) count++; return count; };
+      const stored = await countFiles();
+      const sample = async (time) => Array.from((await player.renderSound(time, 0.01)).slice(-2));
+      const first = await sample(1);
+      const late = await sample(32);
+      const back = await sample(1);
+      await player.draw(25 * 30);
+      const before = Array.from((await player.pixels()).slice(0, 4));
+      const failures = [];
+      for (const width of [old.canvas.width, old.canvas.width + 16]) {
+        const edit = structuredClone(old);
+        edit.canvas.width = width;
+        edit.resources.large = "large.motion.tsx";
+        edit.tracks.visual[0].clips = [{ kind: "motion", component: "large", duration: 1, start: 0 }];
+        delete edit.tracks.audio;
+        const error = await player.updateTimeline(edit).then(() => "", e => e.message);
+        const after = Array.from((await player.pixels()).slice(0, 4));
+        failures.push({ error, restored: player.info.duration === 40 && player.currentTime === 25 && player.info.width === old.canvas.width
+          && JSON.stringify(before) === JSON.stringify(after) && JSON.stringify(await sample(1)) === JSON.stringify(first) });
+      }
+      const previewDownloads = downloads;
+      const { blob } = await exportBrowserVideo(player, { width: 32, height: 18, frameRate: 1 });
+      const decoded = await new OfflineAudioContext(2, 1, 48000).decodeAudioData(await blob.arrayBuffer());
+      const levels = Array.from({ length: decoded.numberOfChannels }, (_, ch) => {
+        const samples = decoded.getChannelData(ch).subarray(48000, 96000);
+        return Math.sqrt(samples.reduce((sum, v) => sum + v * v, 0) / samples.length);
+      });
+      const video = document.createElement("video");
+      const url = URL.createObjectURL(blob);
+      let exportedDuration;
+      try {
+        video.src = url;
+        await new Promise((ok, fail) => { video.onloadedmetadata = ok; video.onerror = () => fail(video.error); });
+        exportedDuration = video.duration;
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+      await player.close();
+      return { first, late, back, previewDownloads, exportDownloads: downloads - previewDownloads, stored, remaining: await countFiles(), failures, exportedDuration, levels };
+    } catch (error) {
+      await player.close();
+      throw error;
+    }
+  };
   /** A <valle-player> of \`src\`, looping, playing on its own, muted: whether it plays, and how
    * its frame at 1 s differs from \`native\`'s; and whether taking it out of the page closes
    * its player. */
@@ -721,6 +851,39 @@ const SOUND = {
     audio: [{ clips: [{ src: "tone", start: 0.25, duration: 1.5, gain: 0.8 }] }],
   },
 };
+
+// A valid scene whose first GPU draw needs a texture larger than the device supports.
+const OVERSIZED = `export const composition = { width: 320, height: 180, fps: 30, duration: 1 };
+export default function Oversized() {
+  const code = "@group(2) @binding(0) var backdrop: texture_2d<f32>; fn shade(i: ShaderInput) -> vec4f { return textureLoad(backdrop, vec2i(0), 0); }";
+  return <ShaderLayer code={code} style={{ position: "absolute", width: 1000000, height: 16 }} />;
+}`;
+
+// Forty seconds of 5.1 PCM with signal in the centre speaker only.
+function surround(): Uint8Array {
+  const channels = 6;
+  const frames = 40 * 48000;
+  const size = frames * channels * 2;
+  const bytes = new Uint8Array(44 + size);
+  bytes.set(new TextEncoder().encode("RIFF"), 0);
+  bytes.set(new TextEncoder().encode("WAVEfmt "), 8);
+  bytes.set(new TextEncoder().encode("data"), 36);
+  const v = new DataView(bytes.buffer);
+  v.setUint32(4, size + 36, true);
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, channels, true);
+  v.setUint32(24, 48000, true);
+  v.setUint32(28, 48000 * channels * 2, true);
+  v.setUint16(32, channels * 2, true);
+  v.setUint16(34, 16, true);
+  v.setUint32(40, size, true);
+  for (let f = 0; f < frames; f++) {
+    const amplitude = f < 20 * 48000 ? 8192 : -8192;
+    v.setInt16(44 + (f * channels + 2) * 2, f % 480 < 240 ? -amplitude : amplitude, true);
+  }
+  return bytes;
+}
 
 /** A WAV of a sweep from `hertz` up an octave a second, for `seconds`: no two stretches of it
  * alike, so how late a copy of it is shows. Stereo 32-bit floats at 48 000 samples a second. */
@@ -836,6 +999,18 @@ async function fonts(): Promise<Map<string, string>> {
   return found;
 }
 
+function ranged(file: ReturnType<typeof Bun.file>, request: Request, headers?: HeadersInit) {
+  const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.get("range") ?? "");
+  if (!range) return new Response(file, { headers });
+  const start = Number(range[1]);
+  const end = Math.min(file.size - 1, range[2] ? Number(range[2]) : file.size - 1);
+  if (start > end) return new Response(null, { status: 416 });
+  const responseHeaders = new Headers(headers);
+  responseHeaders.set("Content-Type", file.type);
+  responseHeaders.set("Content-Range", `bytes ${start}-${end}/${file.size}`);
+  return new Response(file.slice(start, end + 1), { status: 206, headers: responseHeaders });
+}
+
 async function main() {
   const out = await mkdtemp(join(tmpdir(), "valle-player-"));
   const natives = new Map<string, string>();
@@ -884,6 +1059,26 @@ async function main() {
   const sound = join(out, "sound");
   await Bun.write(join(sound, "tone.wav"), tone(2, 440));
   await Bun.write(join(sound, "sound.timeline.json"), JSON.stringify(SOUND));
+  await Bun.write(join(sound, "large.motion.tsx"), OVERSIZED);
+  await Bun.write(join(sound, "surround.wav"), surround());
+  await Bun.write(
+    join(sound, "surround.timeline.json"),
+    JSON.stringify({
+      canvas: SOUND.canvas,
+      resources: { sound: "surround.wav" },
+      tracks: {
+        visual: [
+          {
+            clips: [
+              { kind: "solid", color: "#204060", start: 0, duration: 20 },
+              { kind: "solid", color: "#ff0077", start: 20, duration: 20 },
+            ],
+          },
+        ],
+        audio: [{ clips: [{ src: "sound", start: 0, duration: 40 }] }],
+      },
+    }),
+  );
   const mixed = Bun.spawnSync(
     [valle, "timeline", "render", join(sound, "sound.timeline.json"), "-o", join(out, "mix.wav")],
     { cwd: root, stdout: "pipe", stderr: "pipe" },
@@ -895,7 +1090,7 @@ async function main() {
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
-    fetch(request) {
+    async fetch(request) {
       const path = decodeURIComponent(new URL(request.url).pathname);
       if (path === "/") {
         return new Response(PAGE, { headers: { "content-type": "text/html; charset=utf-8" } });
@@ -905,11 +1100,15 @@ async function main() {
         const file = cached.get(font[1]);
         return file ? new Response(Bun.file(file)) : new Response("not found", { status: 404 });
       }
+      if (path === "/sound/surround.wav")
+        return new Response(
+          Bun.file(join(sound, "surround.wav")).stream().pipeThrough(new TransformStream()),
+          {
+            headers: { "Content-Type": "audio/wav" },
+          },
+        );
       if (path === "/mix.wav" || path.startsWith("/sound/") || path.startsWith("/out/")) {
-        if (path.startsWith("/out/")) {
-          return new Response(Bun.file(join(out, path.slice("/out/".length))));
-        }
-        return new Response(Bun.file(join(out, path.slice(1))));
+        return ranged(Bun.file(join(out, path.replace(/^\/(?:out\/)?/, ""))), request);
       }
       const frame = /^\/native\/(.+)$/.exec(path);
       if (frame && natives.has(frame[1])) {
@@ -925,7 +1124,7 @@ async function main() {
         return f
           .exists()
           .then((there) =>
-            there ? new Response(f, { headers: type }) : new Response("not found", { status: 404 }),
+            there ? ranged(f, request, type) : new Response("not found", { status: 404 }),
           );
       }
       return new Response("not found", { status: 404 });
@@ -1036,6 +1235,46 @@ async function main() {
     if (!heard.sound || heard.most > 1e-6 || heard.advanced < 0.5) {
       failed.push(`sound: ${JSON.stringify(heard)}`);
     }
+    const edited = await evaluate('edited("/sound/sound.timeline.json")');
+    console.log(`timeline updates and OPFS: ${JSON.stringify(edited)}`);
+    if (
+      Math.abs(edited.at - 0.8) > 0.05 ||
+      !edited.resumed ||
+      edited.r < 250 ||
+      edited.g > 1 ||
+      edited.b > 1 ||
+      !edited.keptAudio ||
+      !edited.reused ||
+      !edited.rejected ||
+      !edited.stillEdited ||
+      !edited.restoredAudio ||
+      Math.abs(edited.duration - 2) > 0.05 ||
+      !edited.bytes ||
+      !edited.cancelled ||
+      !edited.empty ||
+      edited.editedDuration !== 1
+    ) {
+      failed.push(`timeline updates and OPFS: ${JSON.stringify(edited)}`);
+    }
+    const media = await evaluate("mediaRegressions()");
+    console.log(`surround, remote seeking and failed presentation: ${JSON.stringify(media)}`);
+    if (
+      Math.abs(media.exportedDuration - 40) > 0.05 ||
+      media.levels.length !== 2 ||
+      media.levels.some((level: number) => Math.abs(level - Math.SQRT1_2 * 0.25) > 0.02) ||
+      media.previewDownloads !== 1 ||
+      media.exportDownloads !== 1 ||
+      media.stored !== 1 ||
+      media.remaining !== 0 ||
+      media.first.some((v: number) => Math.abs(v - Math.SQRT1_2 * 0.25) > 1e-5) ||
+      media.late.some((v: number) => Math.abs(v + Math.SQRT1_2 * 0.25) > 1e-5) ||
+      JSON.stringify(media.back) !== JSON.stringify(media.first) ||
+      media.failures.some(
+        (f: { error: string; restored: boolean }) =>
+          !f.error.includes("shader input exceeds this GPU's texture limit") || !f.restored,
+      )
+    )
+      failed.push(`media regressions: ${JSON.stringify(media)}`);
     // Exports: the browser's MP4s, which the native engine decodes.
     for (const [entry, file] of [
       ["examples/edit.timeline.json", "edit.mp4"],
@@ -1108,30 +1347,32 @@ async function main() {
     if (cancelled !== "cancelled") {
       failed.push(`a cancelled export: ${cancelled}`);
     }
-    // Subpixel design details must be rasterized at delivery density, not enlarged as a bitmap.
-    const detail = `export const composition = { width: 64, height: 32, fps: 2, duration: 1 };
+    // Export at 4× density. The unaligned delivery width also exercises padded NV12 rows:
+    // white subpixels test resolution, colored quadrants test both chroma channels and rows.
+    const detail = `export const composition = { width: 66, height: 32, fps: 2, duration: 1 };
 export default function Scene() {
-  return <View style={{ width: 64, height: 32, background: "black" }}>
-    {Array.from({ length: 128 }, (_, i) => <View style={{ position: "absolute", left: i / 2, top: 0, width: 0.25, height: 32, background: "white" }} />)}
+  return <View style={{ width: 66, height: 32, background: "black" }}>
+    {Array.from({ length: 64 }, (_, i) => <View style={{ position: "absolute", left: i / 2, top: 0, width: 0.25, height: 32, background: "white" }} />)}
+    {["red", "blue", "lime", "magenta"].map((background, i) => <View style={{ position: "absolute", left: 32 + i % 2 * 17, top: Math.floor(i / 2) * 16, width: 17, height: 16, background }} />)}
   </View>;
 }`;
     await Bun.write(join(out, "detail.motion.tsx"), detail);
     const detailed = await evaluate(
-      'exported("/out/detail.motion.tsx", { width: 256, height: 128, videoBitrate: 20000000 })',
+      'exported("/out/detail.motion.tsx", { width: 264, height: 128, videoBitrate: 20000000 })',
     );
     await Bun.write(join(out, "detail.mp4"), await (await fetch(detailed.url)).arrayBuffer());
     await Bun.write(
       join(out, "detail-video.motion.tsx"),
-      `export const composition = { width: 256, height: 128, fps: 2, duration: 1 };
+      `export const composition = { width: 264, height: 128, fps: 2, duration: 1 };
 export const controls = { resources: { video: resource({ kind: "video", default: "detail.mp4" }) } };
-export default function Scene() { return <Video src="resource://video" style={{ width: 256, height: 128 }} />; }`,
+export default function Scene() { return <Video src="resource://video" style={{ width: 264, height: 128 }} />; }`,
     );
     run([
       "motion",
       "render",
       join(out, "detail.motion.tsx"),
       "--output-size",
-      "256x128",
+      "264x128",
       "-o",
       join(out, "detail.png"),
     ]);
@@ -1146,7 +1387,7 @@ export default function Scene() { return <Video src="resource://video" style={{ 
     ]);
     const detailDiff = await evaluate('similar("/out/detail.png", "/out/detail-video.png")');
     console.log(`resized export detail: mean ${detailDiff.mean.toFixed(2)} apart`);
-    if (detailDiff.mean > 4) failed.push(`resized export lost subpixel detail: ${detailDiff.mean}`);
+    if (detailDiff.mean > 4) failed.push(`resized export pixels differ: ${detailDiff.mean}`);
     for (const size of [{ width: 7680, height: 4322 }, { width: 0 }, { width: 127, height: 72 }]) {
       const rejected = await evaluate(
         `exported("/out/detail.motion.tsx", ${JSON.stringify(size)}).then(() => false, () => true)`,

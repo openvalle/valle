@@ -17,7 +17,7 @@ mod render;
 
 use crate::ease::Easing;
 
-pub use render::{GainReduction, Mixer, Pcm};
+pub use render::{GainReduction, Mixer, PCM_PAGE, PagedPcm, Pcm};
 
 /// Samples per second, every source resampled to it.
 pub const RATE: u32 = 48_000;

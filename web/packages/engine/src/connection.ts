@@ -1,6 +1,5 @@
 // A worker running the engine, and what the page does for it: its requests answered in order,
-// files fetched through the page's `fetch` where it gave one, and sound decoded, which a worker
-// cannot. A player and each export have their own.
+// files fetched through the page's `fetch` where it gave one, including ranged media streams. A player and each export have their own.
 
 import type { Code, Inputs, Reply, Request, Source } from "./messages.ts";
 
@@ -10,7 +9,7 @@ export type Spawn = {
   runtime: URL;
   base: string;
   fonts?: string;
-  fetch?: (url: string) => Promise<Response>;
+  fetch?: (url: string, init?: RequestInit) => Promise<Response>;
   entry: string;
   inputs: Inputs;
   /** Every file the page gave, by its path. */
@@ -32,7 +31,9 @@ export const RATE = 48_000;
 
 /** What the worker asks the page outside its replies. */
 type Asked =
-  | { decode: number; file: Uint8Array }
+  | { media: number; url: string; headers: [string, string][] }
+  | { cancelMedia: number }
+  | { soundError: string }
   | { fetch: number; url: string }
   | { progress: number; done: number };
 
@@ -42,7 +43,8 @@ export class Connection {
   #next = 0;
   /** What hears how far each request that says so is, by its id. */
   #progress = new Map<number, (done: number) => void>();
-  #fetch: ((url: string) => Promise<Response>) | undefined;
+  #media = new Map<number, AbortController>();
+  #fetch: ((url: string, init?: RequestInit) => Promise<Response>) | undefined;
   /** Hears that the worker stopped. */
   stopped: (error: PlayerError) => void = () => {};
 
@@ -71,7 +73,10 @@ export class Connection {
     return connection;
   }
 
-  constructor(worker: Worker, fetch: ((url: string) => Promise<Response>) | undefined) {
+  constructor(
+    worker: Worker,
+    fetch: ((url: string, init?: RequestInit) => Promise<Response>) | undefined,
+  ) {
     this.worker = worker;
     this.#fetch = fetch;
     worker.onmessage = (event: MessageEvent<Reply | Asked>) => {
@@ -80,8 +85,17 @@ export class Connection {
         this.#progress.get(data.progress)?.(data.done);
         return;
       }
-      if ("decode" in data) {
-        void this.#decode(data.decode, data.file);
+      if ("media" in data) {
+        void this.#stream(data.media, data.url, data.headers);
+        return;
+      }
+      if ("cancelMedia" in data) {
+        this.#media.get(data.cancelMedia)?.abort();
+        this.#media.delete(data.cancelMedia);
+        return;
+      }
+      if ("soundError" in data) {
+        this.stopped(new PlayerError("file", data.soundError));
         return;
       }
       if ("fetch" in data) {
@@ -131,6 +145,8 @@ export class Connection {
 
   /** Lets the worker's GPU device go, and stops it. */
   async close(): Promise<void> {
+    for (const request of this.#media.values()) request.abort();
+    this.#media.clear();
     // A worker stuck on a request is stopped all the same.
     const destroyed = this.send({ type: "destroy" }).catch(() => {});
     await Promise.race([destroyed, new Promise((r) => setTimeout(r, 1000))]);
@@ -153,25 +169,77 @@ export class Connection {
     }
   }
 
-  /** Decodes a file's sound for the worker: interleaved stereo at 48 000 samples a second, or
-   * null where it has none. */
-  async #decode(id: number, file: Uint8Array): Promise<void> {
-    let pcm: Float32Array | null = null;
+  /** Streams a media response to the worker without collecting it into an ArrayBuffer. */
+  async #stream(id: number, url: string, headers: [string, string][]): Promise<void> {
+    const abort = new AbortController();
+    this.#media.set(id, abort);
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const finish = () => {
+      this.#media.delete(id);
+      abort.signal.removeEventListener("abort", cancel);
+    };
+    const cancel = () => {
+      finish();
+      void reader?.cancel(abort.signal.reason).catch(() => {});
+    };
     try {
-      // An offline context decodes without a user's gesture, at its rate.
-      const decoder = new OfflineAudioContext(2, 1, RATE);
-      const buffer = await decoder.decodeAudioData(file.buffer as ArrayBuffer);
-      const left = buffer.getChannelData(0);
-      const right = buffer.getChannelData(Math.min(1, buffer.numberOfChannels - 1));
-      pcm = new Float32Array(2 * buffer.length);
-      for (let i = 0; i < buffer.length; i++) {
-        pcm[2 * i] = left[i];
-        pcm[2 * i + 1] = right[i];
+      const response = await this.#fetch!(url, { headers, signal: abort.signal });
+      const body = response.body;
+      if (abort.signal.aborted) {
+        await body?.cancel();
+        return;
       }
-    } catch {
-      // No sound in it, or none the browser decodes.
+      if (!body || !response.ok) {
+        finish();
+        void body?.cancel().catch(() => {});
+        this.worker.postMessage({
+          media: id,
+          status: response.status,
+          statusText: response.statusText,
+          headers: [...response.headers],
+        });
+        return;
+      }
+      const incoming = body.getReader();
+      reader = incoming;
+      abort.signal.addEventListener("abort", cancel, { once: true });
+      const stream = new ReadableStream<Uint8Array>(
+        {
+          async pull(controller) {
+            try {
+              const chunk = await incoming.read();
+              if (chunk.done) {
+                finish();
+                controller.close();
+              } else {
+                controller.enqueue(chunk.value);
+              }
+            } catch (error) {
+              finish();
+              controller.error(error);
+            }
+          },
+          cancel(reason) {
+            finish();
+            return incoming.cancel(reason);
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      this.worker.postMessage(
+        {
+          media: id,
+          status: response.status,
+          statusText: response.statusText,
+          headers: [...response.headers],
+          body: stream,
+        },
+        [stream],
+      );
+    } catch (error) {
+      cancel();
+      if (!abort.signal.aborted) this.worker.postMessage({ media: id, error: String(error) });
     }
-    this.worker.postMessage({ decoded: id, pcm }, pcm ? [pcm.buffer] : []);
   }
 }
 

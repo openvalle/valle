@@ -2,5 +2,7 @@
 //! to the SDK's worker. Video color conversion lives in the shared engine.
 
 #[cfg(target_arch = "wasm32")]
+mod output;
+#[cfg(target_arch = "wasm32")]
 mod web;
 pub use valle_engine::image::yuv;

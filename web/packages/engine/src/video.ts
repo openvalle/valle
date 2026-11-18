@@ -2,22 +2,13 @@
 // mediabunny reads the containers. A reader goes on from the frame it gave last, so playing
 // decodes each frame once; a jump starts it again from the key frame before.
 
-import {
-  ALL_FORMATS,
-  BlobSource,
-  Input,
-  type InputVideoTrack,
-  UrlSource,
-  type VideoSample,
-  VideoSampleSink,
-} from "mediabunny";
+import { type InputVideoTrack, type VideoSample, VideoSampleSink } from "mediabunny";
 
 /** How far ahead of the frame it gave a reader decodes on to the one asked for, in seconds:
  * further, it starts again from the key frame before. */
 const AHEAD = 2;
 
 export class Reader {
-  #input: Input;
   #track: InputVideoTrack;
   #sink: VideoSampleSink;
   /** The color space the file tags, which frames' do not tell apart from a guess. */
@@ -27,23 +18,14 @@ export class Reader {
   #current: VideoSample | undefined;
   #next: VideoSample | undefined;
 
-  private constructor(input: Input, track: InputVideoTrack, tags: VideoColorSpaceInit) {
-    this.#input = input;
+  private constructor(track: InputVideoTrack, tags: VideoColorSpaceInit) {
     this.#track = track;
     this.#tags = tags;
     this.#sink = new VideoSampleSink(track);
   }
 
-  /** A reader of the file at `url`, or of its bytes; none where it has no video. */
-  static async open(file: string | Blob): Promise<Reader | undefined> {
-    const source = typeof file === "string" ? new UrlSource(file) : new BlobSource(file);
-    const input = new Input({ source, formats: ALL_FORMATS });
-    const track = await input.getPrimaryVideoTrack();
-    if (!track) {
-      input.dispose();
-      return undefined;
-    }
-    return new Reader(input, track, await track.getColorSpace());
+  static async open(track: InputVideoTrack): Promise<Reader> {
+    return new Reader(track, await track.getColorSpace());
   }
 
   /** Its frames' size and its length in seconds, as the engine takes them. */
@@ -95,12 +77,12 @@ export class Reader {
     this.#current?.close();
     this.#next?.close();
     this.#current = this.#next = undefined;
-    void this.#samples?.return();
+    void this.#samples?.return().catch(() => {});
+    this.#samples = undefined;
   }
 
   dispose() {
     this.#close();
-    this.#input.dispose();
   }
 }
 
@@ -124,7 +106,7 @@ async function planes(sample: VideoSample, tags: VideoColorSpaceInit): Promise<U
     const header = 4 * (8 + 2 * count);
     const out = new Uint8Array(header + size);
     const layout = await frame.copyTo(out.subarray(header), options);
-    const { matrix, fullRange } = tags;
+    const { matrix, fullRange }: { matrix?: string | null; fullRange?: boolean | null } = tags;
     const bt601 = matrix === "bt470bg" || matrix === "smpte170m" || matrix === "smpte240m";
     const bt709 = matrix === "bt709" || (!bt601 && height >= 720);
     const words = new DataView(out.buffer);

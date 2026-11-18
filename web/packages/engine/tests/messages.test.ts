@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { exportFrames, type Opened } from "../src/messages.ts";
+import { exportSchedule, type Opened } from "../src/messages.ts";
 
 test.each([
   {
@@ -69,5 +69,6 @@ test.each([
     loop: false,
     controls: { props: {}, data: {}, resources: {} },
   };
-  expect(exportFrames(composition, rate as [number, number])).toEqual(expected);
+  const { count, at } = exportSchedule(composition, rate as [number, number]);
+  expect(Array.from({ length: count }, (_, i) => at(i))).toEqual(expected);
 });

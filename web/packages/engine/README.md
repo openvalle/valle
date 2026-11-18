@@ -30,6 +30,27 @@ place of fetching, and `fetch` fetches them another way. `player.info` is the co
 size, rate and length, and `player.controls` what `setProps`, `setData` and `setResource` take.
 `seek`, `seekFrame`, `frame` (a PNG of a frame) and `close` do what they say.
 
+For a player opened on a Timeline, replace the document after an edit with
+`await player.updateTimeline(timeline)`. Pass a JSON object or its serialized text. Use the
+optional `{ files: { [path]: source } }` argument to supply new or replaced assets with the edit.
+Use stable paths for unchanged assets so their cached media remains available. The player keeps
+its current time at the new frame rate, clamps it to the new duration and resumes if it was
+playing. If preparation fails, the previous edit stays open. When updates arrive faster than the
+player can apply them, queued calls settle with the latest queued snapshot.
+
+URL-based video and audio use HTTP byte ranges (`206` and `Content-Range`). For cross-origin
+sources, allow the page's origin and expose `Content-Range` in CORS. When the server ignores
+a range and the whole response exceeds the media cache or has unknown size, the worker
+streams the response to a temporary OPFS file,
+then seeks locally. This fallback requires enough browser storage for the compressed source.
+The worker removes its temporary copy when it releases the asset. Valle shares the media input across clips that reference the same path and decodes the
+audio windows the mixer needs. Custom fetchers for authentication or signed URLs must pass
+through the request options and return a streaming response.
+
+```ts
+fetch: async (url, init) => fetch(await signedUrl(url), init);
+```
+
 ## In markup
 
 ```html
@@ -50,8 +71,30 @@ import { exportBrowserVideo } from "@openvalle/engine/export";
 const { blob } = await exportBrowserVideo(player, { width: 1280, height: 720 });
 ```
 
-The MP4 is H.264, with its sound in AAC where the browser encodes it, else Opus. It is rendered
-by a worker of its own, so the player plays on.
+The MP4 is H.264, with its sound in AAC where the browser encodes it, else Opus. A separate
+worker exports the committed timeline and resource bindings captured at the start of the call.
+Playback and later edits can continue during export.
+
+For long exports, write the MP4 to the origin's private file system (OPFS). The same output
+options and progress callback work with either target.
+
+```ts
+const result = await exportBrowserVideo(player, {
+  target: { type: "opfs" },
+  signal: abortController.signal,
+});
+const file = await result.fileHandle.getFile();
+// Upload large outputs in parts using file.slice(start, end).
+// Call cleanup after the upload succeeds or when discarding the file.
+await result.cleanup?.();
+```
+
+The file target writes MP4 media data as it is encoded, with bounded output buffering. It still
+keeps the MP4 sample index until finalization. A successful OPFS export stays on disk so the
+caller can retry uploads. The caller manages storage quota, upload credentials and retry state.
+To write to a user-selected file, pick a handle in a user gesture and pass
+`target: { type: "file", handle }`. Both file targets require a browser with writable file
+handles and enough disk space.
 
 ## The runtime
 

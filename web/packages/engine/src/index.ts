@@ -5,7 +5,7 @@
 //   player.play();
 
 import { Connection, PlayerError, RATE, type Spawn, spawns } from "./connection.ts";
-import type { Controls, Opened, Request, Source } from "./messages.ts";
+import type { Controls, Opened, Request, Source, TimelineUpdate } from "./messages.ts";
 
 export { PlayerError } from "./connection.ts";
 export type { Code, Control, Controls, Opened, Source } from "./messages.ts";
@@ -21,7 +21,7 @@ export type Options = {
   /** Files given in place of fetching their paths. */
   files?: Record<string, Source>;
   /** What fetches the files the engine reads, the built-in fonts among them: `fetch` by default. */
-  fetch?: (url: string) => Promise<Response>;
+  fetch?: (url: string, init?: RequestInit) => Promise<Response>;
   /** Where the built-in fonts are fetched from, by their file names, if not Google's addresses. */
   fonts?: string | URL;
   props?: Record<string, unknown>;
@@ -98,6 +98,12 @@ export async function createPlayer(options: Options): Promise<Player> {
   return player;
 }
 
+type TimelineEdit = {
+  text: string;
+  files: Record<string, Source>;
+  waiters: { resolve: () => void; reject: (reason: unknown) => void }[];
+};
+
 export class Player {
   #connection: Connection;
   #spawn: Spawn;
@@ -105,6 +111,12 @@ export class Player {
   #rate!: [number, number];
   #listeners = new Map<keyof Events, Set<(value: never) => void>>();
   #frame = 0;
+  #pendingEdit: TimelineEdit | undefined;
+  #editing = false;
+  #resumeEdit = false;
+  #editSeek: number | undefined;
+  #closed = false;
+
   /** The clock, while playing. */
   #clock: Clock | undefined;
   /** How long the display takes to refresh, in seconds: the least seen between two refreshes
@@ -207,12 +219,20 @@ export class Player {
   }
 
   play(): void {
-    if (this.#clock) {
+    if (this.#editing) {
+      this.#resumeEdit = true;
+      return;
+    }
+    this.#play(false);
+  }
+
+  #play(keepFrame: boolean): void {
+    if (this.#clock || this.#closed) {
       return;
     }
     const last = this.#info.frames - 1;
     this.#refresh = 0;
-    this.#run(this.#frame >= last && !this.loop ? 0 : this.#frame);
+    this.#run(!keepFrame && this.#frame >= last && !this.loop ? 0 : this.#frame);
     this.#reached = this.#clock!.frame;
     this.#resetStats(this.#frame);
     this.#emit("play", undefined);
@@ -248,6 +268,11 @@ export class Player {
   }
 
   pause(): void {
+    this.#resumeEdit = false;
+    this.#pause();
+  }
+
+  #pause(): void {
     if (!this.#clock) {
       return;
     }
@@ -265,6 +290,10 @@ export class Player {
 
   seekFrame(index: number): void {
     const frame = Math.min(Math.max(Math.trunc(index), 0), this.#info.frames - 1);
+    if (this.#editing) {
+      this.#editSeek = this.#time(frame);
+      return;
+    }
     if (this.#clock) {
       this.#run(frame);
       this.#reached = frame;
@@ -335,6 +364,75 @@ export class Player {
     await this.#rebind("resources", resources);
   }
 
+  /** Replaces a Timeline while keeping its worker and reusable media. A queued update can be
+   * superseded by a newer snapshot. Both callers then hear the result of that snapshot. */
+  async updateTimeline(
+    timeline: string | object,
+    options: { files?: Record<string, Source> } = {},
+  ): Promise<void> {
+    const { entry } = this.#spawn;
+    if (this.#closed || !entry.endsWith(".timeline.json")) {
+      throw new PlayerError("scene", "updateTimeline needs an open timeline");
+    }
+    const text = typeof timeline === "string" ? timeline : JSON.stringify(timeline);
+    const files = { ...options.files };
+    if (Object.hasOwn(files, entry)) {
+      throw new PlayerError("file", "pass the timeline as the first argument");
+    }
+    return new Promise((resolve, reject) => {
+      const queued = this.#pendingEdit;
+      this.#pendingEdit = {
+        text,
+        files: { ...queued?.files, ...files },
+        waiters: [...(queued?.waiters ?? []), { resolve, reject }],
+      };
+      if (!this.#editing) void this.#edit();
+    });
+  }
+
+  async #edit(): Promise<void> {
+    this.#resumeEdit = this.playing;
+    this.#editing = true;
+    this.#wanted = undefined;
+    this.#pause();
+    try {
+      while (this.#pendingEdit) {
+        const edit = this.#pendingEdit;
+        this.#pendingEdit = undefined;
+        const { entry, inputs } = this.#spawn;
+        const seconds = this.#editSeek ?? this.currentTime;
+        this.#editSeek = undefined;
+        try {
+          const { info, index, sound } = (await this.#send({
+            type: "update-timeline",
+            entry,
+            inputs,
+            timeline: edit.text,
+            seconds,
+            files: edit.files,
+          })) as TimelineUpdate;
+          this.#info = info;
+          const [n, d = 1] = info.fps.split("/").map(Number);
+          this.#rate = [n, d];
+          this.#sound = sound;
+          this.#frame = index;
+          Object.assign(this.#spawn.given, edit.files, { [entry]: new Blob([edit.text]) });
+          queueMicrotask(() => this.#emit("time", { time: (index * d) / n, frame: index }));
+          for (const waiter of edit.waiters) waiter.resolve();
+        } catch (error) {
+          for (const waiter of edit.waiters) waiter.reject(error);
+        }
+      }
+    } finally {
+      this.#editing = false;
+      const seek = this.#editSeek;
+      this.#editSeek = undefined;
+      if (seek !== undefined && !this.#closed) this.seek(seek);
+      if (this.#resumeEdit) this.#play(true);
+      this.#resumeEdit = false;
+    }
+  }
+
   on<K extends keyof Events>(type: K, listener: (value: Events[K]) => void): () => void {
     const set = this.#listeners.get(type) ?? new Set();
     this.#listeners.set(type, set);
@@ -344,6 +442,10 @@ export class Player {
 
   /** Stops the player and lets its GPU device go. */
   async close(): Promise<void> {
+    this.#closed = true;
+    const error = new PlayerError("scene", "the player was closed");
+    for (const waiter of this.#pendingEdit?.waiters ?? []) waiter.reject(error);
+    this.#pendingEdit = undefined;
     this.pause();
     spawns.delete(this);
     await this.#connection.close();

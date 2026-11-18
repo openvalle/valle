@@ -1,6 +1,7 @@
 //! The mix running: nodes (tracks, buses, the master) in an order where every node comes after
 //! what feeds it and what keys it, a block at a time, each sample from the mix and the state alone.
 
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use super::dsp::{Comp, Eq, HALF, Kernel, Lim, Verb};
@@ -22,6 +23,38 @@ impl Pcm {
     }
 }
 
+/// A browser source whose decoded pages come from the media worker, at its original rate.
+#[derive(Clone)]
+pub struct PagedPcm {
+    pub frames: i64,
+    pub rate: u32,
+}
+
+/// Samples per independently loadable source page.
+pub const PCM_PAGE: i64 = RATE as i64;
+
+#[derive(Clone)]
+enum Source {
+    Memory(Pcm),
+    Paged(PagedPcm),
+}
+
+impl Source {
+    fn frames(&self) -> i64 {
+        match self {
+            Self::Memory(pcm) => pcm.frames(),
+            Self::Paged(pcm) => pcm.frames,
+        }
+    }
+
+    fn rate(&self) -> f64 {
+        match self {
+            Self::Memory(_) => FS,
+            Self::Paged(pcm) => f64::from(pcm.rate),
+        }
+    }
+}
+
 enum Fx {
     Eq(Eq),
     Comp(Comp, Option<usize>),
@@ -39,7 +72,9 @@ pub struct GainReduction {
 
 pub struct Mixer {
     mix: Mix,
-    pcm: Vec<Pcm>,
+    pcm: Vec<Source>,
+    pages: Vec<HashMap<i64, Vec<f32>>>,
+    record_reductions: bool,
     kernel: Kernel,
     /// Nodes by index: tracks, then buses, then the master.
     order: Vec<usize>,
@@ -59,6 +94,15 @@ pub struct Mixer {
 impl Mixer {
     /// The mix over its decoded sources (`pcm` by `mix.sources`).
     pub fn new(mix: Mix, pcm: Vec<Pcm>) -> Result<Mixer, String> {
+        Self::with_sources(mix, pcm.into_iter().map(Source::Memory).collect(), true)
+    }
+
+    /// The browser's mix over media loaded on demand. Meter histories are not used there.
+    pub fn paged(mix: Mix, pcm: Vec<PagedPcm>) -> Result<Mixer, String> {
+        Self::with_sources(mix, pcm.into_iter().map(Source::Paged).collect(), false)
+    }
+
+    fn with_sources(mix: Mix, pcm: Vec<Source>, record_reductions: bool) -> Result<Mixer, String> {
         if pcm.len() != mix.sources.len() {
             return Err("audio: a decoded source per source expected".into());
         }
@@ -131,7 +175,7 @@ impl Mixer {
         for t in &mix.tracks {
             for c in &t.clips {
                 let frames = pcm[c.source].frames();
-                let seconds = frames as f64 / FS;
+                let seconds = frames as f64 / pcm[c.source].rate();
                 let reach = match &c.time {
                     super::TimeMap::Linear { trim, rate } => {
                         trim + (c.end - c.start) as f64 / FS * rate
@@ -193,7 +237,9 @@ impl Mixer {
             input: vec![vec![[0.0; 2]; BLOCK]; master + 1],
             output: vec![vec![[0.0; 2]; BLOCK]; master + 1],
             mix,
+            pages: (0..pcm.len()).map(|_| HashMap::new()).collect(),
             pcm,
+            record_reductions,
             kernel: Kernel::default(),
             order,
             fx,
@@ -226,12 +272,14 @@ impl Mixer {
 
     /// The same mix, its sources shared, ready to render from the start.
     pub fn fresh(&self) -> Mixer {
-        Mixer::new(self.mix.clone(), self.pcm.clone()).expect("the same mix")
+        Self::with_sources(self.mix.clone(), self.pcm.clone(), self.record_reductions)
+            .expect("the same mix")
     }
 
     /// Ready to render from `sample`: from the start as the export does, else after pre-roll.
     pub fn seek(&mut self, sample: i64) {
-        let fresh = self.fresh();
+        let mut fresh = self.fresh();
+        fresh.pages = std::mem::take(&mut self.pages);
         let windows: Vec<Vec<f32>> = self
             .reductions
             .iter_mut()
@@ -255,6 +303,70 @@ impl Mixer {
             self.graph += n as i64;
             self.position += n as i64;
         }
+    }
+
+    /// Source pages needed for the next output, including the DSP pre-roll on a seek.
+    pub fn needed_pages(&self, seek: Option<i64>, samples: usize) -> Vec<(usize, i64)> {
+        let (start, position) = if let Some(at) = seek {
+            let from = (at - self.preroll).max(0);
+            (from, from - self.latency)
+        } else {
+            (self.graph, self.position)
+        };
+        let end = start + seek.unwrap_or(0).max(position) - position + samples as i64;
+        let mut needed = BTreeSet::new();
+        for clip in self.mix.tracks.iter().flat_map(|track| &track.clips) {
+            let source = &self.pcm[clip.source];
+            let frames = source.frames();
+            if frames == 0 || !matches!(source, Source::Paged(_)) {
+                continue;
+            }
+            let rate = source.rate();
+            let mut previous = None;
+            for at in clip.start.max(start)..clip.end.min(end) {
+                let (pos, speed) = clip.time.at((at - clip.start) as f64 / FS);
+                let Some((first, last)) = taps(pos * rate, speed.abs() * (rate / FS)) else {
+                    continue;
+                };
+                let end = clip_end(clip);
+                let span = (first.div_euclid(PCM_PAGE), last.div_euclid(PCM_PAGE));
+                // The common case needs just one page for many consecutive samples.
+                if first >= 0 && last < frames {
+                    if previous != Some(span) {
+                        needed.extend((span.0..=span.1).map(|page| (clip.source, page)));
+                        previous = Some(span);
+                    }
+                } else {
+                    for tap in first..=last {
+                        if let Some(frame) = source_index(tap, frames, end) {
+                            needed.insert((clip.source, frame / PCM_PAGE));
+                        }
+                    }
+                }
+            }
+        }
+        needed.into_iter().collect()
+    }
+
+    /// Gives the samples of a page for the current render window.
+    pub fn give_page(&mut self, source: usize, page: i64, samples: Vec<f32>) {
+        self.pages[source].insert(page, samples);
+    }
+
+    /// Keeps pages used by this window and returns only the ones still missing.
+    pub fn missing_pages(&mut self, needed: &[(usize, i64)]) -> Vec<(usize, i64)> {
+        for (source, pages) in self.pages.iter_mut().enumerate() {
+            pages.retain(|&page, _| needed.binary_search(&(source, page)).is_ok());
+        }
+        needed
+            .iter()
+            .copied()
+            .filter(|(source, page)| !self.pages[*source].contains_key(page))
+            .collect()
+    }
+
+    pub fn clear_pages(&mut self) {
+        self.pages.iter_mut().for_each(HashMap::clear);
     }
 
     /// The next `out.len() / 2` samples, interleaved stereo (from 0 when nothing was asked for).
@@ -319,7 +431,7 @@ impl Mixer {
                             let heard = key.map_or(*x, |key| output[key][j]);
                             *x = c.run(*x, heard);
                             let s = g0 + j as i64 - behind;
-                            if s >= 0 {
+                            if self.record_reductions && s >= 0 {
                                 let w = (s / WINDOW) as usize;
                                 if windows.len() <= w {
                                     windows.resize(w + 1, 0.0);
@@ -374,17 +486,11 @@ impl Mixer {
         let g1 = g0 + out.len() as i64;
         for c in &self.mix.tracks[t].clips {
             let (lo, hi) = (c.start.max(g0), c.end.min(g1));
-            let pcm = &self.pcm[c.source];
+            let rate = self.pcm[c.source].rate();
             for s in lo..hi {
                 let x = (s - c.start) as f64 / FS;
                 let (src, speed) = c.time.at(x);
-                // Holding a video's last picture does not hold its last audio sample.
-                let end = if c.optional && c.end_policy == End::Hold {
-                    End::Error
-                } else {
-                    c.end_policy
-                };
-                let v = self.read(pcm, src * FS, speed.abs(), end);
+                let v = self.read(c.source, src * rate, speed.abs() * (rate / FS), clip_end(c));
                 let g = c.gain.at(x) * fade(c, s);
                 let (l, r) = balance(c.pan.at(x));
                 let o = &mut out[(s - g0) as usize];
@@ -397,30 +503,30 @@ impl Mixer {
     /// The source at frame position `pos` passing at `speed`: the sample itself on the grid at
     /// speed 1, else band-limited (the kernel widened by the speed going faster); silent where
     /// it holds still.
-    fn read(&self, pcm: &Pcm, pos: f64, speed: f64, end: End) -> [f64; 2] {
-        let frames = pcm.frames();
+    fn read(&self, source: usize, pos: f64, speed: f64, end: End) -> [f64; 2] {
+        let pcm = &self.pcm[source];
         let at = |i: i64| -> [f64; 2] {
-            let i = match end {
-                _ if (0..frames).contains(&i) => i,
-                End::Loop if frames > 0 => i.rem_euclid(frames),
-                End::Hold if i >= frames && frames > 0 => frames - 1,
-                _ => return [0.0; 2],
-            } as usize;
-            [f64::from(pcm.0[2 * i]), f64::from(pcm.0[2 * i + 1])]
+            let Some(i) = source_index(i, pcm.frames(), end) else {
+                return [0.0; 2];
+            };
+            let data = match pcm {
+                Source::Memory(pcm) => pcm.0.get(2 * i as usize..),
+                Source::Paged(_) => self.pages[source]
+                    .get(&(i / PCM_PAGE))
+                    .and_then(|page| page.get(2 * (i % PCM_PAGE) as usize..)),
+            };
+            match data {
+                Some([l, r, ..]) => [f64::from(*l), f64::from(*r)],
+                _ => [0.0; 2],
+            }
         };
-        if speed < 1e-9 {
+        let Some((first, last)) = taps(pos, speed) else {
             return [0.0; 2];
-        }
-        let nearest = pos.round();
-        if (speed - 1.0).abs() < 1e-12 && (pos - nearest).abs() < 1e-6 {
-            return at(nearest as i64);
+        };
+        if first == last {
+            return at(first);
         }
         let fc = (1.0 / speed).min(1.0);
-        let reach = HALF as f64 / fc;
-        let (first, last) = (
-            (pos - reach).floor() as i64 + 1,
-            (pos + reach).floor() as i64,
-        );
         let (mut y, mut w) = ([0.0; 2], 0.0);
         for i in first..=last {
             let k = self.kernel.at(fc * (pos - i as f64));
@@ -434,6 +540,39 @@ impl Mixer {
         }
         [y[0] / w, y[1] / w]
     }
+}
+
+fn source_index(i: i64, frames: i64, end: End) -> Option<i64> {
+    match end {
+        _ if (0..frames).contains(&i) => Some(i),
+        End::Loop if frames > 0 => Some(i.rem_euclid(frames)),
+        End::Hold if i >= frames && frames > 0 => Some(frames - 1),
+        _ => None,
+    }
+}
+
+fn clip_end(clip: &super::Clip) -> End {
+    // Holding the end of a video holds its picture, not its last audio sample.
+    if clip.optional && clip.end_policy == End::Hold {
+        End::Error
+    } else {
+        clip.end_policy
+    }
+}
+
+fn taps(pos: f64, speed: f64) -> Option<(i64, i64)> {
+    if speed < 1e-9 {
+        return None;
+    }
+    let nearest = pos.round();
+    if (speed - 1.0).abs() < 1e-12 && (pos - nearest).abs() < 1e-6 {
+        return Some((nearest as i64, nearest as i64));
+    }
+    let reach = HALF as f64 / (1.0 / speed).min(1.0);
+    Some((
+        (pos - reach).floor() as i64 + 1,
+        (pos + reach).floor() as i64,
+    ))
 }
 
 /// How far clip `c` has faded in or out at output sample `s`, as its `fades` say.
@@ -607,6 +746,35 @@ mod tests {
             m.render(c);
         }
         out
+    }
+
+    #[test]
+    fn paged_mixing_matches_full_sources_across_seeks_and_speed_changes() {
+        let from = (1.35 * FS) as i64;
+        let sources = [noise(5.0, 1), noise(5.0, 2)];
+        let metadata = sources
+            .iter()
+            .map(|pcm| PagedPcm {
+                frames: (pcm.0.len() / 2) as i64,
+                rate: RATE,
+            })
+            .collect();
+        let mut mixer = Mixer::paged(mix(), metadata).unwrap();
+        let mut actual = vec![0.0; 2 * (mixer.length() - from) as usize];
+        for (i, chunk) in actual.chunks_mut(2 * 4800).enumerate() {
+            let seek = (i == 0).then_some(from);
+            let needed = mixer.needed_pages(seek, chunk.len() / 2);
+            for (source, page) in mixer.missing_pages(&needed) {
+                let first = (page * PCM_PAGE * 2) as usize;
+                let end = (first + PCM_PAGE as usize * 2).min(sources[source].0.len());
+                mixer.give_page(source, page, sources[source].0[first..end].to_vec());
+            }
+            if let Some(seek) = seek {
+                mixer.seek(seek);
+            }
+            mixer.render(chunk);
+        }
+        assert_eq!(actual, render(4800, from));
     }
 
     #[test]

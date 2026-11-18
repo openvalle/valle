@@ -6,7 +6,7 @@
 
 import { Connection, PlayerError, spawns } from "./connection.ts";
 import type { Player } from "./index.ts";
-import { exportFrames, type Opened } from "./messages.ts";
+import { exportSchedule, type FileDestination, type Opened } from "./messages.ts";
 
 export type ExportVideoOptions = {
   /** Output pixels, rendered directly without relayout, up to UHD 8K. The composition's size
@@ -25,32 +25,80 @@ export type ExportVideoOptions = {
   onProgress?: (progress: { framesCompleted: number; frameCount: number }) => void;
 };
 
-/** The MP4 of what `player` has open: H.264, and its sound, AAC where the browser encodes it,
- * else Opus. */
+export type ExportFileTarget = { type: "opfs" } | { type: "file"; handle: FileSystemFileHandle };
+export type ExportedFile = {
+  fileHandle: FileSystemFileHandle;
+  /** Removes a temporary OPFS result when it is no longer needed. */
+  cleanup?: () => Promise<void>;
+};
+
+/** Exports a snapshot as MP4, independently of playback or subsequent edits. */
+export function exportBrowserVideo(
+  player: Player,
+  options?: ExportVideoOptions & { target?: undefined },
+): Promise<{ blob: Blob }>;
+export function exportBrowserVideo(
+  player: Player,
+  options: ExportVideoOptions & { target: ExportFileTarget },
+): Promise<ExportedFile>;
 export async function exportBrowserVideo(
   player: Player,
-  options: ExportVideoOptions = {},
-): Promise<{ blob: Blob }> {
-  const spawn = spawns.get(player);
-  if (!spawn) {
+  options: ExportVideoOptions & { target?: ExportFileTarget } = {},
+): Promise<{ blob: Blob } | ExportedFile> {
+  const open = spawns.get(player);
+  if (!open) {
     throw new PlayerError("scene", "the player was closed");
   }
-  const { signal, onProgress, includeAudio = true } = options;
+  // Capture the entry and the resource bindings before starting a worker or asking for a file.
+  const spawn = { ...open, inputs: structuredClone(open.inputs), given: { ...open.given } };
+  const { signal, onProgress, includeAudio = true, target } = options;
   signal?.throwIfAborted();
-  const connection = await Connection.start(spawn, new OffscreenCanvas(0, 0));
-  const cancelled = new Promise<never>((_, reject) => {
-    const cancel = () => reject(new PlayerError("cancelled", "the export was cancelled"));
-    signal?.addEventListener("abort", cancel, { once: true });
-    connection.stopped = reject;
-  });
+
+  let destination: FileDestination | undefined;
+  let cleanup: (() => Promise<void>) | undefined;
+  if (target?.type === "opfs") {
+    if (typeof navigator.storage?.getDirectory !== "function") {
+      throw new PlayerError("file", "this browser has no origin-private file storage");
+    }
+    const root = await navigator.storage.getDirectory();
+    const directory = await root.getDirectoryHandle("valle-exports", { create: true });
+    const name = `${crypto.randomUUID()}.mp4`;
+    const handle = await directory.getFileHandle(name, { create: true });
+    cleanup = async () => {
+      try {
+        await directory.removeEntry(name);
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "NotFoundError")) throw error;
+      }
+    };
+    destination = { type: "opfs", handle };
+  } else if (target?.type === "file") {
+    destination = target;
+  }
+
+  let connection: Connection | undefined;
+  let completed = false;
+  let cancel: (() => void) | undefined;
   try {
+    signal?.throwIfAborted();
+    const worker = await Connection.start(spawn, new OffscreenCanvas(0, 0));
+    connection = worker;
+    const cancelled = new Promise<never>((_, reject) => {
+      cancel = () => {
+        worker.worker.postMessage({ cancelExport: true });
+        reject(new PlayerError("cancelled", "the export was cancelled"));
+      };
+      signal?.addEventListener("abort", cancel, { once: true });
+      worker.stopped = reject;
+      if (signal?.aborted) cancel();
+    });
     const run = async () => {
-      const info = (await connection.send({
+      const info = (await worker.send({
         type: "open",
         entry: spawn.entry,
         inputs: spawn.inputs,
       })) as Opened;
-      const audio = includeAudio && (await connection.send({ type: "sound", entry: spawn.entry }));
+      const audio = includeAudio && (await worker.send({ type: "sound", entry: spawn.entry }));
       const { width, height } = size(info, options);
       if (
         ![width, height].every((v) => Number.isInteger(v) && v > 0 && v <= 7680) ||
@@ -66,21 +114,27 @@ export async function exportBrowserVideo(
       }
       const [n, d] =
         options.frameRate === undefined ? rate(info.fps) : rate(String(options.frameRate));
-      const frameCount = exportFrames(info, [n, d]).length;
+      const frameCount = exportSchedule(info, [n, d]).count;
       const bitrate = options.videoBitrate ?? Math.round(0.15 * width * height * (n / d));
-      const mp4 = (await connection.send(
+      const mp4 = (await worker.send(
         {
           type: "export",
+          destination,
           options: { width, height, rate: [n, d], bitrate, audio: Boolean(audio) },
         },
         [],
         (framesCompleted) => onProgress?.({ framesCompleted, frameCount }),
-      )) as ArrayBuffer;
-      return { blob: new Blob([mp4], { type: "video/mp4" }) };
+      )) as ArrayBuffer | undefined;
+      if (destination) return { fileHandle: destination.handle, cleanup };
+      return { blob: new Blob([mp4!], { type: "video/mp4" }) };
     };
-    return await Promise.race([run(), cancelled]);
+    const result = await Promise.race([run(), cancelled]);
+    completed = true;
+    return result;
   } finally {
-    await connection.close();
+    if (cancel) signal?.removeEventListener("abort", cancel);
+    await connection?.close();
+    if (!completed) await cleanup?.();
   }
 }
 

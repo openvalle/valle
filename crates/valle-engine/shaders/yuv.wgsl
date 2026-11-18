@@ -1,6 +1,6 @@
 // The SDR output as an encoder takes it: straight 8-bit sRGB, as `output` writes it, to BT.709
 // Y'CbCr at limited range, luma at every pixel and chroma, the mean of each 2 × 2 block's, at
-// half size each way rounded up: the planes the browser's export makes on the CPU.
+// half size each way rounded up: the NV12 planes used for video export.
 
 @group(1) @binding(0) var image: texture_2d<f32>;
 

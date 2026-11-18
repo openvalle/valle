@@ -24,6 +24,14 @@ export type Request =
     }
   | { type: "give"; files: Record<string, Source> }
   | { type: "open"; entry: string; inputs: Inputs }
+  | {
+      type: "update-timeline";
+      entry: string;
+      inputs: Inputs;
+      timeline: string;
+      seconds: number;
+      files: Record<string, Source>;
+    }
   | { type: "frame"; index: number }
   | { type: "pixels" }
   /** Draws frame `index` off the canvas, and answers its pixels as `pixels` does. */
@@ -33,11 +41,22 @@ export type Request =
   /** `samples` of it from `sample`, interleaved stereo. */
   | { type: "render-sound"; sample: number; samples: number }
   /** The MP4 of what is open; the worker says how far it is as `{ progress: id, done }`. */
-  | { type: "export"; options: ExportOptions }
+  | { type: "export"; options: ExportOptions; destination?: FileDestination }
   /** The port the audio worklet asks for the sound it plays at. */
   | { type: "worklet"; port: MessagePort }
   | { type: "close" }
   | { type: "destroy" };
+
+export type FileDestination = {
+  type: "opfs" | "file";
+  handle: FileSystemFileHandle;
+};
+
+export type TimelineUpdate = {
+  info: Opened;
+  index: number;
+  sound: { length: number } | null;
+};
 
 /** How an export encodes what is open: H.264 of `width` × `height`, the frames fitted in whole,
  * at `rate` frames a second, `bitrate` bits a second, with the sound or not. */
@@ -89,14 +108,14 @@ export type Reply = { id: number } & (
 
 /** The composition's frame at each frame of an export at `rate`: its own at its own rate, else
  * the one at each frame's time. */
-export function exportFrames(composition: Opened, rate: [number, number]): number[] {
+export function exportSchedule(composition: Opened, rate: [number, number]) {
   const [n, d] = rate;
   const [cn, cd = 1] = composition.fps.split("/").map(Number);
   if (n * cd === cn * d) {
-    return Array.from({ length: composition.frames }, (_, i) => i);
+    return { count: composition.frames, at: (i: number) => i };
   }
-  const count = Math.ceil((composition.duration * n) / d - 1e-9);
-  return Array.from({ length: count }, (_, i) =>
-    Math.min(composition.frames - 1, Math.floor((i * d * cn) / (n * cd) + 1e-9)),
-  );
+  return {
+    count: Math.ceil((composition.duration * n) / d - 1e-9),
+    at: (i: number) => Math.min(composition.frames - 1, Math.floor((i * d * cn) / (n * cd) + 1e-9)),
+  };
 }

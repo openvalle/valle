@@ -1,6 +1,4 @@
-// An export in the worker: every frame drawn off the canvas and read back as I420, as the native
-// engine converts it, and the sound mixed from the start, encoded with WebCodecs into an MP4 that
-// mediabunny writes in memory.
+// Browser export draws NV12 on the GPU and gives its mapped planes to WebCodecs.
 
 import {
   AudioSample,
@@ -9,11 +7,18 @@ import {
   canEncodeAudio,
   Mp4OutputFormat,
   Output,
+  StreamTarget,
+  type StreamTargetChunk,
   VideoSample,
   VideoSampleSource,
 } from "mediabunny";
-import { type ExportOptions, exportFrames, type Opened } from "./messages.ts";
-import type { Engine, Sound } from "./wasm/valle_web.js";
+import {
+  type ExportOptions,
+  exportSchedule,
+  type FileDestination,
+  type Opened,
+} from "./messages.ts";
+import type { Engine, VideoOutput } from "./wasm/valle_web.js";
 
 /** The tags of the frames it encodes: BT.709's primaries and matrix, limited range, and the
  * values as sRGB's, as the native engine tags its MP4s. */
@@ -27,70 +32,139 @@ const COLOR = {
 /** Samples a second of the sound. */
 const RATE = 48_000;
 
-/** The MP4 of `composition` as `options` say: `draw` draws its frame of an index for `engine` to
- * read back, `sound` mixes from the start when it is to be heard, and `progress` hears of each
- * frame done. At another rate, each frame is the composition's frame at its time. */
+/** Draws each scheduled frame into the encoder's planes and interleaves the sound. */
 export async function encode(
   options: ExportOptions,
   composition: Opened,
-  draw: (index: number) => Promise<void>,
+  draw: (index: number, planes: VideoOutput) => Promise<void>,
   engine: Engine,
-  sound: Sound | undefined,
+  sound: ((count: number) => Promise<Float32Array>) | undefined,
+  destination: FileDestination | undefined,
   progress: (done: number) => void,
-): Promise<ArrayBuffer> {
+  signal: AbortSignal,
+): Promise<ArrayBuffer | undefined> {
   const { width, height, bitrate } = options;
-  engine.render_size(width, height);
   const [n, d] = options.rate;
-  const indices = exportFrames(composition, options.rate);
-  const frames = indices.length;
-  const target = new BufferTarget();
-  const output = new Output({ format: new Mp4OutputFormat({ fastStart: "in-memory" }), target });
-  const video = new VideoSampleSource({ codec: "avc", bitrate });
-  output.addVideoTrack(video, { frameRate: n / d });
-  let audio: AudioSampleSource | undefined;
-  if (sound) {
-    const aac = await canEncodeAudio("aac", { numberOfChannels: 2, sampleRate: RATE });
-    audio = new AudioSampleSource({ codec: aac ? "aac" : "opus", bitrate: 192_000 });
-    output.addAudioTrack(audio);
-  }
-  await output.start();
-  const seconds = (frames * d) / n;
-  const samples = Math.round(seconds * RATE);
-  let mixed = 0;
+  const { count: frames, at } = exportSchedule(composition, options.rate);
+  const file = destination && (await fileTarget(destination, signal));
+  const target = file?.target ?? new BufferTarget();
+  const output = new Output({
+    format: new Mp4OutputFormat({ fastStart: file ? false : "in-memory" }),
+    target,
+  });
+  let planes: VideoOutput | undefined;
   try {
+    signal.throwIfAborted();
+    planes = engine.video_output(width, height);
+    const { buffer, stride } = planes;
+    // WebKit reads NV12 as tightly packed even when VideoFrame specifies larger strides.
+    // Y and interleaved UV each have width bytes per row for even H.264 dimensions.
+    const packed = stride === width ? undefined : new Uint8Array(width * (height + height / 2));
+    const video = new VideoSampleSource({ codec: "avc", bitrate });
+    output.addVideoTrack(video, { frameRate: n / d });
+    let audio: AudioSampleSource | undefined;
+    if (sound) {
+      const aac = await canEncodeAudio("aac", { numberOfChannels: 2, sampleRate: RATE });
+      audio = new AudioSampleSource({ codec: aac ? "aac" : "opus", bitrate: 192_000 });
+      output.addAudioTrack(audio);
+    }
+    await output.start();
+    const seconds = (frames * d) / n;
+    const samples = Math.round(seconds * RATE);
+    let mixed = 0;
     for (let i = 0; i < frames; i++) {
-      await draw(indices[i]);
-      const data = await engine.yuv();
-      const frame = new VideoSample(data, {
-        format: "I420",
-        codedWidth: width,
-        codedHeight: height,
-        timestamp: (i * d) / n,
-        duration: d / n,
-        colorSpace: COLOR,
-      });
-      await video.add(frame);
-      frame.close();
+      signal.throwIfAborted();
+      await draw(at(i), planes);
+      await buffer.mapAsync(GPUMapMode.READ);
+      let frame: VideoSample;
+      try {
+        // VideoSample snapshots the bytes before unmap detaches the mapped ArrayBuffer.
+        const mapped = new Uint8Array(buffer.getMappedRange());
+        if (packed) {
+          for (let src = 0, dst = 0; dst < packed.length; src += stride, dst += width) {
+            packed.set(mapped.subarray(src, src + width), dst);
+          }
+        }
+        frame = new VideoSample(packed ?? mapped, {
+          format: "NV12",
+          codedWidth: width,
+          codedHeight: height,
+          timestamp: (i * d) / n,
+          duration: d / n,
+          colorSpace: COLOR,
+        });
+      } finally {
+        buffer.unmap();
+      }
+      try {
+        await video.add(frame);
+      } finally {
+        frame.close();
+      }
       // The sound a second ahead of the frames, so the two interleave.
       while (audio && sound && mixed < samples && mixed / RATE <= ((i + 1) * d) / n + 1) {
         const count = Math.min(RATE, samples - mixed);
         const chunk = new AudioSample({
-          data: sound.render(count),
+          data: await sound(count),
           format: "f32",
           numberOfChannels: 2,
           sampleRate: RATE,
           timestamp: mixed / RATE,
         });
-        await audio.add(chunk);
-        chunk.close();
+        try {
+          await audio.add(chunk);
+        } finally {
+          chunk.close();
+        }
         mixed += count;
       }
       progress(i + 1);
     }
+    // Deliver any asynchronous GPU error from the final frame before committing the file.
+    await engine.drawn();
+    signal.throwIfAborted();
     await output.finalize();
+    return target instanceof BufferTarget ? target.buffer! : undefined;
   } catch (error) {
-    await output.cancel();
+    file?.fail();
+    await output.cancel().catch(() => {});
+    await file?.discard().catch(() => {});
     throw error;
+  } finally {
+    planes?.free();
   }
-  return target.buffer!;
+}
+
+/** Positions are used by ordinary MP4 to fill in its media header at finalize. */
+async function fileTarget(destination: FileDestination, signal: AbortSignal) {
+  const file = await destination.handle.createWritable();
+  let failed = false;
+  let settled = false;
+  const discard = async () => {
+    if (settled) return;
+    settled = true;
+    await file.abort();
+  };
+  const writable = new WritableStream<StreamTargetChunk>({
+    write(chunk) {
+      signal.throwIfAborted();
+      return file.write(chunk);
+    },
+    async close() {
+      if (failed || signal.aborted) {
+        await discard();
+      } else {
+        await file.close();
+        settled = true;
+      }
+    },
+    abort: discard,
+  });
+  return {
+    target: new StreamTarget(writable, { chunked: true, chunkSize: 4 * 1024 * 1024 }),
+    fail: () => {
+      failed = true;
+    },
+    discard,
+  };
 }
