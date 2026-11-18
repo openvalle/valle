@@ -45,11 +45,12 @@ test.each([
     "https://assets.test/a b.png?q=1&v=2",
     "/api/url?u=https%3A%2F%2Fassets.test%2Fa%2520b.png%3Fq%3D1%26v%3D2",
   ],
-])("fetching %s uses the local service", async (url, expected) => {
-  await api.fetching(url);
-  const [path, init] = fetch.mock.calls[0];
-  expect(path).toBe(expected);
-  expect(init).toBeUndefined();
+])("fetching %s uses the local service", (url, expected) => {
+  expect(api.resourceAddress(url)).toBe(expected);
+});
+
+test("a linked Windows file change identifies the same media the player fetched", () => {
+  expect(api.mediaUrl("", "C:\\videos\\a b.mp4")).toBe(api.resourceAddress("c:/videos/a%20b.mp4"));
 });
 
 test("reading preserves the text and revision used for the next write", async () => {

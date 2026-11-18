@@ -95,11 +95,17 @@ export function address(path: string): string {
   return `/api/files/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
+/** Use the same address for a linked file in SDK requests and filesystem change events. */
+function linkedAddress(file: string): string {
+  if (/^[a-z]:[\\/]/i.test(file))
+    file = file[0].toLowerCase() + file.slice(1).replaceAll("\\", "/");
+  return `/api/linked?file=${encodeURIComponent(file)}`;
+}
+
 /** The address of a resource's file, written relative to the timeline `entry` that names it. */
 export function mediaUrl(entry: string, file: string): string {
   if (/^https?:\/\//.test(file)) return `/api/url?u=${encodeURIComponent(file)}`;
-  if (file.startsWith("/") || /^[a-z]:[\\/]/i.test(file))
-    return `/api/linked?file=${encodeURIComponent(file)}`;
+  if (file.startsWith("/") || /^[a-z]:[\\/]/i.test(file)) return linkedAddress(file);
   const parts = entry.split("/").slice(0, -1);
   for (const part of file.split("/")) {
     if (part === "..") parts.pop();
@@ -166,16 +172,16 @@ export const service = {
 
 /** What the player fetches through: the service's files, and other origins'
  * through the service, which needs no CORS from them. */
-export function fetching(url: string): Promise<Response> {
+export function resourceAddress(url: string): string {
   const at = new URL(url, location.href);
   if (at.origin === location.origin) {
     return at.pathname.startsWith("/api/")
-      ? fetch(at.pathname + at.search)
-      : fetch(`/api/linked?file=${encodeURIComponent(decodeURIComponent(at.pathname))}`);
+      ? at.pathname + at.search
+      : linkedAddress(decodeURIComponent(at.pathname));
   }
   // Windows absolute paths are parsed by URL as a drive-letter scheme.
   if (/^[a-z]:$/i.test(at.protocol)) {
-    return fetch(`/api/linked?file=${encodeURIComponent(decodeURIComponent(at.href))}`);
+    return linkedAddress(decodeURIComponent(at.href));
   }
-  return fetch(`/api/url?u=${encodeURIComponent(at.href)}`);
+  return `/api/url?u=${encodeURIComponent(at.href)}`;
 }

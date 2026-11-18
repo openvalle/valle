@@ -336,7 +336,13 @@ export default function Scene() {
     );
 
     // A placed clip dragged 0.5 s later on the timeline.
+    let edits = 0;
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/edit") edits++;
+    });
     const box = await evaluate(`
+      window.preview = studio.player;
+      window.canvas = studio.shadowRoot.querySelector(".canvas canvas");
       const view = studio.shadowRoot.querySelector("timeline-view");
       const r = view.shadowRoot.querySelector('[data-at="tracks.visual[1].clips[0]"]').getBoundingClientRect();
       return { x: r.x + r.width / 2, y: r.y + r.height / 2, perSecond: r.width / 0.5 };`);
@@ -349,6 +355,28 @@ export default function Scene() {
     );
     expect(Math.abs(moved - 1) < 1e-6, `the dragged clip starts at ${moved} s`);
     expect((await evaluate("return studio.drafts;")).length === 1, "the drag is a draft");
+
+    expect(edits === 1, "a drag uses the layout returned by the edit request");
+    expect(
+      await evaluate(
+        'return studio.player === window.preview && studio.shadowRoot.querySelector(".canvas canvas") === window.canvas;',
+      ),
+      "dragging keeps the player and its canvas",
+    );
+
+    await page.getByRole("tab", { name: "Code", exact: true }).click();
+    const editor = page.getByRole("textbox", { name: "Source code" });
+    const valid = await editor.inputValue();
+    await editor.fill("{");
+    await page.locator(".stage .error").waitFor();
+    await editor.fill(valid);
+    await page.locator(".stage .error").waitFor({ state: "detached" });
+    expect(
+      await evaluate(
+        "return studio.player === window.preview && studio.layout.tracks[1].clips[0].start === 1;",
+      ),
+      "correcting invalid timeline source restores the preview on the same player",
+    );
 
     // Selecting a scene switches the preview; unrelated text stays in the editor.
     const openFile = async (path: string, width: number) => {
@@ -430,9 +458,17 @@ export default function Scene() {
     await openFile("cut.timeline.json", 320);
 
     // Undo, redo, and a sequence reordered.
-    await evaluate("await studio.undo();");
+    await evaluate(
+      "window.preview = studio.player; await studio.player.draw(20); await studio.undo();",
+    );
     expect((await evaluate("return studio.drafts;")).length === 0, "undone, nothing is changed");
     await evaluate("await studio.redo();");
+    expect(
+      await evaluate(
+        "return studio.player === window.preview && studio.player.currentFrame === 20;",
+      ),
+      "undo and redo preserve the player and playhead",
+    );
     await page.locator('.clip[data-at="tracks.visual[0].items[1]"]').click();
     await evaluate(`await studio.edit({ op: "move", clip: "b", index: 0 });`);
     expect(
@@ -761,12 +797,40 @@ export default function Scene() {
     );
     await page.reload();
     await until("project reopened", () => evaluate("return !!studio.player;"));
+    const partial = page.waitForResponse(
+      (res) =>
+        new URL(res.url()).pathname === "/api/linked" &&
+        res.request().resourceType() === "fetch" &&
+        /^bytes=\d+-\d+$/.test(res.request().headers().range ?? "") &&
+        res.status() === 206,
+    );
     await openFile("linked-media.timeline.json", 320);
+    const range = await partial;
+    expect(
+      /^bytes \d+-\d+\/\d+$/.test(range.headers()["content-range"] ?? ""),
+      "the linked video is read through the player by byte range",
+    );
     expect(
       await evaluate(
         "await studio.player.draw(20); return (await studio.player.pixels()).length === 320 * 180 * 4;",
       ),
       "a video linked outside the project decodes and draws in Studio",
+    );
+
+    const keptFrame = await evaluate(`
+      window.preview = studio.player;
+      const before = (await studio.player.pixels()).slice(0, 3);
+      await studio.edit({op: "set", clip: "video", field: "name", value: "First cut"});
+      window.videoPixel = (await studio.player.pixels()).slice(0, 3);
+      return studio.player === window.preview && studio.player.currentFrame === 20 &&
+        before.every((channel, i) => channel === window.videoPixel[i]);`);
+    expect(keptFrame, "editing a video keeps its player, playhead and displayed pixels");
+    await Bun.write(outside, Bun.file(join(project, "renders/other.mp4")));
+    await until("the replacement linked video in the preview", () =>
+      evaluate(`
+      if (studio.player === window.preview || studio.player?.currentFrame !== 20) return false;
+      const pixel = (await studio.player.pixels()).slice(0, 3);
+      return pixel.some((channel, i) => Math.abs(channel - window.videoPixel[i]) > 40);`),
     );
 
     await openFile("unnamed.timeline.json", 320);

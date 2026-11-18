@@ -12,7 +12,7 @@ import { createPlayer, type Player, type Stats } from "../../../packages/engine/
 
 import {
   Conflict,
-  fetching,
+  resourceAddress,
   type Layout,
   address,
   mediaUrl,
@@ -56,6 +56,8 @@ export class ValleStudio extends LitElement {
   /** The entry: the scene or timeline played; a project's can be another of its timelines. */
   #entry = "";
   player: Player | undefined;
+  /** Draft sources and service URLs used by the current timeline preview. */
+  #preview?: { entry: string; sources: Map<string, string>; reads: Set<string> };
   #error = "";
   layout: Layout | undefined;
   #selected: string | undefined;
@@ -138,6 +140,7 @@ export class ValleStudio extends LitElement {
       this.#values = {};
       this.#exportJob = undefined;
     }
+    this.#preview = undefined;
     this.#entry = this.#open = entry;
     this.#selected = undefined;
     this.#asset = undefined;
@@ -154,7 +157,7 @@ export class ValleStudio extends LitElement {
       if (opening !== this.#opening) return;
       await this.#refresh();
       await this.updateComplete;
-      if (opening === this.#opening) await this.#play(time, playing);
+      if (opening === this.#opening) await this.#play({ time, playing });
     } catch (error) {
       if (opening === this.#opening) {
         this.#busy = false;
@@ -187,62 +190,84 @@ export class ValleStudio extends LitElement {
     return this.#entry.endsWith(".timeline.json");
   }
 
-  /** A new player of the entry, its drafts given in place of the files. */
-  async #play(
+  /** Update a timeline in place when only its text changed. Other sources need a fresh player. */
+  async #play({
+    edit = false,
+    layout,
     time = this.player?.currentTime ?? this.#time,
     playing = this.player?.playing ?? false,
-  ): Promise<boolean> {
+  }: { edit?: boolean; layout?: Layout; time?: number; playing?: boolean } = {}): Promise<boolean> {
+    clearTimeout(this.#reload);
     const opening = ++this.#opening;
+    const entry = this.#entry;
+    const text = this.text(entry);
+    const sources = new Map(this.#drafts);
+    sources.delete(entry);
+    const previous = this.player;
+    const preview = this.#preview;
+    const reuse =
+      edit &&
+      previous &&
+      preview?.entry === entry &&
+      sources.size === preview.sources.size &&
+      [...sources].every(([path, source]) => preview.sources.get(path) === source);
+    if (!reuse) {
+      this.#preview = undefined;
+      previous?.pause();
+    }
     this.#scrub = undefined;
     this.#busy = true;
     this.#stats = undefined;
     this.requestUpdate();
-    const entry = this.#entry;
-    const loop = this.player?.loop ?? false;
-    const muted = this.player?.muted ?? false;
-    const previous = this.player;
-    previous?.pause();
-    if (opening !== this.#opening) return false;
-    this.#stats = undefined;
-    const canvas = document.createElement("canvas");
     const stage = this.renderRoot.querySelector(".canvas");
-
-    const files: Record<string, Blob> = {};
-    for (const [path, text] of this.#drafts) {
-      files[path] = new Blob([text]);
-    }
     try {
-      const layout = this.timeline ? (await service.edit(this.text(entry))).layout : undefined;
+      if (this.timeline && !layout) layout = (await service.edit(text)).layout;
       if (opening !== this.#opening) return false;
-      this.layout = layout;
       if (layout?.duration === 0) {
+        this.#preview = undefined;
         this.player = undefined;
-        await previous?.close();
-        stage?.replaceChildren();
+        this.layout = layout;
+        this.#time = this.#shownFrame = 0;
         this.#error = "";
-        this.#busy = false;
-        this.requestUpdate();
+        stage?.replaceChildren();
+        await previous?.close();
+        return opening === this.#opening;
+      }
+      if (reuse) {
+        await previous.updateTimeline(text);
+        if (opening !== this.#opening) return false;
+        this.layout = layout;
+        this.#error = "";
         return true;
       }
+      const canvas = document.createElement("canvas");
+      const files: Record<string, Blob> = {};
+      for (const [path, source] of this.#drafts) files[path] = new Blob([source]);
+      const reads = new Set<string>();
       const player = await createPlayer({
         canvas,
         runtime: "/valle/",
         entry,
         base: "/api/files/",
         fonts: "/api/fonts/",
-        fetch: fetching,
+        fetch: (url, init) => {
+          const path = resourceAddress(url);
+          reads.add(path);
+          return fetch(path, init);
+        },
         files,
         props: this.#values,
-        loop,
-        muted,
+        loop: previous?.loop,
+        muted: previous?.muted,
       });
       if (opening !== this.#opening) {
         await player.close();
         return false;
       }
       this.player = player;
+      this.layout = layout;
+      this.#preview = layout ? { entry, sources, reads } : undefined;
       stage?.replaceChildren(canvas);
-      await previous?.close();
       this.#shownFrame = player.currentFrame;
       this.#error = "";
       player.on("time", ({ time, frame }) => {
@@ -272,20 +297,25 @@ export class ValleStudio extends LitElement {
       }
       player.seek(time);
       if (playing) player.play();
+      await previous?.close();
+      return opening === this.#opening;
     } catch (error) {
       if (opening === this.#opening) {
         this.#error = (error as Error).message;
       }
+      return false;
+    } finally {
+      if (opening === this.#opening) {
+        this.#busy = false;
+        this.requestUpdate();
+      }
     }
-    if (opening === this.#opening) this.#busy = false;
-    this.requestUpdate();
-    return opening === this.#opening && !this.#error;
   }
 
   /** Plays the drafts once typing stops. */
   #later(): void {
     clearTimeout(this.#reload);
-    this.#reload = setTimeout(() => void this.#play(), 400);
+    this.#reload = setTimeout(() => void this.#play({ edit: true }), 400);
   }
 
   /** Does `op` to the timeline open: a draft of it, which can be undone. */
@@ -354,17 +384,13 @@ export class ValleStudio extends LitElement {
         return;
       }
     }
-    const previous = { layout: this.layout, selected: this.#selected };
     this.#change(step);
-    this.layout = layout;
-    this.#selected = selected;
-    if (await this.#play()) {
+    if (await this.#play({ edit: true, layout })) {
+      this.#selected = selected;
       this.#undo.push(step);
       this.#redo = [];
     } else {
       this.#change({ path: step.path, after: step.before });
-      this.layout = previous.layout;
-      this.#selected = previous.selected;
       this.#refuse(`Edit not applied: ${this.#explain(this.#error)}`);
       this.#error = "";
     }
@@ -380,13 +406,21 @@ export class ValleStudio extends LitElement {
     }
   }
 
+  async #showStep(path: string): Promise<void> {
+    if (path !== this.#entry) return this.#load(path);
+    this.#open = path;
+    this.#asset = undefined;
+    this.#selected = undefined;
+    await this.#play({ edit: true });
+  }
+
   async undo(): Promise<void> {
     if (this.#editing) await this.#editing;
     const step = this.#undo.pop();
     if (step) {
       this.#change({ path: step.path, after: step.before });
       this.#redo.push(step);
-      await this.#load(step.path);
+      await this.#showStep(step.path);
       this.#status = `Undid edit in ${step.path}`;
       this.requestUpdate();
     }
@@ -398,7 +432,7 @@ export class ValleStudio extends LitElement {
     if (step) {
       this.#change(step);
       this.#undo.push(step);
-      await this.#load(step.path);
+      await this.#showStep(step.path);
       this.#status = `Redid edit in ${step.path}`;
       this.requestUpdate();
     }
@@ -435,7 +469,7 @@ export class ValleStudio extends LitElement {
     this.#conflicts.delete(path);
     if (keep === "theirs") {
       this.#drafts.delete(path);
-      await this.#play();
+      await this.#play({ edit: path === this.#entry });
     } else {
       await this.save();
     }
@@ -445,11 +479,14 @@ export class ValleStudio extends LitElement {
     if (this.#editing) await this.#editing;
     if (event.event === "change") {
       const path = event.path as string;
-      invalidate(mediaUrl("", path));
+      const url = mediaUrl("", path);
+      invalidate(url);
       if (this.#drafts.has(path)) {
         this.#conflicts.add(path);
       } else if (this.#files.has(path)) {
         await this.#read(path);
+        await this.#play({ edit: path === this.#entry });
+      } else if (this.#preview?.reads.has(url)) {
         await this.#play();
       }
     } else if (event.event === "render") {
