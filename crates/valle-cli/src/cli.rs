@@ -10,7 +10,7 @@ use valle_timeline::query::Filter;
 use valle_timeline::time::Rate;
 
 use crate::Failure;
-use crate::args::{self, Args, Frames};
+use crate::args::{self, Args, AudioFlags, Frames};
 
 #[derive(Parser)]
 #[command(
@@ -341,6 +341,8 @@ pub struct Output {
 #[command(next_help_heading = "Render")]
 pub struct RenderOptions {
     #[command(flatten)]
+    audio: AudioFlags,
+    #[command(flatten)]
     frames: FrameChoice,
     /// Draw a PNG storyboard: sample 12 frames including the first and last by default
     #[arg(long)]
@@ -478,6 +480,7 @@ impl RenderOptions {
             Coder::Software => Decoding::Software,
         });
         args.bitrate = self.bitrate;
+        args.audio = self.audio;
     }
 }
 
@@ -575,7 +578,7 @@ fn size(text: &str) -> Result<[u32; 2], String> {
         .ok_or_else(|| "it is WIDTHxHEIGHT, such as 3840x2160".into())
 }
 
-fn bits(text: &str) -> Result<u64, String> {
+pub(crate) fn bits(text: &str) -> Result<u64, String> {
     let (number, scale) = match text.as_bytes().last() {
         Some(b'k' | b'K') => (&text[..text.len() - 1], 1e3),
         Some(b'm' | b'M') => (&text[..text.len() - 1], 1e6),

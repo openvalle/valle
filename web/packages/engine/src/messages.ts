@@ -65,7 +65,7 @@ export type ExportOptions = {
   height: number;
   rate: [number, number];
   bitrate: number;
-  audio: boolean;
+  audio?: { codec?: "aac" | "opus"; sampleRate: number; channels: 1 | 2; bitrate: number };
 };
 
 /** The composition and the controls of what is open. */

@@ -85,3 +85,64 @@ pub fn decode(path: &Path) -> Result<Option<Vec<f32>>, String> {
     }
     Ok(Some(out))
 }
+
+/// Streaming stereo f32 rate conversion for video and WAV exports.
+pub struct OutputRate {
+    converter: software::resampling::Context,
+    input: u64,
+    output: u64,
+}
+
+impl OutputRate {
+    pub fn new(rate: u32) -> Result<Self, String> {
+        let format = format::Sample::F32(format::sample::Type::Packed);
+        let stereo = ChannelLayout::default(2);
+        let converter =
+            software::resampling::Context::get(format, stereo, RATE, format, stereo, rate)
+                .map_err(|e| format!("cannot resample audio to {rate} Hz: {e}"))?;
+        Ok(Self {
+            converter,
+            input: 0,
+            output: 0,
+        })
+    }
+
+    fn block(&mut self, samples: &[f32], capacity: usize) -> Result<Vec<f32>, String> {
+        let format = self.converter.input().format;
+        let layout = self.converter.input().channel_layout;
+        let mut input = frame::Audio::new(format, samples.len() / 2, layout);
+        input.set_rate(RATE);
+        input.plane_mut::<f32>(0).copy_from_slice(samples);
+        let mut out = frame::Audio::new(format, capacity, layout);
+        self.converter
+            .run(&input, &mut out)
+            .map_err(|e| e.to_string())?;
+        self.output += out.samples() as u64;
+        Ok(out.plane::<f32>(0).to_vec())
+    }
+}
+
+impl crate::media::audio::Resample for OutputRate {
+    fn convert(&mut self, samples: Option<&[f32]>) -> Result<Vec<f32>, String> {
+        let rate = u64::from(self.converter.output().rate);
+        if let Some(samples) = samples {
+            if samples.is_empty() {
+                return Ok(Vec::new());
+            }
+            let n = (samples.len() / 2) as u64;
+            self.input += n;
+            let room = (n * rate).div_ceil(u64::from(RATE));
+            return self.block(samples, room as usize + 32);
+        }
+        // Extend the filter with silence up to the last real output sample. swr's ordinary
+        // EOF flush can return zero samples for inputs shorter than its initial filter delay.
+        let length = ((u128::from(self.input) * u128::from(rate) + u128::from(RATE / 2))
+            / u128::from(RATE)) as u64;
+        let mut tail = Vec::new();
+        while self.output < length {
+            let remaining = length - self.output;
+            tail.extend(self.block(&[0.0; 512], remaining.min(4096) as usize)?);
+        }
+        Ok(tail)
+    }
+}

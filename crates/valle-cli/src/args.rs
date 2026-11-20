@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value};
 use valle_engine::front::Inputs;
-use valle_native::media::{Codec, Decoding, Encoding};
+use valle_native::media::{AudioCodec, AudioOptions, Codec, Decoding, Encoding};
 use valle_timeline::time::Rate;
 
 use crate::Failure;
@@ -31,6 +31,77 @@ pub struct Args {
     pub decoder: Option<Decoding>,
     /// A video's bits a second.
     pub bitrate: Option<u64>,
+    pub audio: AudioFlags,
+}
+
+#[derive(clap::Args, Default)]
+pub struct AudioFlags {
+    /// Omit the audio track and skip mixing
+    #[arg(long, conflicts_with_all = ["audio_codec", "audio_sample_rate", "audio_channels", "audio_bitrate"])]
+    pub no_audio: bool,
+    /// Audio encoding: aac, opus, pcm-s16le or pcm-f32le, depending on the container
+    #[arg(long, value_parser = audio_codec)]
+    audio_codec: Option<AudioCodec>,
+    /// Audio samples per second (default 48000)
+    #[arg(long, value_name = "HZ", value_parser = clap::value_parser!(u32).range(1..=i32::MAX as i64))]
+    audio_sample_rate: Option<u32>,
+    /// 1 for mono, 2 for stereo (default)
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=2))]
+    audio_channels: Option<u8>,
+    /// Compressed audio's target bits per second, such as 128k
+    #[arg(long, value_name = "BITS", value_parser = audio_bits)]
+    audio_bitrate: Option<u32>,
+}
+
+fn audio_codec(s: &str) -> Result<AudioCodec, String> {
+    [
+        AudioCodec::Aac,
+        AudioCodec::Opus,
+        AudioCodec::PcmS16,
+        AudioCodec::PcmF32,
+    ]
+    .into_iter()
+    .find(|c| c.name() == s)
+    .ok_or_else(|| "choose aac, opus, pcm-s16le or pcm-f32le".into())
+}
+
+fn audio_bits(s: &str) -> Result<u32, String> {
+    u32::try_from(crate::cli::bits(s)?)
+        .ok()
+        .filter(|n| *n > 0)
+        .ok_or_else(|| "audio bitrate must be a positive 32-bit integer in bits per second".into())
+}
+
+impl AudioFlags {
+    pub fn configured(&self) -> bool {
+        self.audio_codec.is_some()
+            || self.audio_sample_rate.is_some()
+            || self.audio_channels.is_some()
+            || self.audio_bitrate.is_some()
+    }
+
+    pub fn resolve(&self, ext: &str) -> Result<AudioOptions, Failure> {
+        let defaults = AudioOptions::for_container(ext);
+        let codec = self.audio_codec.unwrap_or(defaults.codec);
+        let rate = self.audio_sample_rate.unwrap_or(defaults.rate);
+        let channels = self.audio_channels.unwrap_or(defaults.channels);
+        // AAC-LC fits at most 6144 bits per channel in a 1024-sample frame.
+        let default_bitrate = match codec {
+            AudioCodec::Aac => Some(256_000.min(rate.saturating_mul(6 * u32::from(channels)))),
+            AudioCodec::Opus => Some(256_000),
+            _ => None,
+        };
+        let settings = AudioOptions {
+            codec,
+            rate,
+            channels,
+            bitrate: self.audio_bitrate.or(default_bitrate),
+        };
+        settings
+            .validate(ext)
+            .map_err(|e| Failure::new("usage", e))?;
+        Ok(settings)
+    }
 }
 
 #[derive(Clone)]
@@ -62,6 +133,34 @@ impl Args {
                 "--fps applies to images and video, not .wav",
             ));
         }
+        if self.audio.configured() || self.audio.no_audio {
+            if !self.timeline && self.audio.configured() {
+                return Err(Failure::new(
+                    "usage",
+                    "a Motion scene has no audio track to configure",
+                ));
+            }
+            if let Some(out) = &self.out {
+                let ext = std::path::Path::new(out)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if !matches!(ext.as_str(), "mp4" | "mov" | "wav") || self.storyboard {
+                    return Err(Failure::new(
+                        "usage",
+                        "audio options apply to .mp4, .mov or .wav",
+                    ));
+                }
+                if ext == "wav" && self.audio.no_audio {
+                    return Err(Failure::new(
+                        "usage",
+                        "--no-audio cannot produce a WAV file",
+                    ));
+                }
+                self.audio.resolve(&ext)?;
+            }
+        }
         Ok(())
     }
 
@@ -91,6 +190,21 @@ impl Args {
         }
         if let Some(bits) = self.bitrate {
             out.push(("bitrate", bits.to_string()));
+        }
+        if self.audio.no_audio {
+            out.push(("no-audio", true.to_string()));
+        }
+        if let Some(c) = self.audio.audio_codec {
+            out.push(("audio-codec", c.name().into()));
+        }
+        if let Some(v) = self.audio.audio_sample_rate {
+            out.push(("audio-sample-rate", v.to_string()));
+        }
+        if let Some(v) = self.audio.audio_channels {
+            out.push(("audio-channels", v.to_string()));
+        }
+        if let Some(v) = self.audio.audio_bitrate {
+            out.push(("audio-bitrate", v.to_string()));
         }
         out
     }

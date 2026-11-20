@@ -71,9 +71,16 @@ import { exportBrowserVideo } from "@openvalle/engine/export";
 const { blob } = await exportBrowserVideo(player, { width: 1280, height: 720 });
 ```
 
-The MP4 is H.264, with its sound in AAC where the browser encodes it, else Opus. A separate
+The MP4 uses H.264 video. A separate
 worker exports the committed timeline and resource bindings captured at the start of the call.
 Playback and later edits can continue during export.
+
+For a timeline with sound, set `audioCodec` (`"aac"` or `"opus"`), `audioSampleRate`
+(Hz), `audioChannels` (1 or 2) and `audioBitrate` (bits/s). The default is stereo at
+48000 Hz and 192000 bits/s, preferring AAC and falling back to Opus when available.
+MP4 Opus uses 48000 Hz. An explicitly requested encoding must be supported by the browser.
+For voice, for example, use `{ audioChannels: 1, audioBitrate: 128000 }`. For a silent MP4,
+pass `{ includeAudio: false }` on its own or alongside video settings.
 
 For long exports, write the MP4 to the origin's private file system (OPFS). The same output
 options and progress callback work with either target.

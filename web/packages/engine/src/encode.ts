@@ -63,9 +63,24 @@ export async function encode(
     const video = new VideoSampleSource({ codec: "avc", bitrate });
     output.addVideoTrack(video, { frameRate: n / d });
     let audio: AudioSampleSource | undefined;
-    if (sound) {
-      const aac = await canEncodeAudio("aac", { numberOfChannels: 2, sampleRate: RATE });
-      audio = new AudioSampleSource({ codec: aac ? "aac" : "opus", bitrate: 192_000 });
+    if (sound && options.audio) {
+      const { codec, sampleRate, channels, bitrate } = options.audio;
+      const candidates = codec ? [codec] : (["aac", "opus"] as const);
+      for (const candidate of candidates) {
+        if (candidate === "opus" && sampleRate !== 48000) continue;
+        if (await canEncodeAudio(candidate, { numberOfChannels: channels, sampleRate, bitrate })) {
+          const transform =
+            sampleRate === RATE && channels === 2
+              ? undefined
+              : { sampleRate, numberOfChannels: channels };
+          audio = new AudioSampleSource({ codec: candidate, bitrate, transform });
+          break;
+        }
+      }
+      if (!audio)
+        throw new Error(
+          `Cannot encode ${codec ?? "AAC or Opus"} at ${sampleRate} Hz, ${channels} channel(s), ${bitrate} bits/s in this browser`,
+        );
       output.addAudioTrack(audio);
     }
     await output.start();

@@ -73,6 +73,11 @@ again.
 | `--fps FPS` | Output frame rate, such as `30`, `60` or `30000/1001`; samples the same animation at that rate without editing the source |
 | `--codec h264\|hevc\|prores` | `h264` for `.mp4` and `prores` (4444, with alpha) for `.mov` unless given |
 | `--bitrate 8M` | Bits a second, in place of the codec's quality setting |
+| `--no-audio` | Export a video without mixing or encoding audio |
+| `--audio-codec CODEC` | MP4: `aac` (default) or `opus`. MOV: `pcm-s16le` (default) or `aac`. WAV: `pcm-f32le` (default) or `pcm-s16le` |
+| `--audio-sample-rate HZ` | Output samples per second, default 48000. MP4 Opus uses 48000 Hz |
+| `--audio-channels 1\|2` | Mono (the mean of left and right) or stereo (default) |
+| `--audio-bitrate 128k` | Target bits per second for AAC or Opus, default 256k or the AAC maximum at a lower sample rate. PCM bitrate follows its sample rate, channels and bit depth |
 | `--encoder vt\|ffmpeg` | The hardware encoder where it has the codec, unless given |
 | `--decoder vt\|ffmpeg` | How videos the scene shows are decoded |
 
@@ -85,6 +90,18 @@ frames and storyboards. Frame numbers and `--step` refer to the output rate. Wit
 the scene's `composition.fps` or the timeline's `canvas.fps` is used. A `.wav` has no video
 frame rate and rejects this option. The JSON result reports the effective `fps` as a ratio
 or integer string; Project render records also keep an explicit `--fps`.
+
+Audio settings apply to a Timeline or Project export. Motion scenes are silent. A selection
+that excludes frames has no audio track. An explicit encoder must be available. For example:
+
+```sh
+valle timeline render edit.timeline.json -o interview.mp4 --audio-channels 1 --audio-bitrate 128k
+valle timeline render edit.timeline.json -o mix.wav --audio-codec pcm-s16le --audio-sample-rate 44100
+```
+
+The JSON result's `audio` gives the track's codec, sample rate, channels and bitrate
+(target bitrate for compressed audio). Videos without an audio track omit this field. Studio exposes the same
+settings under **Export → Audio**.
 
 ## Output
 

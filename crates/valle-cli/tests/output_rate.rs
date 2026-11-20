@@ -335,3 +335,50 @@ fn audio_only_output_rejects_a_frame_rate_before_loading() {
     assert!(!dir.join("audio.wav").exists());
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn wav_export_converts_the_mix_and_writes_its_actual_sample_count() {
+    let dir = folder("audio-settings");
+    sound(&dir.join("tone.wav"));
+    let path = "edit.timeline.json";
+    let doc = json!({"canvas":{"width":128,"height":64,"fps":30}, "resources":{"tone":"tone.wav"},
+        "tracks":{"audio":[{"clips":[{"src":"tone","start":0,"duration":2}]}]}});
+    std::fs::write(dir.join(path), doc.to_string()).unwrap();
+    let value = run(
+        &dir,
+        &[
+            "timeline",
+            "render",
+            path,
+            "-o",
+            "mono.wav",
+            "--audio-codec",
+            "pcm-s16le",
+            "--audio-channels",
+            "1",
+            "--audio-sample-rate",
+            "44100",
+        ],
+    );
+    assert_eq!(
+        value["audio"],
+        json!({"codec":"pcm-s16le","sampleRate":44100,"channels":1,"bitrate":705600})
+    );
+    let file = std::fs::read(dir.join("mono.wav")).unwrap();
+    assert_eq!(&file[20..28], &[1, 0, 1, 0, 0x44, 0xac, 0, 0]);
+    assert_eq!(file.len(), 44 + 2 * 44100 * 2);
+    for (time, tone) in [(0.1, false), (0.55, true), (1.1, false), (1.55, true)] {
+        let i = 44 + 2 * (time * 44100.0) as usize;
+        assert_eq!(file[i..i + 256].iter().any(|v| *v > 0), tone);
+    }
+    for (out, flag, value) in [
+        ("bad.wav", "--audio-bitrate", "128k"),
+        ("bad.mov", "--audio-codec", "opus"),
+        ("bad.png", "--audio-channels", "1"),
+    ] {
+        let err = invoke(&dir, &["timeline", "render", path, "-o", out, flag, value]);
+        assert_eq!(err["status"], "error");
+        assert!(!dir.join(out).exists());
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

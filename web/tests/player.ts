@@ -7,6 +7,7 @@
 // The native frames are drawn first, which puts the built-in fonts in the cache; the page fetches
 // them from there, so the test needs no external network after the browser is installed.
 
+import { BufferSource, Input, MP4 } from "mediabunny";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1352,6 +1353,37 @@ async function main() {
         failed.push(`subtitle export frame ${frame}: ${JSON.stringify(d)}`);
       }
     }
+    // Inspect the actual encoded track. Some Chromium builds have no AAC encoder.
+    const aac = await evaluate(
+      'AudioEncoder.isConfigSupported({codec:"mp4a.40.2",sampleRate:44100,numberOfChannels:1,bitrate:128000}).then(v=>v.supported)',
+    );
+    for (const [codec, rate] of [["opus", 48000], ...(aac ? [["aac", 44100]] : [])] as const) {
+      const e = await evaluate(
+        `exported("sound/sound.timeline.json", ${JSON.stringify({ width: 64, frameRate: 4, audioCodec: codec, audioSampleRate: rate, audioChannels: 1, audioBitrate: 128000 })})`,
+      );
+      const input = new Input({
+        source: new BufferSource(Buffer.from(e.url.split(",")[1], "base64")),
+        formats: [MP4],
+      });
+      try {
+        const track = await input.getPrimaryAudioTrack();
+        if (
+          !track ||
+          (await track.getCodec()) !== codec ||
+          (await track.getSampleRate()) !== rate ||
+          (await track.getNumberOfChannels()) !== 1
+        ) {
+          failed.push(`browser audio export: expected ${codec} at ${rate} Hz mono`);
+        }
+      } finally {
+        input.dispose();
+      }
+    }
+    const badAudio = await evaluate(
+      'exported("sound/sound.timeline.json", {audioCodec:"opus",audioSampleRate:44100}).then(() => "", e => e.message)',
+    );
+    if (!badAudio.includes("44100"))
+      failed.push("an explicit unavailable audio configuration must fail");
     // An export at another size and rate, without its sound, and one cancelled.
     const options = { width: 160, frameRate: 15, includeAudio: false };
     const small = await evaluate(

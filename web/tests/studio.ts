@@ -163,7 +163,7 @@ export default function Scene() {
     let savePath: string | null | undefined;
     await page.route("**/api/save-file", async (route) => {
       const { name } = route.request().postDataJSON();
-      expect(name.endsWith(".mp4"), "the system save dialog receives an MP4 name");
+      expect(/\.(mp4|wav)$/.test(name), "the system save dialog receives a media file name");
       await route.fulfill({
         json: {
           status: "ok",
@@ -534,6 +534,17 @@ export default function Scene() {
       await evaluate("return studio.layout.tracks[1].clips.length === 1;"),
       "a dialog keeps workspace shortcuts inactive",
     );
+    await page.locator("details.export-audio > summary").click();
+    await page.getByRole("combobox", { name: "Export format" }).selectOption("wav");
+    expect(
+      (await page.getByRole("combobox", { name: "Audio bitrate" }).count()) === 0 &&
+        (await page.getByRole("combobox", { name: "Export resolution" }).count()) === 0,
+      "WAV offers PCM without compressed bitrate or video resolution",
+    );
+    await page.getByRole("combobox", { name: "Export format" }).selectOption("mp4");
+    await page.getByRole("combobox", { name: "Sample rate" }).selectOption("44100");
+    await page.getByRole("combobox", { name: "Channels" }).selectOption("1");
+    await page.getByRole("combobox", { name: "Audio bitrate" }).selectOption("128000");
     await page.getByRole("combobox", { name: "Export resolution" }).selectOption("1280x720");
     await page.getByRole("button", { name: "Export video", exact: true }).click();
     const id = await until("the export job", () => evaluate("return studio.job(1)?.id;"));
@@ -548,6 +559,13 @@ export default function Scene() {
     expect(
       job.result.width === 1280 && job.result.height === 720,
       "the export uses the selected 720p size",
+    );
+    expect(
+      job.result.audio?.codec === "aac" &&
+        job.result.audio.sampleRate === 44100 &&
+        job.result.audio.channels === 1 &&
+        job.result.audio.bitrate === 128000,
+      "the native export used the Studio audio settings",
     );
     const afterExport = await evaluate(
       "return [studio.player.info.width, studio.player.info.height];",
@@ -629,6 +647,24 @@ export default function Scene() {
       "a replacement approved by the system dialog needs no second confirmation",
     );
     savePath = undefined;
+    await page.getByRole("button", { name: "Close export" }).click();
+    await openFile("cut.timeline.json", 320);
+    await page.getByRole("button", { name: "Export", exact: true }).click();
+    await page.getByRole("combobox", { name: "Export format" }).selectOption("wav");
+    await page.locator("details.export-audio:not([open]) > summary").click();
+    await page.getByRole("combobox", { name: "Audio encoding" }).selectOption("pcm-s16le");
+    await page.getByRole("button", { name: "Export audio", exact: true }).click();
+    const wavLink = page.getByRole("link", { name: "Open audio" });
+    await wavLink.waitFor();
+    const wav = await page.request.get(
+      new URL((await wavLink.getAttribute("href"))!, ready.url).href,
+    );
+    const wavData = await wav.body();
+    expect(
+      wav.ok() && wavData.toString("ascii", 8, 12) === "WAVE" && wavData.readUInt16LE(34) === 16,
+      "Studio exports and serves a 16-bit WAV",
+    );
+    await page.getByRole("combobox", { name: "Export format" }).selectOption("mp4");
     await page.getByRole("button", { name: "Close export" }).click();
     await Bun.write(join(project, "source.mp4"), Bun.file(join(project, "renders/cut.mp4")));
     await page.getByRole("tab", { name: "Files", exact: true }).click();

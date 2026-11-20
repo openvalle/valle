@@ -126,10 +126,11 @@ pub fn run(
 /// Run by the private helper command on its main thread, as Cocoa requires.
 /// A save panel returns a path without creating the file; cancellation returns null.
 pub fn save_file(name: &str) -> Value {
+    let ext = name.rsplit_once('.').map_or("mp4", |(_, ext)| ext);
     let path = rfd::FileDialog::new()
-        .set_title("Export video")
+        .set_title("Export")
         .set_file_name(name)
-        .add_filter("MP4 video", &["mp4"])
+        .add_filter(ext.to_ascii_uppercase(), &[ext])
         .save_file();
     json!({ "status": "ok", "path": path })
 }
@@ -552,8 +553,13 @@ impl Service {
     fn choose_output(&self, body: &[u8]) -> Result<Value, String> {
         let body: Value = serde_json::from_slice(body).map_err(|e| e.to_string())?;
         let name = body["name"].as_str().ok_or("which file name?")?;
-        if name.contains(['/', '\\']) || !name.to_lowercase().ends_with(".mp4") {
-            return Err("choose an MP4 file name, without a directory".into());
+        if name.contains(['/', '\\'])
+            || !matches!(
+                name.to_ascii_lowercase().rsplit_once('.'),
+                Some((_, "mp4" | "mov" | "wav"))
+            )
+        {
+            return Err("choose an MP4, MOV or WAV file name, without a directory".into());
         }
         self.panel(&["--studio-save-file", name])
     }

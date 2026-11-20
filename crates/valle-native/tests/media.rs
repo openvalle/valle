@@ -28,7 +28,7 @@ fn options(codec: Codec) -> Options {
         codec,
         encoding: Encoding::Software,
         bitrate: None,
-        sound: false,
+        sound: None,
         surfaces: false,
     }
 }
@@ -193,7 +193,7 @@ fn muxed_pcm_keeps_channels_and_a_partial_final_block() {
     let dir = Folder::new("mux");
     let path = dir.0.join("video.mov");
     let o = Options {
-        sound: true,
+        sound: Some(media::AudioOptions::for_container("mov")),
         ..options(Codec::ProRes4444)
     };
     let mut writer = media::writer(&path, &o).unwrap();
@@ -347,7 +347,7 @@ fn invalid_encoder_inputs_do_not_panic_or_stall() {
         assert!(media::writer(&path, &o).is_err(), "{o:?}");
     }
     let o = Options {
-        sound: true,
+        sound: Some(media::AudioOptions::for_container("mp4")),
         ..base
     };
     let mut writer = media::writer(&path, &o).unwrap();
@@ -356,4 +356,22 @@ fn invalid_encoder_inputs_do_not_panic_or_stall() {
     writer.push(&picture(0, false)).unwrap();
     writer.sound(&[0.0; 2048]).unwrap();
     writer.finish().unwrap();
+}
+
+#[test]
+fn short_resampled_clips_keep_their_samples_and_mono_balance() {
+    for count in [10, 30, 127, 1601] {
+        let mut format = media::AudioOptions::for_container("wav");
+        format.rate = 44_100;
+        format.channels = 1;
+        let mut convert = media::OutputPcm::new(format).unwrap();
+        let stereo: Vec<f32> = (0..count).flat_map(|_| [0.5, 0.0]).collect();
+        let mut actual = convert.convert(Some(&stereo)).unwrap().into_owned();
+        actual.extend_from_slice(&convert.convert(None).unwrap());
+        assert_eq!(actual.len(), (count * 44100 + 24000) / 48000);
+        assert!(
+            (actual[actual.len() / 2] - 0.25).abs() < 0.035,
+            "{actual:?}"
+        );
+    }
 }

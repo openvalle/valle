@@ -20,6 +20,14 @@ export type ExportVideoOptions = {
   videoBitrate?: number;
   /** Whether the sound is in it, when there is any: by default it is. */
   includeAudio?: boolean;
+  /** Automatic selection prefers AAC. An explicit codec must be available. */
+  audioCodec?: "aac" | "opus";
+  /** Output samples per second; defaults to 48000. MP4 Opus uses 48000. */
+  audioSampleRate?: number;
+  /** Mono or stereo (default). */
+  audioChannels?: 1 | 2;
+  /** Target audio bits per second; defaults to 192000. */
+  audioBitrate?: number;
   /** Cancels the export, which then fails with `cancelled`. */
   signal?: AbortSignal;
   onProgress?: (progress: { framesCompleted: number; frameCount: number }) => void;
@@ -52,6 +60,25 @@ export async function exportBrowserVideo(
   // Capture the entry and the resource bindings before starting a worker or asking for a file.
   const spawn = { ...open, inputs: structuredClone(open.inputs), given: { ...open.given } };
   const { signal, onProgress, includeAudio = true, target } = options;
+  const { audioCodec, audioSampleRate = 48000, audioChannels = 2, audioBitrate = 192000 } = options;
+  const configured = [
+    audioCodec,
+    options.audioSampleRate,
+    options.audioChannels,
+    options.audioBitrate,
+  ].some((v) => v !== undefined);
+  if (!includeAudio && configured)
+    throw new PlayerError("scene", "audio options require includeAudio");
+  if (
+    (audioCodec !== undefined && audioCodec !== "aac" && audioCodec !== "opus") ||
+    ![1, 2].includes(audioChannels) ||
+    ![audioSampleRate, audioBitrate].every((v) => Number.isInteger(v) && v > 0 && v <= 0xffffffff)
+  ) {
+    throw new PlayerError(
+      "scene",
+      "audio needs AAC or Opus, 1 or 2 channels, and positive integer sample rate and bitrate",
+    );
+  }
   signal?.throwIfAborted();
 
   let destination: FileDestination | undefined;
@@ -99,6 +126,8 @@ export async function exportBrowserVideo(
         inputs: spawn.inputs,
       })) as Opened;
       const audio = includeAudio && (await worker.send({ type: "sound", entry: spawn.entry }));
+      if (!audio && configured)
+        throw new PlayerError("scene", "this export has no audio track to configure");
       const { width, height } = size(info, options);
       if (
         ![width, height].every((v) => Number.isInteger(v) && v > 0 && v <= 7680) ||
@@ -120,7 +149,20 @@ export async function exportBrowserVideo(
         {
           type: "export",
           destination,
-          options: { width, height, rate: [n, d], bitrate, audio: Boolean(audio) },
+          options: {
+            width,
+            height,
+            rate: [n, d],
+            bitrate,
+            audio: audio
+              ? {
+                  codec: audioCodec,
+                  sampleRate: audioSampleRate,
+                  channels: audioChannels,
+                  bitrate: audioBitrate,
+                }
+              : undefined,
+          },
         },
         [],
         (framesCompleted) => onProgress?.({ framesCompleted, frameCount }),

@@ -40,6 +40,19 @@ const BLENDS =
     " ",
   );
 
+const AUDIO_CODECS = {
+  mp4: ["aac", "opus"],
+  mov: ["pcm-s16le", "aac"],
+  wav: ["pcm-f32le", "pcm-s16le"],
+} as const;
+type ExportFormat = keyof typeof AUDIO_CODECS;
+const AUDIO_LABELS: Record<string, string> = {
+  aac: "AAC",
+  opus: "Opus",
+  "pcm-s16le": "16-bit PCM",
+  "pcm-f32le": "32-bit float PCM",
+};
+
 export class ValleStudio extends LitElement {
   static styles = styles;
 
@@ -84,6 +97,12 @@ export class ValleStudio extends LitElement {
   #collapsed = false;
   #zoom = 1;
   #busy = false;
+  #format: ExportFormat = "mp4";
+  #includeAudio = true;
+  #audioCodec = "";
+  #audioRate = 48000;
+  #audioChannels = 2;
+  #audioBitrate = 256000;
   #exporting = false;
   #exportJob: number | undefined;
   #events: EventSource | undefined;
@@ -139,6 +158,10 @@ export class ValleStudio extends LitElement {
     if (changed) {
       this.#values = {};
       this.#exportJob = undefined;
+      if (!entry.endsWith(".timeline.json") && this.#format === "wav") {
+        this.#format = "mp4";
+        this.#audioCodec = "";
+      }
     }
     this.#preview = undefined;
     this.#entry = this.#open = entry;
@@ -509,7 +532,9 @@ export class ValleStudio extends LitElement {
       this.#entry
         .split("/")
         .pop()!
-        .replace(/(\.motion\.tsx|\.timeline\.json)$/, "") + ".mp4";
+        .replace(/(\.motion\.tsx|\.timeline\.json)$/, "") +
+      "." +
+      this.#format;
     const out = await service.saveFile(name);
     if (!out) {
       this.#status = "Export cancelled.";
@@ -526,10 +551,21 @@ export class ValleStudio extends LitElement {
           : "motion";
     const args = [group, "render", this.#entry, "-o", out];
     const size = this.renderRoot.querySelector<HTMLSelectElement>("#output-size")?.value;
-    if (size) {
+    if (size && this.#format !== "wav") {
       const info = this.player?.info;
       const output = info && info.height > info.width ? size.split("x").reverse().join("x") : size;
       args.push("--output-size", output);
+    }
+    if (this.timeline) {
+      if (!this.#includeAudio && this.#format !== "wav") {
+        args.push("--no-audio");
+      } else {
+        if (this.#audioCodec) args.push("--audio-codec", this.#audioCodec);
+        if (this.#audioRate !== 48000) args.push("--audio-sample-rate", String(this.#audioRate));
+        if (this.#audioChannels !== 2) args.push("--audio-channels", String(this.#audioChannels));
+        if (!this.#codec.startsWith("pcm") && this.#bitrate !== 256000)
+          args.push("--audio-bitrate", String(this.#bitrate));
+      }
     }
     // The system save panel already confirmed replacement of an existing file.
     const id = await service.render(args, true);
@@ -1807,13 +1843,125 @@ ${Array.from({ length: source.split("\n").length }, (_, i) => i + 1).join("\n")}
       </div>
       <div class="render-detail">
         <span
-          >${state === "preparing" ? "Preparing scene and encoder…" : state === "finishing" ? "Finalizing video…" : state === "complete" ? `${frames} frames` : state === "error" ? "Export stopped" : `${job.done.toLocaleString()} / ${frames.toLocaleString()} frames`}</span
+          >${state === "preparing" ? "Preparing scene and encoder…" : state === "finishing" ? "Finalizing video…" : state === "complete" ? (result?.file?.endsWith(".wav") ? result.summary : `${frames} frames`) : state === "error" ? "Export stopped" : `${job.done.toLocaleString()} / ${frames.toLocaleString()} frames`}</span
         >
         ${state === "complete" && Number.isFinite(result?.seconds) ? html`<span>${result.seconds.toFixed(1)} s</span>` : nothing}
       </div>
       ${result ? html`<p class="render-path" title=${result.message || result.file || result.summary}>${result.message || result.file || result.summary}</p>` : nothing}
-      ${state === "complete" && result?.url ? html`<a class="render-open" href=${result.url} target="_blank" rel="noopener">Open video ↗</a>` : nothing}
+      ${state === "complete" && result?.url ? html`<a class="render-open" href=${result.url} target="_blank" rel="noopener">${result.file?.toLowerCase().endsWith(".wav") ? "Open audio" : "Open video"} ↗</a>` : nothing}
     </div>`;
+  }
+
+  get #codec() {
+    return this.#audioCodec || AUDIO_CODECS[this.#format][0];
+  }
+
+  get #bitrates() {
+    return [64000, 96000, 128000, 192000, 256000, 320000].filter(
+      (bits) => this.#codec !== "aac" || bits <= 6 * this.#audioRate * this.#audioChannels,
+    );
+  }
+
+  get #bitrate() {
+    return this.#bitrates.includes(this.#audioBitrate) ? this.#audioBitrate : 256000;
+  }
+
+  #audioFields(running: boolean) {
+    if (!this.timeline) return html`<p>This Motion has no audio track.</p>`;
+    const on = this.#includeAudio || this.#format === "wav";
+    const pcm = this.#codec.startsWith("pcm");
+    const field = (
+      label: string,
+      values: readonly (string | number)[],
+      current: string | number,
+      format: (value: string) => string,
+      change: (value: string) => void,
+      disabled = false,
+    ) =>
+      html` <label class="field"
+        >${label}<select
+          ?disabled=${running || disabled}
+          @change=${(e: Event) => {
+            change((e.target as HTMLSelectElement).value);
+            this.requestUpdate();
+          }}
+        >
+          ${values.map((value) => html`<option value=${String(value)} .selected=${value === current}>${format(String(value))}</option>`)}
+        </select></label
+      >`;
+    const summary = on
+      ? [
+          AUDIO_LABELS[this.#codec],
+          this.#audioRate / 1000 + " kHz",
+          this.#audioChannels === 1 ? "Mono" : "Stereo",
+          ...(pcm ? [] : [this.#bitrate / 1000 + " kb/s"]),
+        ].join(" · ")
+      : "Off";
+    return html`<details class="export-audio">
+      <summary>Audio · ${summary}</summary>
+      ${
+        this.#format !== "wav"
+          ? html`<label class="field"
+              >Include audio<input
+                type="checkbox"
+                .checked=${on}
+                ?disabled=${running}
+                @change=${(e: Event) => {
+                  this.#includeAudio = (e.target as HTMLInputElement).checked;
+                  this.requestUpdate();
+                }}
+            /></label>`
+          : nothing
+      }
+      ${
+        on
+          ? html`
+              ${field(
+                "Audio encoding",
+                AUDIO_CODECS[this.#format],
+                this.#codec,
+                (c) => AUDIO_LABELS[c],
+                (c) => {
+                  this.#audioCodec = c;
+                  if (c === "opus") this.#audioRate = 48000;
+                },
+              )}
+              ${field(
+                "Sample rate",
+                [44100, 48000],
+                this.#audioRate,
+                (v) => Number(v) / 1000 + " kHz",
+                (v) => {
+                  this.#audioRate = Number(v);
+                },
+                this.#codec === "opus",
+              )}
+              ${field(
+                "Channels",
+                [1, 2],
+                this.#audioChannels,
+                (v) => (v === "1" ? "Mono" : "Stereo"),
+                (v) => {
+                  this.#audioChannels = Number(v);
+                },
+              )}
+              ${
+                pcm
+                  ? nothing
+                  : field(
+                      "Audio bitrate",
+                      this.#bitrates,
+                      this.#bitrate,
+                      (v) => Number(v) / 1000 + " kb/s",
+                      (v) => {
+                        this.#audioBitrate = Number(v);
+                      },
+                    )
+              }
+            `
+          : nothing
+      }
+    </details>`;
   }
 
   #exportDialog() {
@@ -1828,7 +1976,7 @@ ${Array.from({ length: source.split("\n").length }, (_, i) => i + 1).join("\n")}
       >
         <div class="dialog-body">
           <div class="actions">
-            <h2 id="export-heading">Export video</h2>
+            <h2 id="export-heading">${this.#format === "wav" ? "Export audio" : "Export video"}</h2>
             <span class="spacer"></span
             ><button
               type="button"
@@ -1839,16 +1987,40 @@ ${Array.from({ length: source.split("\n").length }, (_, i) => i + 1).join("\n")}
               ${icon("close")}
             </button>
           </div>
-          <p>${this.#entry.split("/").pop()} · MP4</p>
+          <p>${this.#entry.split("/").pop()}</p>
           <label class="field"
-            >Resolution<select id="output-size" aria-label="Export resolution" ?disabled=${running}>
-              <option value="">Design size</option>
-              <option value="1280x720">720p</option>
-              <option value="1920x1080">1080p</option>
-              <option value="3840x2160">4K</option>
-              <option value="7680x4320">8K</option>
+            >Format<select
+              aria-label="Export format"
+              ?disabled=${running}
+              @change=${(e: Event) => {
+                this.#format = (e.target as HTMLSelectElement).value as ExportFormat;
+                this.#audioCodec = "";
+                this.requestUpdate();
+              }}
+            >
+              ${(this.timeline ? ["mp4", "mov", "wav"] : ["mp4", "mov"]).map((f) => html`<option value=${f} .selected=${this.#format === f}>${f.toUpperCase()}</option>`)}
             </select></label
           >
+          ${
+            this.#format === "wav"
+              ? nothing
+              : html`
+                  <label class="field"
+                    >Resolution<select
+                      id="output-size"
+                      aria-label="Export resolution"
+                      ?disabled=${running}
+                    >
+                      <option value="">Design size</option>
+                      <option value="1280x720">720p</option>
+                      <option value="1920x1080">1080p</option>
+                      <option value="3840x2160">4K</option>
+                      <option value="7680x4320">8K</option>
+                    </select></label
+                  >
+                `
+          }
+          ${this.#audioFields(running)}
           <p>Choose where to save in the system dialog.</p>
           ${this.#drafts.size ? html`<p>Unsaved changes will be saved before export.</p>` : nothing}
           ${job ? this.#renderJob(job) : nothing}
@@ -1861,7 +2033,7 @@ ${Array.from({ length: source.split("\n").length }, (_, i) => i + 1).join("\n")}
           >
             Close</button
           ><button class="primary" type="submit" ?disabled=${running}>
-            ${icon("export")}${running ? "Exporting…" : job ? "Export again" : "Export video"}
+            ${icon("export")}${running ? "Exporting…" : job ? "Export again" : this.#format === "wav" ? "Export audio" : "Export video"}
           </button>
         </div>
       </form>

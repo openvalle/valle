@@ -11,7 +11,9 @@ use std::ptr;
 use super::ff;
 use ff::{ChannelLayout, Dictionary, Packet, Rational, codec, encoder, format, frame, software};
 
-use crate::media::{Codec, Encoding, Options, RATE, Surface, Write};
+use crate::media::{
+    AudioCodec, AudioOptions, Codec, Encoding, Options, OutputPcm, Surface, Write, pcm_i16,
+};
 
 pub struct Writer {
     output: format::context::Output,
@@ -32,7 +34,8 @@ pub struct Writer {
 /// frame, and the next frame's first sample.
 struct Sound {
     encoder: encoder::Audio,
-    resampler: software::resampling::Context,
+    pcm: OutputPcm,
+    options: AudioOptions,
     format: format::Sample,
     stream: usize,
     /// Samples a frame.
@@ -71,6 +74,8 @@ impl Writer {
             (_, Encoding::Software) => format::Pixel::YUV420P,
         };
         let rate = Rational(o.fps[1] as i32, o.fps[0] as i32);
+        // Verify the requested audio encoder before creating or truncating the destination.
+        let audio_encoder = o.sound.map(Sound::open).transpose()?;
         let mut output = format::output(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let global = (output.format().flags()).contains(format::Flags::GLOBAL_HEADER);
         let mut setup = (codec::context::Context::new_with_codec(found)
@@ -130,10 +135,11 @@ impl Writer {
         let opened = setup
             .open_with(options)
             .map_err(|e| format!("{name}: {e}"))?;
-        let sound = match o.sound {
-            true => Some(Sound::new(&mut output, path, global)?),
-            false => None,
-        };
+        let sound = o
+            .sound
+            .zip(audio_encoder)
+            .map(|(audio, encoder)| Sound::new(&mut output, audio, encoder))
+            .transpose()?;
         let stream = {
             let mut s = output.add_stream(found).map_err(|e| e.to_string())?;
             s.set_parameters(&opened);
@@ -288,12 +294,17 @@ impl Write for Writer {
     }
 
     fn sound(&mut self, samples: &[f32]) -> Result<(), String> {
-        if !samples.len().is_multiple_of(2) {
-            return Err("stereo sound needs a left and right sample for each time".into());
+        let sound = self
+            .sound
+            .as_mut()
+            .ok_or("the video was opened without sound")?;
+        for block in samples.chunks(2 * sound.options.input_block()) {
+            sound
+                .pending
+                .extend_from_slice(&sound.pcm.convert(Some(block))?);
+            sound.encode(&mut self.output, false)?;
         }
-        let sound = (self.sound.as_mut()).ok_or("the video was opened without sound")?;
-        sound.pending.extend_from_slice(samples);
-        sound.encode(&mut self.output, false)
+        Ok(())
     }
 
     fn finish(&mut self) -> Result<(), String> {
@@ -303,6 +314,7 @@ impl Write for Writer {
         self.encoder.send_eof().map_err(|e| e.to_string())?;
         self.drain()?;
         if let Some(sound) = &mut self.sound {
+            sound.pending.extend_from_slice(&sound.pcm.convert(None)?);
             sound.encode(&mut self.output, true)?;
             sound.encoder.send_eof().map_err(|e| e.to_string())?;
             sound.drain(&mut self.output)?;
@@ -367,56 +379,73 @@ unsafe fn free_frame(frame: *mut c_void) {
 }
 
 impl Sound {
-    /// The sound's encoder and stream in `output`, not yet written: AAC in an .mp4, 16-bit PCM in a
-    /// .mov.
-    fn new(
-        output: &mut format::context::Output,
-        path: &Path,
-        global: bool,
-    ) -> Result<Sound, String> {
-        let mov = (path.extension()).is_some_and(|e| e.eq_ignore_ascii_case("mov"));
-        let (name, format) = match mov {
-            true => (
-                "pcm_s16le",
-                format::Sample::I16(format::sample::Type::Packed),
-            ),
-            false => ("aac", format::Sample::F32(format::sample::Type::Planar)),
+    fn open(options: AudioOptions) -> Result<encoder::Audio, String> {
+        use format::sample::Type::{Packed, Planar};
+        let (name, format) = match options.codec {
+            AudioCodec::Aac => ("aac", format::Sample::F32(Planar)),
+            AudioCodec::Opus => ("libopus", format::Sample::F32(Packed)),
+            AudioCodec::PcmS16 => ("pcm_s16le", format::Sample::I16(Packed)),
+            AudioCodec::PcmF32 => ("pcm_f32le", format::Sample::F32(Packed)),
         };
         let found = encoder::find_by_name(name)
             .ok_or_else(|| format!("the FFmpeg loaded has no {name} encoder"))?;
-        let stereo = ChannelLayout::default(2);
+        let codec = found.audio().map_err(|e| e.to_string())?;
+        if codec
+            .rates()
+            .is_some_and(|mut rates| !rates.any(|r| r == options.rate as i32))
+        {
+            return Err(format!("{name} does not support {} Hz", options.rate));
+        }
+        let layout = ChannelLayout::default(i32::from(options.channels));
         let mut setup = (codec::context::Context::new_with_codec(found)
             .encoder()
             .audio())
         .map_err(|e| e.to_string())?;
-        setup.set_rate(RATE as i32);
-        setup.set_channel_layout(stereo);
+        setup.set_rate(options.rate as i32);
+        setup.set_channel_layout(layout);
         setup.set_format(format);
-        setup.set_time_base(Rational(1, RATE as i32));
-        if !mov {
-            setup.set_bit_rate(256_000);
+        setup.set_time_base(Rational(1, options.rate as i32));
+        if let Some(bits) = options.bitrate {
+            setup.set_bit_rate(bits as usize);
         }
-        if global {
-            setup.set_flags(codec::Flags::GLOBAL_HEADER);
+        // Both MOV and MP4 store the encoder configuration in a global header.
+        setup.set_flags(codec::Flags::GLOBAL_HEADER);
+        let encoder = setup.open().map_err(|e| format!("{name}: {e}"))?;
+        if let Some(requested) = options.bitrate {
+            // SAFETY: the opened encoder owns this context. FFmpeg can silently clamp AAC bitrate.
+            let accepted = unsafe { (*encoder.as_ptr()).bit_rate };
+            if accepted != i64::from(requested) {
+                return Err(format!(
+                    "{name} at {} Hz with {} channel(s) accepts {accepted} bits/s instead of {requested}",
+                    options.rate, options.channels
+                ));
+            }
         }
-        let opened = setup.open().map_err(|e| format!("{name}: {e}"))?;
+        Ok(encoder)
+    }
+
+    fn new(
+        output: &mut format::context::Output,
+        options: AudioOptions,
+        opened: encoder::Audio,
+    ) -> Result<Self, String> {
+        let format = opened.format();
         let stream = {
-            let mut s = output.add_stream(found).map_err(|e| e.to_string())?;
+            let mut s = output
+                .add_stream(opened.codec())
+                .map_err(|e| e.to_string())?;
             s.set_parameters(&opened);
-            s.set_time_base(Rational(1, RATE as i32));
+            s.set_time_base(Rational(1, options.rate as i32));
             s.index()
         };
-        let packed = format::Sample::F32(format::sample::Type::Packed);
-        let resampler =
-            software::resampling::Context::get(packed, stereo, RATE, format, stereo, RATE)
-                .map_err(|e| e.to_string())?;
         let size = match opened.frame_size() {
             0 => 1024,
             n => n as usize,
         };
         Ok(Sound {
             encoder: opened,
-            resampler,
+            pcm: OutputPcm::new(options)?,
+            options,
             format,
             stream,
             size,
@@ -432,7 +461,7 @@ impl Sound {
         let mut packet = Packet::empty();
         while self.encoder.receive_packet(&mut packet).is_ok() {
             packet.set_stream(self.stream);
-            packet.rescale_ts(Rational(1, RATE as i32), to);
+            packet.rescale_ts(Rational(1, self.options.rate as i32), to);
             (packet.write_interleaved(output)).map_err(|e| e.to_string())?;
         }
         Ok(())
@@ -441,24 +470,36 @@ impl Sound {
     /// The pending samples into the encoder a frame at a time: the whole frames, or all at the
     /// `end`.
     fn encode(&mut self, output: &mut format::context::Output, end: bool) -> Result<(), String> {
-        let stereo = ChannelLayout::default(2);
-        let packed = format::Sample::F32(format::sample::Type::Packed);
-        while self.pending.len() >= 2 * self.size || (end && !self.pending.is_empty()) {
-            let n = (self.pending.len() / 2).min(self.size);
-            let mut source = frame::Audio::new(packed, n, stereo);
-            source.set_rate(RATE);
-            let samples = self.pending.drain(..2 * n);
-            let pairs = source.plane_mut::<(f32, f32)>(0);
-            for (o, s) in pairs.iter_mut().zip(samples.as_slice().chunks(2)) {
-                *o = (s[0], s[1]);
+        let channels = usize::from(self.options.channels);
+        let layout = ChannelLayout::default(i32::from(self.options.channels));
+        while self.pending.len() >= channels * self.size || (end && !self.pending.is_empty()) {
+            let n = (self.pending.len() / channels).min(self.size);
+            let mut frame = frame::Audio::new(self.format, n, layout);
+            let block = &self.pending[..n * channels];
+            match self.options.codec {
+                AudioCodec::Aac => {
+                    for channel in 0..channels {
+                        for (dst, sample) in frame
+                            .plane_mut::<f32>(channel)
+                            .iter_mut()
+                            .zip(block.chunks_exact(channels))
+                        {
+                            *dst = sample[channel];
+                        }
+                    }
+                }
+                AudioCodec::PcmS16 => {
+                    for (dst, &sample) in frame.plane_mut::<i16>(0).iter_mut().zip(block) {
+                        *dst = pcm_i16(sample);
+                    }
+                }
+                _ => frame.plane_mut::<f32>(0).copy_from_slice(block),
             }
-            drop(samples);
-            let mut converted = frame::Audio::new(self.format, n, stereo);
-            (self.resampler.run(&source, &mut converted)).map_err(|e| e.to_string())?;
-            converted.set_rate(RATE);
-            converted.set_pts(Some(self.next));
+            self.pending.drain(..block.len());
+            frame.set_rate(self.options.rate);
+            frame.set_pts(Some(self.next));
             self.next += n as i64;
-            (self.encoder.send_frame(&converted)).map_err(|e| e.to_string())?;
+            self.encoder.send_frame(&frame).map_err(|e| e.to_string())?;
             self.drain(output)?;
         }
         Ok(())

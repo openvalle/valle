@@ -378,7 +378,11 @@ pub fn render(args: &Args) -> Result<Value, Failure> {
     let document = args.timeline;
     if lower.ends_with(".wav") {
         return match document {
-            true => video::sound(&mut crate::timeline::mixer(args)?, Path::new(out)),
+            true => video::sound(
+                &mut crate::timeline::mixer(args)?,
+                Path::new(out),
+                args.audio.resolve("wav")?,
+            ),
             false => Err(Failure::new("usage", "a Motion scene has no sound").hint(
                 "a timeline's sound goes into a .wav; a scene's frames into images or video",
             )),
@@ -388,11 +392,7 @@ pub fn render(args: &Args) -> Result<Value, Failure> {
     let c = scene.composition();
     let count = c.fps.frames_in(c.duration);
     if lower.ends_with(".mp4") || lower.ends_with(".mov") {
-        let mut mixer = match document {
-            true => Some(crate::timeline::mixer(args)?),
-            false => None,
-        };
-        return video::render(args, &mut scene, Path::new(out), mixer.as_mut());
+        return video::render(args, &mut scene, Path::new(out));
     }
     let png = lower.ends_with(".png");
     let frames = match (png, args.storyboard, &args.frames) {

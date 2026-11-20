@@ -242,7 +242,7 @@ fn timeline_check_requires_audio_only_for_enabled_audio_clips_including_nested_e
         codec: Codec::H264,
         encoding: Encoding::Software,
         bitrate: None,
-        sound: true,
+        sound: Some(media::AudioOptions::for_container("mp4")),
         surfaces: false,
     };
     let mut writer = media::writer(&dir.join("audible.mp4"), &options).unwrap();

@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 
 use valle_ffmpeg::Version;
 
+mod audio;
+pub use audio::{AudioCodec, AudioOptions, OutputPcm, pcm_i16};
+
 mod orientation;
 mod textures;
 mod v7;
@@ -130,8 +133,8 @@ pub struct Options {
     pub encoding: Encoding,
     /// Bits a second, in place of the encoder's quality target.
     pub bitrate: Option<u64>,
-    /// Whether it has sound, which `Write::sound` gives.
-    pub sound: bool,
+    /// The output audio track, fed by `Write::sound`.
+    pub sound: Option<AudioOptions>,
     /// Whether a GPU draws the frames into the encoder's own pixel buffers (`Write::surface`)
     /// where the encoder has them: VideoToolbox's H.264 and HEVC on macOS.
     pub surfaces: bool,
@@ -258,6 +261,9 @@ pub fn writer(path: &Path, options: &Options) -> Result<Box<dyn Write>, String> 
     let mov = (path.extension()).is_some_and(|e| e.eq_ignore_ascii_case("mov"));
     if options.codec == Codec::ProRes4444 && !mov {
         return Err("ProRes goes in a .mov".into());
+    }
+    if let Some(audio) = options.sound {
+        audio.validate(if mov { "mov" } else { "mp4" })?;
     }
     let open = |o: &Options| -> Result<Box<dyn Write>, String> {
         Ok(match version()? {
