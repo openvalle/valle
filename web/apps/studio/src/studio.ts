@@ -157,6 +157,9 @@ export class ValleStudio extends LitElement {
   #notes: Note[] = [];
   #note: string | undefined;
   #notesShown: "open" | "resolved" | "all" = "open";
+  /** How much of the frame the note looked at shows as it was seen, from the left, over the
+   * frame as it is now; none when they are not compared. */
+  #before: number | undefined;
   #resized = new ResizeObserver(() => this.requestUpdate());
 
   connectedCallback(): void {
@@ -981,6 +984,7 @@ export class ValleStudio extends LitElement {
   #showNote(id: string): void {
     const note = this.#notes.find((n) => n.id === id);
     if (!note) return;
+    if (this.#note !== id) this.#before = undefined;
     this.#note = id;
     this.#rightTab = "notes";
     this.#inspectorVisible = true;
@@ -997,9 +1001,11 @@ export class ValleStudio extends LitElement {
     const stage = this.renderRoot.querySelector(".stage")?.getBoundingClientRect();
     const picture = this.#picture();
     const now = note?.now;
-    if (this.#noting || !note?.region || !now || !stage || !picture || this.player?.playing) {
+    const before = note?.picture && this.#before;
+    if (this.#noting || !note || !now || !stage || !picture || this.player?.playing) {
       return nothing;
     }
+    if (!note.region && before === undefined) return nothing;
     const half = 0.5 / this.#rate;
     if (this.#time < now.start - half || this.#time > (now.end ?? now.start) + half) return nothing;
     const r = note.region;
@@ -1007,10 +1013,24 @@ export class ValleStudio extends LitElement {
       class="note-seen"
       style=${`left: ${picture.x - stage.x}px; top: ${picture.y - stage.y}px; width: ${picture.width}px; height: ${picture.height}px`}
     >
-      <div
-        class="note-region"
-        style=${`left: ${r.x * 100}%; top: ${r.y * 100}%; width: ${r.w * 100}%; height: ${r.h * 100}%`}
-      ></div>
+      ${
+        before === undefined
+          ? nothing
+          : html`<img
+                class="note-before"
+                alt=${`${note.id} as it was seen`}
+                src=${address(note.picture!)}
+                style=${`clip-path: inset(0 ${(1 - before) * 100}% 0 0)`}
+              /><span class="note-wipe" style=${`left: ${before * 100}%`}></span>`
+      }
+      ${
+        r && before === undefined
+          ? html`<div
+              class="note-region"
+              style=${`left: ${r.x * 100}%; top: ${r.y * 100}%; width: ${r.w * 100}%; height: ${r.h * 100}%`}
+            ></div>`
+          : nothing
+      }
     </div>`;
   }
 
@@ -1114,6 +1134,40 @@ export class ValleStudio extends LitElement {
                     )}
                   </ol>
                   ${n.resolvedIn === undefined ? nothing : html`<small>Resolved in snapshot ${n.resolvedIn}</small>`}
+                  ${
+                    n.picture && n.now
+                      ? html`<div class="note-compare">
+                          <button
+                            class="quiet"
+                            aria-pressed=${this.#before !== undefined}
+                            title="The frame as it was seen, over the frame as it is now"
+                            @click=${() => {
+                              this.#before = this.#before === undefined ? 0.5 : undefined;
+                              if (this.#before !== undefined) this.#showNote(n.id);
+                              this.requestUpdate();
+                            }}
+                          >
+                            Compare
+                          </button>
+                          ${
+                            this.#before === undefined
+                              ? nothing
+                              : html`<input
+                                    type="range"
+                                    aria-label="Before and now"
+                                    min="0"
+                                    max="1"
+                                    step="0.01"
+                                    .value=${String(this.#before)}
+                                    @input=${(e: Event) => {
+                                      this.#before = Number((e.target as HTMLInputElement).value);
+                                      this.requestUpdate();
+                                    }}
+                                  /><small>before · now</small>`
+                          }
+                        </div>`
+                      : nothing
+                  }
                   <form
                     class="note-reply"
                     @submit=${(e: SubmitEvent) => {

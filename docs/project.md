@@ -105,7 +105,8 @@ picture picks the element drawn there, as `valle timeline pick` does, and a clic
 one beneath; the note is then on its clip first, with the element's key `path` in the clip's
 Motion component and the `site` of its JSX, `file:line:column`, which opens in the source.
 Notes are marked on the ruler and listed under Notes, where a note is answered, resolved or
-reopened.
+reopened. Compare lays the picture the note was written on over its frame as it is now, with
+a slider to wipe between them.
 
 Every message of a note, the note first, records the snapshot it was written against: when
 the sources changed since the last snapshot, one is saved first. `resolve` records the

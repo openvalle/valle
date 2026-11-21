@@ -1150,6 +1150,20 @@ export default function Scene() {
       `a note on a picked element is on it, where it is drawn: ${JSON.stringify(onCard)}`,
     );
 
+    // A note's frame as it was seen is compared over the frame as it is now, wiped across.
+    await evaluate(`${view}.querySelector('.note-mark[data-note="n3"]').click();`);
+    await page.getByRole("button", { name: "Compare", exact: true }).click();
+    const before = page.getByAltText("n3 as it was seen", { exact: true });
+    await before.waitFor();
+    await page.getByLabel("Before and now").fill("1");
+    expect(
+      (await evaluate("return studio.player.currentFrame;")) === 15 &&
+        (await before.evaluate((e) => getComputedStyle(e).clipPath)) === "inset(0px 0% 0px 0px)",
+      "a note's frame as seen is compared over the frame now",
+    );
+    await page.getByRole("button", { name: "Compare", exact: true }).click();
+    expect(!(await before.count()), "comparing ends");
+
     // Standalone Studio does not have the renders/ directory created with a project.
     for (const kind of ["motion", "timeline"] as const) {
       const folder = join(dir, kind);

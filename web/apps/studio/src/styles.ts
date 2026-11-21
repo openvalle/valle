@@ -567,6 +567,30 @@ export const styles = css`
     position: absolute;
     pointer-events: none;
   }
+  .note-before {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .note-wipe {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    margin-left: -1px;
+    background: #fff;
+    box-shadow: 0 0 2px #000;
+  }
+  .note-compare {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0;
+  }
+  .note-compare input {
+    flex: 1;
+  }
   .notes .note {
     border-bottom: 1px solid var(--line);
     padding: 4px 0;
