@@ -250,6 +250,16 @@ fn run(cli: Cli) -> Result<Value, Failure> {
                 &filter.filter(),
             )
         }
+        Command::Timeline(Timeline::Pick {
+            file,
+            at,
+            point,
+            region,
+        }) => {
+            scene_file(&file, true, "pick")?;
+            let args = cli::scene_args(file, true, None, None, None)?;
+            timeline::pick(&args, at, point.as_deref(), region.as_deref())
+        }
         Command::Timeline(Timeline::Edit { file, op }) => {
             scene_file(&file, true, "edit")?;
             timeline::edit(&file, &op)

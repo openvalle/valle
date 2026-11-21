@@ -197,3 +197,56 @@ fn empty_timeline_can_add_delete_query_and_add_again() {
     assert_eq!(timeline.run("check", &[])["status"], "error");
     assert_eq!(timeline.edit(op)["status"], "ok");
 }
+
+#[test]
+fn pick_names_the_clip_key_and_line_drawn_at_a_point_or_in_a_box() {
+    let timeline = Timeline::new(
+        "pick",
+        json!({
+            "canvas":{"width":320,"height":180,"fps":30},
+            "resources":{"scene":"scene.motion.tsx"},
+            "tracks":{"visual":[
+                {"clips":[{"id":"bg","kind":"solid","color":"black","start":0,"duration":2}]},
+                {"clips":[{"id":"a","kind":"motion","component":"scene","start":0,"duration":2}]}
+            ]}
+        }),
+    );
+    std::fs::write(
+        timeline.0.with_file_name("scene.motion.tsx"),
+        r##"export const composition = { width: 320, height: 180, fps: 30, duration: 2 };
+export default function Scene() {
+  return (
+    <View style={{ position: "absolute", inset: 0 }}>
+      <View key="card" style={{ position: "absolute", left: 40, top: 40, width: 120, height: 60, backgroundColor: "#fff" }}>
+        <Text key="title" style={{ fontSize: 20 }}>Hi</Text>
+      </View>
+    </View>
+  );
+}
+"##,
+    )
+    .unwrap();
+    let result = timeline.run("pick", &["--at", "0.5", "--point", "0.2,0.3"]);
+    assert_eq!(result["frame"], 15, "{result}");
+    let hits = result["hits"].as_array().unwrap();
+    let named: Vec<_> = (hits.iter())
+        .map(|h| format!("{} {}", h["clip"], h["path"]))
+        .collect();
+    assert_eq!(
+        named,
+        [r#""a" "card/title""#, r#""a" "card""#, r#""bg" null"#],
+        "{result}"
+    );
+    assert_eq!(hits[1]["site"], "scene.motion.tsx:5:7");
+    assert_eq!(hits[1]["bounds"]["width"], 120.0);
+
+    let result = timeline.run("pick", &["--at", "0.5", "--region", "0,0.5,0.5,0.5"]);
+    let hits = result["hits"].as_array().unwrap();
+    assert_eq!(hits[0]["clip"], "bg", "{result}");
+    assert_eq!(hits[1]["path"], "card");
+    let cover = hits[1]["cover"].as_f64().unwrap();
+    assert!((cover - 10.0 / 60.0).abs() < 1e-3, "{result}");
+
+    let result = timeline.run("pick", &["--at", "5", "--point", "0.5,0.5"]);
+    assert_eq!(result["status"], "error", "{result}");
+}

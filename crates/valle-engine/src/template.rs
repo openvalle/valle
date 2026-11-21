@@ -832,6 +832,8 @@ pub struct Template {
     /// The boxes drawn as pictures rather than where they are, each with the picture it draws:
     /// the canvas as the box alone paints it.
     pub pictures: Vec<(u32, u32)>,
+    /// The boxes of a Timeline's clips, each with its id in the clip table.
+    pub clips: Vec<(u32, Rc<str>)>,
     /// Repeated leaf boxes or SVG ellipses. Each row supplies values for the same declarations
     /// (boxes) or attributes (SVG); the node supplies their inherited context.
     pub instances: Vec<(u32, Rc<Instances>)>,

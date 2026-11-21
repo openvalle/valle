@@ -483,6 +483,8 @@ struct TracedNode {
     time: Option<Ref>,
     /// The picture it draws, `<TimeScope picture>`'s name.
     picture: Option<String>,
+    /// The clip it is the box of, `<TimeScope clip>`'s id in the clip table.
+    clip: Option<String>,
     instances: Option<TracedInstances>,
 }
 
@@ -631,6 +633,7 @@ pub fn variant(
     let image = |name: &str, what: &str| picture(name, what, false);
     let mut nodes = Vec::with_capacity(traced.nodes.len());
     let mut pictures = Vec::new();
+    let mut clips = Vec::new();
     let mut instances = Vec::new();
     for n in traced.nodes {
         if let Some(batch) = n.instances {
@@ -838,6 +841,9 @@ pub fn variant(
             }
             other => return Err(format!("node type {other}")),
         };
+        if let Some(id) = &n.clip {
+            clips.push((nodes.len() as u32, Rc::from(id.as_str())));
+        }
         if let Some(name) = &n.picture {
             let k = (inputs.iter().position(|i| i == name))
                 .ok_or_else(|| format!("the scene draws no picture {name}"))?;
@@ -890,6 +896,7 @@ pub fn variant(
         roots,
         guards,
         pictures,
+        clips,
         instances,
     };
     super::instances::pack(&mut template)?;

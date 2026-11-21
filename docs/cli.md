@@ -26,6 +26,7 @@ path. Rendering does not consume or depend on a previous check.
 | `valle timeline check TIMELINE` | Validates the document and its sources, then checks every frame |
 | `valle timeline render TIMELINE -o OUT` | Draws it as `motion render` does, with its sound; a `.wav` is the sound alone |
 | `valle timeline query TIMELINE [filters]` | The clips that `--clip`, `--track`, `--index`, `--at`, `--marker` and `--meta` pick |
+| `valle timeline pick TIMELINE --at S --point X,Y` | The clips and elements drawn there, the top first; `--region X,Y,W,H` for a box, as fractions of the canvas |
 | `valle timeline edit TIMELINE --op JSON` | Sets, moves, trims, deletes or adds a clip, and writes the file only if the result is valid |
 | `valle timeline studio TIMELINE` | Opens Studio on it |
 

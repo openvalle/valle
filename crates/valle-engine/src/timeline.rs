@@ -1862,6 +1862,96 @@ mod tests {
     }
 
     #[test]
+    fn a_pick_finds_the_top_element_and_its_clip_through_transforms_and_clips() {
+        run(|| {
+            let motion = r#"
+                export const composition = {width:320,height:180,fps:30,duration:4};
+                export default function Scene() {
+                    return <View style={{position:'absolute',inset:0}}>
+                        <View key="card" style={{position:'absolute',left:40,top:40,width:120,height:60,backgroundColor:'#fff',transform:'rotate(90deg)'}}>
+                            <Text key="title" style={{fontSize:20}}>Hi</Text>
+                        </View>
+                        <View key="clipped" style={{position:'absolute',left:200,top:0,width:40,height:40,overflow:'hidden'}}>
+                            <View key="inner" style={{position:'absolute',left:0,top:60,width:40,height:40,backgroundColor:'#f00'}} />
+                        </View>
+                        <View key="ghost" style={{position:'absolute',left:0,top:0,width:320,height:20,backgroundColor:'#0f0',opacity:0}} />
+                    </View>;
+                }
+            "#;
+            let doc = json!({
+                "canvas":{"width":320,"height":180,"fps":30},
+                "resources":{"scene":"scene.motion.tsx"},
+                "tracks":{"visual":[
+                    {"clips":[{"id":"bg","kind":"solid","color":"#000000ff","start":0,"duration":2}]},
+                    {"clips":[{"id":"a","kind":"motion","component":"scene","start":0,"duration":2}]}
+                ]}
+            });
+            let read = |path: &str| (path == "scene.motion.tsx").then(|| motion.to_string());
+            let mut s = scene("edit.timeline.json", &doc, &read);
+            let f = frame(&mut s, 0.5);
+            let tops = |p: [f32; 2]| {
+                (crate::pick::at(&f, p).into_iter())
+                    .map(|h| {
+                        let path = h
+                            .path
+                            .as_deref()
+                            .unwrap_or("")
+                            .rsplit('/')
+                            .next()
+                            .unwrap()
+                            .to_string();
+                        (path, h.clip().map(str::to_string))
+                    })
+                    .collect::<Vec<_>>()
+            };
+            // The card turns a quarter about its middle (100, 70): it reaches from y 10 to 130,
+            // between x 70 and 130, where it was 40 to 160 wide.
+            let hit = tops([100.0, 20.0]);
+            assert_eq!(
+                hit[0],
+                ("card".to_string(), Some("a".to_string())),
+                "{hit:?}"
+            );
+            // Under it, the clip below; under all, the canvas, in no clip.
+            assert!(
+                hit.iter().any(|(_, c)| c.as_deref() == Some("bg")),
+                "{hit:?}"
+            );
+            assert_eq!(hit.last().unwrap().1, None);
+            assert!(!tops([45.0, 70.0]).iter().any(|(p, _)| p == "card"));
+            // Clipped by its parent, and drawn at no opacity, a box is not there.
+            assert!(!tops([220.0, 70.0]).iter().any(|(p, _)| p == "inner"));
+            assert!(!tops([10.0, 10.0]).iter().any(|(p, _)| p == "ghost"));
+            // Where the scene draws nothing, the clip under it is on top.
+            assert_eq!(tops([10.0, 100.0])[0].1.as_deref(), Some("bg"));
+            let area = crate::layout::Rect {
+                x: 60.0,
+                y: 0.0,
+                width: 90.0,
+                height: 180.0,
+            };
+            let most = crate::pick::within(&f, area);
+            // Wholly in it, the title and the card it is in, the title on top first.
+            let paths: Vec<_> = most
+                .iter()
+                .map(|h| h.path.as_deref().unwrap_or(""))
+                .collect();
+            assert!(
+                paths[0].ends_with("card/title") && paths[1].ends_with("card"),
+                "{most:?}"
+            );
+            assert_eq!(most[0].cover, 1.0);
+            assert!(
+                most[0]
+                    .site
+                    .as_deref()
+                    .unwrap()
+                    .starts_with("scene.motion.tsx:")
+            );
+        });
+    }
+
+    #[test]
     fn bounds_and_anchors_stay_local_to_each_motion_instance() {
         run(|| {
             let motion = r#"

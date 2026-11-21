@@ -654,6 +654,7 @@ impl Typesetter {
             roots: vec![0],
             guards: Vec::new(),
             pictures: Vec::new(),
+            clips: Vec::new(),
         };
         let mut styles = Sheet::new(&template)?.compute_with_text(
             &[],

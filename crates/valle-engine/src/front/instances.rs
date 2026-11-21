@@ -372,6 +372,9 @@ fn expand(t: &mut Template, select: impl Fn(&Kind) -> bool) -> Result<(), Error>
     for (n, _) in &mut t.pictures {
         *n = ids[*n as usize].start;
     }
+    for (n, _) in &mut t.clips {
+        *n = ids[*n as usize].start;
+    }
     t.instances
         .retain(|(i, b)| b.formula.is_none() || !select(&t.nodes[*i as usize].kind));
     for (n, _) in &mut t.instances {

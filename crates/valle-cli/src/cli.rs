@@ -151,6 +151,33 @@ pub enum Timeline {
         #[command(flatten)]
         filter: Filters,
     },
+    /// What the frame at a time draws at a point of the picture, or in a part of it
+    ///
+    /// Each element with its key path, the line its JSX is on and the clip it is in, the one
+    /// drawn on top first; in a part, those most in it first. Points and parts are fractions
+    /// of the canvas from its top left.
+    #[command(after_help = "Examples:\n  \
+        valle timeline pick edit.timeline.json --at 2.5 --point 0.5,0.8\n  \
+        valle timeline pick edit.timeline.json --at 2.5 --region 0.6,0.05,0.3,0.2")]
+    Pick {
+        /// The timeline: a .timeline.json file
+        #[arg(value_name = "TIMELINE")]
+        file: String,
+        /// The time, in seconds
+        #[arg(long, value_name = "SECONDS")]
+        at: f64,
+        /// A point of the picture
+        #[arg(
+            long,
+            value_name = "X,Y",
+            required_unless_present = "region",
+            conflicts_with = "region"
+        )]
+        point: Option<String>,
+        /// A part of the picture
+        #[arg(long, value_name = "X,Y,W,H")]
+        region: Option<String>,
+    },
     /// Edit it as Studio does: set, move, trim, delete or add a clip
     #[command(after_help = EDIT_EXAMPLES, after_long_help = EDITING)]
     Edit {

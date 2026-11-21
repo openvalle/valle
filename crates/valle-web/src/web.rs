@@ -653,6 +653,40 @@ impl Engine {
         self.draw(index, Target::Canvas)
     }
 
+    /// What frame `index` draws at the point `x`, `y` of the canvas, in px, or with `width` and
+    /// `height` in that box: JSON `hits`, as `valle timeline pick` gives them, the top first, or
+    /// in a box those most in it first.
+    pub fn pick(
+        &mut self,
+        index: f64,
+        x: f32,
+        y: f32,
+        width: Option<f32>,
+        height: Option<f32>,
+    ) -> Result<String, JsValue> {
+        let open = self.open.as_mut().ok_or_else(|| js("nothing is open"))?;
+        let c = open.scene.composition();
+        let last = (c.fps.frames_in(c.duration) - 1).max(0);
+        let at = c
+            .fps
+            .frame_start((index as i64).clamp(0, last))
+            .map_err(js)?;
+        let frame = open.scene.frame(at).map_err(js)?;
+        let hits = match (width, height) {
+            (Some(width), Some(height)) => valle_engine::pick::within(
+                &frame,
+                valle_engine::layout::Rect {
+                    x,
+                    y,
+                    width,
+                    height,
+                },
+            ),
+            _ => valle_engine::pick::at(&frame, [x, y]),
+        };
+        Ok(json!({ "hits": valle_engine::pick::named(&hits) }).to_string())
+    }
+
     /// Prepares the encoder's planes at delivery size without changing the layout canvas.
     pub fn video_output(&mut self, width: u32, height: u32) -> Result<VideoOutput, JsValue> {
         let open = self.open.as_mut().ok_or_else(|| js("nothing is open"))?;

@@ -57,6 +57,89 @@ pub fn edit(file: &str, op: &str) -> Result<Value, Failure> {
     Ok(json!({ "status": "ok", "summary": summary, "file": path, "changes": edited.changes }))
 }
 
+/// What the frame at `at` seconds draws at `point`, or in `region`, fractions of the canvas.
+pub fn pick(
+    args: &Args,
+    at: f64,
+    point: Option<&str>,
+    region: Option<&str>,
+) -> Result<Value, Failure> {
+    let fractions = |text: &str, n: usize, what: &str| -> Result<Vec<f32>, Failure> {
+        let parts: Vec<f32> = (text.split(','))
+            .map(|p| p.trim().parse::<f32>())
+            .collect::<Result<_, _>>()
+            .map_err(|_| Failure::new("usage", format!("{what}: numbers, as {text:?} is not")))?;
+        if parts.len() != n || parts.iter().any(|v| !(0.0..=1.0).contains(v)) {
+            return Err(Failure::new(
+                "usage",
+                format!("{what}: {n} fractions of the canvas, each from 0 to 1"),
+            ));
+        }
+        Ok(parts)
+    };
+    let mut scene = crate::motion::load(args)?.scene;
+    let c = scene.composition();
+    let tick = Tick::from_seconds(at).map_err(|e| Failure::new("usage", format!("--at: {e}")))?;
+    if tick >= c.duration {
+        return Err(Failure::new(
+            "usage",
+            format!("--at: the timeline is {} s long", c.duration.seconds()),
+        ));
+    }
+    let frame = c.fps.frame_at(tick);
+    let shown = c
+        .fps
+        .frame_start(frame)
+        .map_err(|e| Failure::new("scene", e))?;
+    let drawn = scene.frame(shown).map_err(|e| Failure::new("scene", e))?;
+    let [w, h] = [c.width as f32, c.height as f32];
+    let hits = match (point, region) {
+        (Some(p), _) => {
+            let p = fractions(p, 2, "--point")?;
+            valle_engine::pick::at(&drawn, [p[0] * w, p[1] * h])
+        }
+        (None, Some(r)) => {
+            let r = fractions(r, 4, "--region")?;
+            let area = valle_engine::layout::Rect {
+                x: r[0] * w,
+                y: r[1] * h,
+                width: r[2] * w,
+                height: r[3] * h,
+            };
+            valle_engine::pick::within(&drawn, area)
+        }
+        (None, None) => return Err(Failure::new("usage", "--point or --region")),
+    };
+    let mut named = valle_engine::pick::named(&hits);
+    // Lines in the files beside the timeline, as its folder names them.
+    let dir = std::path::Path::new(&args.file).parent().map(|d| d.to_string_lossy() + "/");
+    for v in &mut named {
+        let (Some(dir), Some(site)) = (&dir, v["site"].as_str()) else {
+            continue;
+        };
+        if let Some(near) = site.strip_prefix(&**dir).filter(|_| dir != "/") {
+            v["site"] = json!(near);
+        }
+    }
+    let lines: Vec<String> = (named.iter())
+        .map(|v| {
+            let mut s = v["clip"].as_str().unwrap_or("(no clip)").to_string();
+            if let Some(path) = v["path"].as_str() {
+                s += &format!(" {path}");
+            }
+            if let Some(site) = v["site"].as_str() {
+                s += &format!(" at {site}");
+            }
+            s
+        })
+        .collect();
+    let summary = match lines.is_empty() {
+        true => format!("nothing drawn there at frame {frame}"),
+        false => format!("at frame {frame}, top first:\n  {}", lines.join("\n  ")),
+    };
+    Ok(json!({ "status": "ok", "summary": summary, "frame": frame, "hits": named }))
+}
+
 /// The clips `filter` picks.
 pub fn query(args: &Args, filter: &Filter) -> Result<Value, Failure> {
     let (path, text, doc) = document(args, true)?;

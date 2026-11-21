@@ -377,6 +377,19 @@ fields are reported even when its time span stays the same. Studio uses the same
 
 Editing the JSON by hand is just as good; run `check` afterwards.
 
+`valle timeline pick` says what a frame draws at a point of the picture, or in a box, as
+fractions of the canvas: the clip, the key path in its Motion component, and the line of the
+JSX, the top first. In a box, those most in it come first, with `cover`, how much of each is.
+
+```sh
+valle timeline pick edit.timeline.json --at 0.5 --point 0.2,0.3
+valle timeline pick edit.timeline.json --at 0.5 --region 0.1,0.2,0.4,0.3 --json
+```
+
+An element is a hit where its box is, through its transforms and inside what clips it, if it
+draws something of its own: text, an image, a shader, an `<svg>`, or a box with a background,
+border or shadow. Hidden boxes and those at no opacity are not.
+
 ## Errors
 
 Errors name the place in the document as a JSON path, then what it takes:

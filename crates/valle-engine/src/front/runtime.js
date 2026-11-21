@@ -2246,6 +2246,7 @@
         f(inner);
       });
       if (props.picture !== undefined) out[out.length - 1].picture = props.picture;
+      out[out.length - 1].clip = id;
     } finally {
       G.scopes.pop();
       [G.seconds, G.progress, G.clip, G.composition, G.names, G.inputs, G.keyBase] = outer;
@@ -2768,6 +2769,7 @@
       if ("src" in n) out.src = n.src;
       if ("time" in n) out.time = ref(n.time);
       if ("picture" in n) out.picture = n.picture;
+      if ("clip" in n) out.clip = n.clip;
       if ("shader" in n) {
         const { code, source, uniforms, inputs, outset } = n.shader;
         out.shader = {
