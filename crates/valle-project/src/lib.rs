@@ -1,10 +1,12 @@
 //! A project: a plain folder of an edit's sources, `project.json` naming its entry timeline,
 //! more timelines in `timelines/`, components in `components/` and media in `media/`, with the
-//! snapshots of its sources and the records of its renders under `.valle/`. Its files are edited
-//! directly: nothing here is a database, and a lock is held only while something is written.
+//! snapshots of its sources and the records of its renders under `.valle/`, and the notes of its
+//! review in `reviews/`. Its files are edited directly: nothing here is a database, and a lock is
+//! held only while something is written.
 
 pub mod add;
 pub mod history;
+pub mod notes;
 pub mod show;
 
 use std::fs::{self, File};

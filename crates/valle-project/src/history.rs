@@ -32,7 +32,7 @@ pub struct Snapshot {
     /// When it was saved, milliseconds since 1970.
     pub time: u64,
     pub message: Option<String>,
-    /// What saved it: `save`, `render` or `restore`.
+    /// What saved it: `save`, `render`, `restore` or `note`.
     pub by: String,
     pub files: Vec<Source>,
 }
