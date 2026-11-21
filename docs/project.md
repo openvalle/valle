@@ -95,12 +95,17 @@ names a clip the note is about and how far into it; it can be given more than on
 the picture's clips from the top track down, then, for a note on no part of the picture, the
 sound. A caption's `targets` entry has the timed `run` shown then, from 0. A note moves with
 the first of its clips that is still there, and is listed as `gone` once every one of them
-is deleted or trimmed past that point; a note on no clip stays where it was written. In JSON, each note has `now`, where it is in the timeline as it is now, and
-`picture`, its picture as a path in the project.
+is deleted or trimmed past that point; a note on no clip stays where it was written. In JSON,
+each note has `now`, where it is in the timeline as it is now, and `picture`, its picture as
+a path in the project.
 
 In Studio, pause and press N (or the note button) to note the frame shown, dragging over the
-picture to mark a part of it; Shift-drag over the ruler to note a span. Notes are marked on
-the ruler and listed under Notes, where a note is answered, resolved or reopened.
+picture to mark a part of it; Shift-drag over the ruler to note a span. A click on the
+picture picks the element drawn there, as `valle timeline pick` does, and a click again the
+one beneath; the note is then on its clip first, with the element's key `path` in the clip's
+Motion component and the `site` of its JSX, `file:line:column`, which opens in the source.
+Notes are marked on the ruler and listed under Notes, where a note is answered, resolved or
+reopened.
 
 Every message of a note, the note first, records the snapshot it was written against: when
 the sources changed since the last snapshot, one is saved first. `resolve` records the

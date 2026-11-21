@@ -178,6 +178,10 @@ async function handle(request: Request, id: number): Promise<unknown> {
       return { memory: memory?.buffer.byteLength ?? 0 };
     case "pixels":
       return await e.pixels();
+    case "pick": {
+      const { index, x, y, width, height } = request;
+      return JSON.parse(e.pick(index, x, y, width, height)).hits;
+    }
     case "still":
       await fetching(() => e.render(request.index));
       return await e.pixels();

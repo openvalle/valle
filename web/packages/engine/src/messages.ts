@@ -34,6 +34,8 @@ export type Request =
     }
   | { type: "frame"; index: number }
   | { type: "pixels" }
+  /** What frame `index` draws at a point, or in a box, in canvas px. */
+  | { type: "pick"; index: number; x: number; y: number; width?: number; height?: number }
   /** Draws frame `index` off the canvas, and answers its pixels as `pixels` does. */
   | { type: "still"; index: number }
   /** Mixes the timeline's sound: its length in samples, or null where it has none. */
@@ -46,6 +48,18 @@ export type Request =
   | { type: "worklet"; port: MessagePort }
   | { type: "close" }
   | { type: "destroy" };
+
+/** An element a frame draws, as `valle timeline pick` names it: the clip it is in, its key path
+ * in the clip's component, and where its JSX is written, as `file:line:column`. */
+export type Hit = {
+  clip?: string;
+  path?: string;
+  site?: string;
+  /** The rectangle around it, in canvas px. */
+  bounds: { x: number; y: number; width: number; height: number };
+  /** How much of it is in the box picked, from 0 to 1; 1 at a point. */
+  cover: number;
+};
 
 export type FileDestination = {
   type: "opfs" | "file";

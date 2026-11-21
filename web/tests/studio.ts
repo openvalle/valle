@@ -73,6 +73,33 @@ export default function Scene() {
   return <View style={{width: "100%", height: "100%", backgroundColor: "#e11d48"}} />;
 }`,
   );
+  await Bun.write(
+    join(project, "card.motion.tsx"),
+    `export const composition = { width: 320, height: 180, fps: 30, duration: 2 };
+export default function Scene() {
+  return (
+    <View style={{ position: "absolute", inset: 0 }}>
+      <View key="card" style={{ position: "absolute", left: 40, top: 40, width: 120, height: 60, backgroundColor: "#fff" }}>
+        <Text key="title" style={{ fontSize: 20 }}>Hi</Text>
+      </View>
+    </View>
+  );
+}
+`,
+  );
+  await Bun.write(
+    join(project, "picked.timeline.json"),
+    JSON.stringify({
+      canvas: CUT.canvas,
+      resources: { card: "card.motion.tsx" },
+      tracks: {
+        visual: [
+          { clips: [{ id: "bg", kind: "solid", color: "#000000ff", start: 0, duration: 2 }] },
+          { clips: [{ id: "a", kind: "motion", component: "card", start: 0, duration: 2 }] },
+        ],
+      },
+    }),
+  );
   await Bun.write(join(project, "notes.md"), "Notes for this project.");
   await Bun.write(join(project, "Card.tsx"), "export default function Card() { return <View />; }");
   await Bun.write(join(project, "data.json"), '{"title":"Hello"}');
@@ -1075,6 +1102,53 @@ export default function Scene() {
       return n1.status === "open";
     });
     expect(true, "a resolved note can be reopened");
+
+    // A click on the picture while noting picks the element drawn there, a click again the one
+    // beneath, and its line opens in the source; the note is on it.
+    await page.getByLabel("Notes shown").selectOption("open");
+    await page.getByRole("tab", { name: "Files", exact: true }).click();
+    await openFile("picked.timeline.json", 320);
+    await evaluate("studio.player.seekFrame(15);");
+    await page.getByRole("button", { name: "Add a note", exact: true }).click();
+    const canvas = (await layer.boundingBox())!;
+    const card = { x: canvas.x + canvas.width * 0.2, y: canvas.y + canvas.height * 0.3 };
+    await page.mouse.click(card.x, card.y);
+    const picked = page.locator(".note-picked");
+    await picked.getByText("card/title in a", { exact: true }).waitFor();
+    expect(
+      (await page.locator(".note-hit").count()) === 1,
+      "a click while noting picks the element drawn there",
+    );
+    await page.mouse.click(card.x, card.y);
+    await picked.getByText("card in a", { exact: true }).waitFor();
+    expect(true, "a click again picks the element beneath");
+    await picked.getByRole("button", { name: "card.motion.tsx:5:7", exact: true }).click();
+    const line = await until("the line picked", () =>
+      evaluate(
+        `const t = studio.shadowRoot.querySelector('textarea[aria-label="Source code"]'); return t && t.value.slice(t.selectionStart, t.selectionEnd);`,
+      ),
+    );
+    expect(
+      line.trim().startsWith('<View key="card"'),
+      `the element's line opens in the source: ${line}`,
+    );
+    await page.getByRole("textbox", { name: "Note", exact: true }).fill("bigger card");
+    await page.getByRole("button", { name: "Add note", exact: true }).click();
+    const onCard = await until("the picked note", async () => {
+      const file = await Bun.file(join(project, "reviews/notes.json")).json();
+      return file.notes[2];
+    });
+    const [top] = onCard.targets ?? [];
+    expect(
+      top?.clip === "a" &&
+        top.path === "card" &&
+        top.site === "card.motion.tsx:5:7" &&
+        top.offset === 0.5 &&
+        onCard.targets[1]?.clip === "bg" &&
+        near(onCard.region.x, 40 / 320) &&
+        near(onCard.region.w, 120 / 320),
+      `a note on a picked element is on it, where it is drawn: ${JSON.stringify(onCard)}`,
+    );
 
     // Standalone Studio does not have the renders/ directory created with a project.
     for (const kind of ["motion", "timeline"] as const) {

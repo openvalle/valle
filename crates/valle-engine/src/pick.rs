@@ -49,9 +49,11 @@ impl Hit {
         }
     }
 
-    /// Where its JSX is written, in a file its author wrote, not the scene a Timeline lowers to.
+    /// Where its JSX is written, in a file its author wrote: not the scene a Timeline lowers to,
+    /// nor one of Valle's own, such as the one that draws captions.
     pub fn written(&self) -> Option<&str> {
-        (self.site.as_deref()).filter(|s| !s.contains(".timeline.json.motion.tsx:"))
+        (self.site.as_deref())
+            .filter(|s| !s.contains(".timeline.json.motion.tsx:") && !s.starts_with("__valle/"))
     }
 
     pub fn to_json(&self) -> Value {

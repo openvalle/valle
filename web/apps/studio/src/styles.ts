@@ -532,6 +532,33 @@ export const styles = css`
   .note-form[data-side="left"] {
     left: 12px;
   }
+  .note-hit {
+    position: absolute;
+    border: 2px solid var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    pointer-events: none;
+  }
+  .note-picked {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+    font-size: 12px;
+  }
+  button.link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .note-targets {
+    margin: 6px 0;
+    padding-left: 18px;
+    font-size: 12px;
+  }
   .note-form textarea {
     resize: vertical;
     font: inherit;

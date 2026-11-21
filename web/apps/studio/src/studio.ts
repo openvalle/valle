@@ -8,7 +8,12 @@ import { styles } from "./styles.ts";
 import { icon } from "./icons.ts";
 import { addMedia, find, selection } from "./edit.ts";
 import { frame, invalidate, PEAKS, peaks, wave } from "./media.ts";
-import { createPlayer, type Player, type Stats } from "../../../packages/engine/src/index.ts";
+import {
+  createPlayer,
+  type Hit,
+  type Player,
+  type Stats,
+} from "../../../packages/engine/src/index.ts";
 
 import {
   Conflict,
@@ -135,12 +140,16 @@ export class ValleStudio extends LitElement {
   #fading: ReturnType<typeof setTimeout> | undefined;
   #ask: Ask | undefined;
   /** A note being written on the frame shown, or over a span from it: the part of the picture
-   * it is about, if one is drawn, and where a drag of it began. */
+   * it is about, if one is drawn, and where a drag of it began; the elements picked there, the
+   * one chosen, and the point clicked, which a click again goes beneath. */
   #noting:
     | {
         region?: Region;
         from?: [number, number];
         span?: { start: number; end: number };
+        hits?: Hit[];
+        chosen?: number;
+        point?: [number, number];
         saving?: boolean;
       }
     | undefined;
@@ -749,9 +758,12 @@ export class ValleStudio extends LitElement {
     this.requestUpdate();
     try {
       const at = noting.span ?? { start: player.currentTime };
-      const picture = await notePicture(await player.frame(at.start), noting.region);
+      const hit = this.#chosen();
+      const region = noting.region ?? (hit && this.#fraction(hit.bounds));
+      const targets = hit && [{ clip: hit.clip!, path: hit.path, site: hit.site }];
+      const picture = await notePicture(await player.frame(at.start), region);
       const note = await service.addNote(
-        { timeline: this.#entry, at, region: noting.region, text },
+        { timeline: this.#entry, at, region, targets, text },
         picture,
       );
       this.#endNote();
@@ -762,6 +774,67 @@ export class ValleStudio extends LitElement {
       noting.saving = false;
       this.#refuse((error as Error).message);
     }
+  }
+
+  /** The element picked for the note being written. */
+  #chosen(): Hit | undefined {
+    const noting = this.#noting;
+    return noting?.chosen === undefined ? undefined : noting.hits?.[noting.chosen];
+  }
+
+  /** `bounds`, in canvas px, as the part of the picture it is, inside it. */
+  #fraction(bounds: Hit["bounds"]): Region | undefined {
+    const info = this.player?.info;
+    if (!info) return undefined;
+    const x = Math.max(0, bounds.x / info.width);
+    const y = Math.max(0, bounds.y / info.height);
+    const w = Math.min(1, (bounds.x + bounds.width) / info.width) - x;
+    const h = Math.min(1, (bounds.y + bounds.height) / info.height) - y;
+    return w > 0 && h > 0 ? { x, y, w, h } : undefined;
+  }
+
+  /** Picks what is drawn in the region drawn, or at `point` clicked: a click again there goes to
+   * the element beneath. Only elements in a clip are kept, as a note is about clips. */
+  async #pick(point: [number, number]): Promise<void> {
+    const noting = this.#noting;
+    const player = this.player;
+    if (!noting || !player) return;
+    const { width, height } = player.info;
+    const region = noting.region;
+    const near = noting.point && Math.hypot(noting.point[0] - point[0], noting.point[1] - point[1]);
+    if (!region && near !== undefined && near < 0.005 && noting.hits?.length) {
+      noting.chosen = ((noting.chosen ?? -1) + 1) % noting.hits.length;
+    } else {
+      const hits = await (region
+        ? player.pick(region.x * width, region.y * height, region.w * width, region.h * height)
+        : player.pick(point[0] * width, point[1] * height));
+      if (this.#noting !== noting) return;
+      noting.hits = hits.filter((h) => h.clip);
+      noting.chosen = noting.hits.length ? 0 : undefined;
+      noting.point = region ? undefined : point;
+    }
+    this.requestUpdate();
+  }
+
+  /** Opens the source at `site`, `file:line:column`, with its line selected. */
+  async #goTo(site: string): Promise<void> {
+    const [, file, line] = /^(.+):(\d+):\d+$/.exec(site) ?? [];
+    if (!file) return;
+    this.#focused = false;
+    this.#inspectorVisible = true;
+    await this.#run(() => this.#show(file));
+    await this.updateComplete;
+    const input = this.renderRoot.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Source code"]',
+    );
+    if (!input || this.#open !== file) return;
+    const lines = input.value.split("\n");
+    const n = Math.min(Number(line), lines.length) - 1;
+    const start = lines.slice(0, n).reduce((at, l) => at + l.length + 1, 0);
+    input.focus();
+    input.setSelectionRange(start, start + lines[n].length);
+    input.scrollTop = Math.max(0, ((n - 3) * input.scrollHeight) / lines.length);
+    input.previousElementSibling!.scrollTop = input.scrollTop;
   }
 
   /** What covers the picture while a note is written: the region drawn on it, and the note. */
@@ -788,7 +861,10 @@ export class ValleStudio extends LitElement {
       this.requestUpdate();
     };
     const region = noting.region;
-    const side = region && region.x + region.w / 2 > 0.5 ? "left" : "right";
+    const hit = this.#chosen();
+    const info = this.player?.info;
+    const marked = region ?? (hit && this.#fraction(hit.bounds));
+    const side = marked && marked.x + marked.w / 2 > 0.5 ? "left" : "right";
     return html`<div
         class="note-layer"
         aria-label="Draw the part of the picture the note is about"
@@ -797,13 +873,16 @@ export class ValleStudio extends LitElement {
           if (e.button !== 0) return;
           noting.from = at(e);
           noting.region = undefined;
+          if (!noting.point) noting.hits = noting.chosen = undefined;
           (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
           this.requestUpdate();
         }}
         @pointermove=${drag}
         @pointerup=${(e: PointerEvent) => {
           drag(e);
+          const from = noting.from;
           noting.from = undefined;
+          if (from) void this.#pick(at(e));
           this.renderRoot.querySelector<HTMLTextAreaElement>(".note-form textarea")?.focus();
         }}
       >
@@ -812,6 +891,14 @@ export class ValleStudio extends LitElement {
             ? html`<div
                 class="note-region"
                 style=${`left: ${region.x * 100}%; top: ${region.y * 100}%; width: ${region.w * 100}%; height: ${region.h * 100}%`}
+              ></div>`
+            : nothing
+        }
+        ${
+          hit
+            ? html`<div
+                class="note-hit"
+                style=${`left: ${(hit.bounds.x / info!.width) * 100}%; top: ${(hit.bounds.y / info!.height) * 100}%; width: ${(hit.bounds.width / info!.width) * 100}%; height: ${(hit.bounds.height / info!.height) * 100}%`}
               ></div>`
             : nothing
         }
@@ -833,8 +920,41 @@ export class ValleStudio extends LitElement {
           }</strong
         >
         <small class="muted"
-          >${region ? "About the part drawn" : "About the whole picture: drag over it to mark a part"}</small
+          >${region || hit ? "About the part drawn" : "About the whole picture: drag over it to mark a part, or click an element"}</small
         >
+        ${
+          hit
+            ? html`<span class="note-picked">
+                <span>${hit.path ?? "the clip"} in ${hit.clip}</span>
+                ${hit.site ? html`<button type="button" class="link" @click=${() => this.#goTo(hit.site!)}>${hit.site}</button>` : nothing}
+                ${
+                  noting.hits!.length > 1
+                    ? html`<button
+                        type="button"
+                        class="quiet"
+                        title="Or click there again"
+                        @click=${() => {
+                          noting.chosen = (noting.chosen! + 1) % noting.hits!.length;
+                          this.requestUpdate();
+                        }}
+                      >
+                        Beneath (${noting.chosen! + 1} of ${noting.hits!.length})
+                      </button>`
+                    : nothing
+                }
+                <button
+                  type="button"
+                  class="quiet"
+                  @click=${() => {
+                    noting.hits = noting.chosen = noting.point = undefined;
+                    this.requestUpdate();
+                  }}
+                >
+                  Whole picture
+                </button>
+              </span>`
+            : nothing
+        }
         <textarea
           name="text"
           aria-label="Note"
@@ -960,6 +1080,27 @@ export class ValleStudio extends LitElement {
           ${
             open
               ? html`${n.picture ? html`<img class="note-picture" alt=${`The frame of ${n.id}`} src=${address(n.picture)} />` : nothing}
+                  ${
+                    n.targets?.length
+                      ? html`<ul class="note-targets" aria-label="On">
+                          ${n.targets.map(
+                            (t) =>
+                              html`<li>
+                                ${t.path ? `${t.path} in ` : ""}${t.clip}${
+                                  t.site
+                                    ? html` <button
+                                        class="link"
+                                        @click=${() => this.#goTo(t.site!)}
+                                      >
+                                        ${t.site}
+                                      </button>`
+                                    : nothing
+                                }
+                              </li>`,
+                          )}
+                        </ul>`
+                      : nothing
+                  }
                   <ol class="thread">
                     ${n.thread.map(
                       (m) =>

@@ -5,10 +5,10 @@
 //   player.play();
 
 import { Connection, PlayerError, RATE, type Spawn, spawns } from "./connection.ts";
-import type { Controls, Opened, Request, Source, TimelineUpdate } from "./messages.ts";
+import type { Controls, Hit, Opened, Request, Source, TimelineUpdate } from "./messages.ts";
 
 export { PlayerError } from "./connection.ts";
-export type { Code, Control, Controls, Opened, Source } from "./messages.ts";
+export type { Code, Control, Controls, Hit, Opened, Source } from "./messages.ts";
 
 export type Options = {
   canvas: HTMLCanvasElement;
@@ -336,6 +336,13 @@ export class Player {
       this.#lastShown = index;
     }
     this.#emit("time", { time: this.#time(index), frame: index });
+  }
+
+  /** What the frame drawn last draws at the point `x`, `y` of the canvas, in px, the top first;
+   * or, given a `width` and `height`, in that box, those most in it first. */
+  async pick(x: number, y: number, width?: number, height?: number): Promise<Hit[]> {
+    const index = this.#frame;
+    return (await this.#send({ type: "pick", index, x, y, width, height })) as Hit[];
   }
 
   /** The pixels of the frame drawn last: straight sRGB, 4 bytes a pixel, rows top down. */

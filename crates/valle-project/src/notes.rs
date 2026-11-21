@@ -254,6 +254,25 @@ pub fn targets(doc: &Document, seconds: f64, heard: bool) -> Vec<Target> {
         .collect()
 }
 
+/// The targets given, those without an offset at it where they are shown, then the other clips
+/// shown. A target given that is on a clip not shown keeps what it was given.
+fn with_shown(given: Vec<Target>, shown: Vec<Target>) -> Vec<Target> {
+    let mut out: Vec<Target> = (given.into_iter())
+        .map(|mut t| {
+            if let Some(s) = shown.iter().find(|s| s.clip == t.clip) {
+                t.offset = t.offset.or(s.offset);
+                t.run = t.run.or(s.run);
+            }
+            t
+        })
+        .collect();
+    let rest: Vec<Target> = (shown.into_iter())
+        .filter(|s| !out.iter().any(|t| t.clip == s.clip))
+        .collect();
+    out.extend(rest);
+    out
+}
+
 impl Target {
     pub fn to_json(&self) -> Value {
         let mut t = json!({ "clip": self.clip });
@@ -302,12 +321,13 @@ impl Project {
                     .ok_or_else(|| format!("{}: not a timeline of the project", new.timeline))?
             }
         };
+        // A timeline that does not read yet is still noted on, where it was.
+        let shown = (self.document(&timeline).ok())
+            .map(|doc| targets(&doc, new.start, new.region.is_none()))
+            .unwrap_or_default();
         let found = match new.targets.is_empty() {
-            // A timeline that does not read yet is still noted on, where it was.
-            true => (self.document(&timeline).ok())
-                .map(|doc| targets(&doc, new.start, new.region.is_none()))
-                .unwrap_or_default(),
-            false => new.targets,
+            true => shown,
+            false => with_shown(new.targets, shown),
         };
         let kind = match &new.image {
             Some(bytes) => Some(picture(bytes)?),
@@ -834,6 +854,27 @@ mod tests {
         let clips: Vec<_> = note.targets.iter().map(|t| t.clip.as_str()).collect();
         assert_eq!(clips, ["line", "over", "back", "music"]);
         assert_eq!(note.targets[0].run, Some(0));
+        // What was picked comes first, where it is shown, and the rest after.
+        let picked = Target {
+            clip: "over".into(),
+            offset: None,
+            run: None,
+            path: Some("card/title".into()),
+            site: Some("scene.motion.tsx:6:9".into()),
+        };
+        let note = p
+            .add_note(NewNote {
+                targets: vec![picked],
+                ..new("the title")
+            })
+            .unwrap();
+        let clips: Vec<_> = note.targets.iter().map(|t| t.clip.as_str()).collect();
+        assert_eq!(clips, ["over", "line", "back", "music"]);
+        assert_eq!(
+            note.targets[0].offset,
+            note.targets[2].offset.map(|o| o - 1.0)
+        );
+        assert_eq!(note.targets[0].path.as_deref(), Some("card/title"));
     }
 
     #[test]
