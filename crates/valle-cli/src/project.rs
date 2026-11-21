@@ -443,6 +443,21 @@ fn notes(p: &Project, command: Option<NotesCommand>) -> Result<Value, Failure> {
             let note = p.note(&id).map_err(failed)?;
             let mut out = placed(p, &note);
             let mut summary = line(&note, &out);
+            if !note.targets.is_empty() {
+                let about: Vec<String> = (note.targets.iter())
+                    .map(|t| {
+                        let mut s = t.clip.clone();
+                        if let Some(offset) = t.offset {
+                            s += &format!("@{offset}");
+                        }
+                        if let Some(run) = t.run {
+                            s += &format!(" run {run}");
+                        }
+                        s
+                    })
+                    .collect();
+                summary += &format!("\n  about {}", about.join(", "));
+            }
             for m in &note.thread {
                 summary += &format!("\n  {} (snapshot {}): {}", m.by, m.snapshot, m.text);
             }

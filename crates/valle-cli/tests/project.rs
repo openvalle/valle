@@ -305,6 +305,14 @@ fn notes_follow_their_clips_and_record_the_snapshots_of_each_message() {
     assert_eq!(refused["status"], "error");
     p.run(&["project", "notes", "delete", "n1"]);
     assert!(!p.0.join("reviews/crops/n1.png").exists());
+    // Without --clip, a note is about the clips shown then.
+    let found = p.run(&["project", "notes", "add", "flat", "--at", "0.1"]);
+    assert_eq!(found["targets"], json!([{"clip":"a","offset":0.1}]));
+    let shown = p.run(&["project", "notes", "show", found["id"].as_str().unwrap()]);
+    assert!(
+        shown["summary"].as_str().unwrap().contains("about a@0.1"),
+        "{shown}"
+    );
     // Notes are not sources: the history holds only what the edits made.
     let history = p.run(&["project", "history"]);
     assert_eq!(history["snapshots"].as_array().unwrap().len(), 3);

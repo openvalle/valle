@@ -7,7 +7,8 @@
 use std::fs;
 
 use serde_json::{Map, Value, json};
-use valle_timeline::Document;
+use valle_timeline::time::Tick;
+use valle_timeline::{Content, Document, Kind};
 
 use crate::history::now;
 use crate::{Error, Project, inside, pretty, write};
@@ -76,6 +77,7 @@ pub struct NewNote {
     pub start: f64,
     pub end: Option<f64>,
     pub region: Option<Region>,
+    /// What it is about; when none are given, the clips shown at `start`, as `targets` finds.
     pub targets: Vec<Target>,
     pub image: Option<Vec<u8>>,
     pub by: String,
@@ -212,6 +214,46 @@ impl Note {
     }
 }
 
+/// The clips of `doc` shown at `seconds`, the one drawn on top first: captions over the picture,
+/// later tracks over earlier ones, then what is heard when `heard`. Each says how far into it the
+/// time is and, for a caption with timed runs, the run then.
+pub fn targets(doc: &Document, seconds: f64, heard: bool) -> Vec<Target> {
+    let Ok(at) = Tick::from_seconds(seconds) else {
+        return Vec::new();
+    };
+    let order = |kind| match kind {
+        Kind::Caption => Some(0),
+        Kind::Visual => Some(1),
+        Kind::Audio if heard => Some(2),
+        _ => None,
+    };
+    let mut tracks: Vec<_> = (doc.tracks.iter().rev())
+        .filter(|t| t.enabled)
+        .filter_map(|t| Some((order(t.kind)?, t)))
+        .collect();
+    tracks.sort_by_key(|(order, _)| *order);
+    let clips = (tracks.into_iter()).flat_map(|(_, t)| t.clips.iter().rev());
+    clips
+        .filter(|c| c.enabled && c.start <= at && at < c.end())
+        .map(|c| {
+            let into = at - c.start;
+            let run = match &c.content {
+                Content::Caption { runs, .. } => (runs.iter())
+                    .position(|r| r.start <= into && into < r.end)
+                    .map(|i| i as u64),
+                _ => None,
+            };
+            Target {
+                clip: c.id.clone(),
+                offset: Some((into.seconds() * 1e6).round() / 1e6),
+                run,
+                path: None,
+                site: None,
+            }
+        })
+        .collect()
+}
+
 impl Target {
     pub fn to_json(&self) -> Value {
         let mut t = json!({ "clip": self.clip });
@@ -260,6 +302,13 @@ impl Project {
                     .ok_or_else(|| format!("{}: not a timeline of the project", new.timeline))?
             }
         };
+        let found = match new.targets.is_empty() {
+            // A timeline that does not read yet is still noted on, where it was.
+            true => (self.document(&timeline).ok())
+                .map(|doc| targets(&doc, new.start, new.region.is_none()))
+                .unwrap_or_default(),
+            false => new.targets,
+        };
         let kind = match &new.image {
             Some(bytes) => Some(picture(bytes)?),
             None => None,
@@ -276,7 +325,7 @@ impl Project {
             start: new.start,
             end: new.end,
             region: new.region,
-            targets: new.targets,
+            targets: found,
             resolved_in: None,
             thread: vec![Message {
                 by: new.by,
@@ -746,6 +795,45 @@ mod tests {
         assert_eq!(note.now(&doc(2.0, 0.5)), None);
         let lone = p.add_note(new("all of it")).unwrap();
         assert_eq!(lone.now(&doc(9.0, 1.0)), Some((1.5, None)));
+    }
+
+    #[test]
+    fn a_note_without_targets_is_about_what_is_shown_on_top_first() {
+        let p = project("targets");
+        let solid = |id: &str, start: f64| json!({ "id": id, "kind": "solid", "color": "#000000ff", "start": start, "duration": 2 });
+        let timeline = json!({
+            "canvas": { "width": 640, "height": 360, "fps": 30 },
+            "tracks": {
+                "visual": [{ "clips": [solid("back", 0.0)] }, { "clips": [solid("over", 1.0)] }],
+                "audio": [{ "clips": [{ "id": "music", "start": 0, "duration": 4, "src": "x" }] }],
+                "caption": [{ "clips": [{ "id": "line", "start": 1, "duration": 2, "runs": [
+                    { "text": "Word ", "start": 0, "end": 0.6 },
+                    { "text": "by word", "start": 0.6, "end": 1.8 }
+                ] }] }]
+            }
+        });
+        let doc = valle_timeline::Document::read_edit(&timeline).expect("a timeline");
+        let found = |seconds: f64, heard: bool| {
+            (super::targets(&doc, seconds, heard).into_iter())
+                .map(|t| (t.clip, t.offset.unwrap(), t.run))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            found(1.75, false),
+            [
+                ("line".into(), 0.75, Some(1)),
+                ("over".into(), 0.75, None),
+                ("back".into(), 1.75, None),
+            ]
+        );
+        assert_eq!(found(0.5, true).len(), 2);
+        assert_eq!(found(0.5, true)[1].0, "music");
+        // Added without targets, a note is about the clips found there.
+        fs::write(p.root.join(&p.timeline), pretty(&timeline)).unwrap();
+        let note = p.add_note(new("too dark")).unwrap();
+        let clips: Vec<_> = note.targets.iter().map(|t| t.clip.as_str()).collect();
+        assert_eq!(clips, ["line", "over", "back", "music"]);
+        assert_eq!(note.targets[0].run, Some(0));
     }
 
     #[test]

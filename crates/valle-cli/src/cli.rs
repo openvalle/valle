@@ -245,7 +245,8 @@ pub enum NotesCommand {
         /// The part of the picture, as fractions of the canvas: x,y,w,h
         #[arg(long, value_name = "X,Y,W,H")]
         region: Option<String>,
-        /// A clip it is about, by id, with seconds into it as id@seconds
+        /// A clip it is about, by id, with seconds into it as id@seconds; without any, the clips
+        /// shown at --at are found
         #[arg(long = "clip", value_name = "ID[@SECONDS]")]
         clips: Vec<String>,
         /// The picture seen: a PNG, JPEG or WebP file
