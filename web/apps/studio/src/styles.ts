@@ -536,6 +536,53 @@ export const styles = css`
     resize: vertical;
     font: inherit;
   }
+  .note-seen {
+    position: absolute;
+    pointer-events: none;
+  }
+  .notes .note {
+    border-bottom: 1px solid var(--line);
+    padding: 4px 0;
+  }
+  .notes .note.open {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-bottom: 10px;
+  }
+  .note-status {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: #ff3b30;
+  }
+  .note-status.resolved {
+    background: #7f8794;
+  }
+  .note-picture {
+    width: 100%;
+    border-radius: 4px;
+  }
+  .thread {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .thread p {
+    white-space: pre-wrap;
+  }
+  .note-reply {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .note-reply textarea {
+    resize: vertical;
+  }
   .note-actions {
     display: flex;
     justify-content: flex-end;

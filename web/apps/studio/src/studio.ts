@@ -17,6 +17,7 @@ import {
   address,
   mediaUrl,
   type Listed,
+  type Note,
   type Region,
   type Session,
   service,
@@ -110,7 +111,7 @@ export class ValleStudio extends LitElement {
   /** The props the preview of a scene is played with. */
   #values: Record<string, unknown> = {};
   #leftTab: "files" | "media" | "history" | "renders" = "files";
-  #rightTab: "properties" | "code" = "properties";
+  #rightTab: "properties" | "code" | "notes" = "properties";
   #filter = "";
   #asset: Listed | undefined;
   #focused = false;
@@ -133,9 +134,20 @@ export class ValleStudio extends LitElement {
   #toast = "";
   #fading: ReturnType<typeof setTimeout> | undefined;
   #ask: Ask | undefined;
-  /** A note being written on the frame shown: the part of the picture it is about, if one is
-   * drawn, and where a drag of it began. */
-  #noting: { region?: Region; from?: [number, number]; saving?: boolean } | undefined;
+  /** A note being written on the frame shown, or over a span from it: the part of the picture
+   * it is about, if one is drawn, and where a drag of it began. */
+  #noting:
+    | {
+        region?: Region;
+        from?: [number, number];
+        span?: { start: number; end: number };
+        saving?: boolean;
+      }
+    | undefined;
+  /** The review's notes on the timeline open, and the one looked at. */
+  #notes: Note[] = [];
+  #note: string | undefined;
+  #notesShown: "open" | "resolved" | "all" = "open";
   #resized = new ResizeObserver(() => this.requestUpdate());
 
   connectedCallback(): void {
@@ -222,6 +234,17 @@ export class ValleStudio extends LitElement {
     if (this.session?.kind === "project") {
       this.#history = (await service.project(["history"])).snapshots ?? [];
     }
+    await this.#loadNotes();
+  }
+
+  /** The notes on the timeline open, where they are in it now. */
+  async #loadNotes(): Promise<void> {
+    const entry = this.#entry;
+    const notes =
+      this.session?.kind === "project" && this.timeline ? await service.notes(entry) : [];
+    if (entry !== this.#entry) return;
+    this.#notes = notes;
+    if (!notes.some((n) => n.id === this.#note)) this.#note = undefined;
     this.requestUpdate();
   }
 
@@ -530,7 +553,9 @@ export class ValleStudio extends LitElement {
       const path = event.path as string;
       const url = mediaUrl("", path);
       invalidate(url);
-      if (this.#drafts.has(path)) {
+      if (path === NOTES) {
+        await this.#loadNotes();
+      } else if (this.#drafts.has(path)) {
         this.#conflicts.add(path);
       } else if (this.#files.has(path)) {
         await this.#read(path);
@@ -723,14 +748,15 @@ export class ValleStudio extends LitElement {
     noting.saving = true;
     this.requestUpdate();
     try {
-      const start = player.currentTime;
-      const picture = await notePicture(await player.frame(start), noting.region);
+      const at = noting.span ?? { start: player.currentTime };
+      const picture = await notePicture(await player.frame(at.start), noting.region);
       const note = await service.addNote(
-        { timeline: this.#entry, at: { start }, region: noting.region, text },
+        { timeline: this.#entry, at, region: noting.region, text },
         picture,
       );
       this.#endNote();
       this.#status = `Added note ${note.id}`;
+      this.#note = note.id;
       await this.#refresh();
     } catch (error) {
       noting.saving = false;
@@ -799,7 +825,13 @@ export class ValleStudio extends LitElement {
           void this.#addNote(String(text ?? ""));
         }}
       >
-        <strong>Note at ${timecode(this.#shownFrame, this.#rate)}</strong>
+        <strong
+          >${
+            noting.span
+              ? `Note from ${this.#timecode(noting.span.start)} to ${this.#timecode(noting.span.end)}`
+              : `Note at ${timecode(this.#shownFrame, this.#rate)}`
+          }</strong
+        >
         <small class="muted"
           >${region ? "About the part drawn" : "About the whole picture: drag over it to mark a part"}</small
         >
@@ -825,6 +857,173 @@ export class ValleStudio extends LitElement {
       </form>`;
   }
 
+  /** Goes to note `id` where it is now, paused, and shows it in the notes panel. */
+  #showNote(id: string): void {
+    const note = this.#notes.find((n) => n.id === id);
+    if (!note) return;
+    this.#note = id;
+    this.#rightTab = "notes";
+    this.#inspectorVisible = true;
+    if (note.now) {
+      this.player?.pause();
+      this.player?.seek(note.now.start);
+    }
+    this.requestUpdate();
+  }
+
+  /** The note looked at, on its own frames: the part of the picture it is about. */
+  #noteSeen() {
+    const note = this.#notes.find((n) => n.id === this.#note);
+    const stage = this.renderRoot.querySelector(".stage")?.getBoundingClientRect();
+    const picture = this.#picture();
+    const now = note?.now;
+    if (this.#noting || !note?.region || !now || !stage || !picture || this.player?.playing) {
+      return nothing;
+    }
+    const half = 0.5 / this.#rate;
+    if (this.#time < now.start - half || this.#time > (now.end ?? now.start) + half) return nothing;
+    const r = note.region;
+    return html`<div
+      class="note-seen"
+      style=${`left: ${picture.x - stage.x}px; top: ${picture.y - stage.y}px; width: ${picture.width}px; height: ${picture.height}px`}
+    >
+      <div
+        class="note-region"
+        style=${`left: ${r.x * 100}%; top: ${r.y * 100}%; width: ${r.w * 100}%; height: ${r.h * 100}%`}
+      ></div>
+    </div>`;
+  }
+
+  /** The review's notes on the timeline, open or resolved, and the one looked at with its
+   * picture and thread, to answer, resolve or reopen. */
+  #notesPanel() {
+    const shown = this.#notes.filter(
+      (n) =>
+        this.#notesShown === "all" ||
+        (n.status === "resolved") === (this.#notesShown === "resolved"),
+    );
+    const change = (note: Note, action: "reply" | "resolve" | "reopen", text?: string) =>
+      this.#run(async () => {
+        await service.changeNote(note.id, action, text);
+        await this.#loadNotes();
+      });
+    const when = (n: Note) =>
+      n.now
+        ? n.now.end === undefined
+          ? this.#timecode(n.now.start)
+          : `${this.#timecode(n.now.start)}–${this.#timecode(n.now.end)}`
+        : "gone";
+    return html`<div class="scroll notes">
+      <div class="field">
+        <span>Show</span>
+        <select
+          aria-label="Notes shown"
+          @change=${(e: Event) => {
+            this.#notesShown = (e.target as HTMLSelectElement).value as "open" | "resolved" | "all";
+            this.requestUpdate();
+          }}
+        >
+          ${(["open", "resolved", "all"] as const).map(
+            (v) =>
+              html`<option value=${v} ?selected=${this.#notesShown === v}>
+                ${{ open: "Open", resolved: "Resolved", all: "All" }[v]}
+              </option>`,
+          )}
+        </select>
+      </div>
+      ${
+        shown.length
+          ? nothing
+          : html`<div class="empty">
+              ${icon("note")}<strong
+                >No ${this.#notesShown === "all" ? "" : `${this.#notesShown} `}notes</strong
+              >Pause and press N to note a frame, or Shift-drag over the ruler to note a span.
+            </div>`
+      }
+      ${shown.map((n) => {
+        const open = n.id === this.#note;
+        const replies = n.thread.slice(1);
+        return html`<article class="note ${open ? "open" : ""}" data-note=${n.id}>
+          <button
+            class="file"
+            aria-expanded=${open}
+            @click=${() => (open ? ((this.#note = undefined), this.requestUpdate()) : this.#showNote(n.id))}
+          >
+            <span class="note-status ${n.status}"></span
+            ><span class="filename"
+              >${n.thread[0]?.text}<br /><small
+                >${n.id} ·
+                ${when(n)}${replies.length ? ` · ${replies.length === 1 ? "1 reply" : `${replies.length} replies`}` : ""}</small
+              ></span
+            >
+          </button>
+          ${
+            open
+              ? html`${n.picture ? html`<img class="note-picture" alt=${`The frame of ${n.id}`} src=${address(n.picture)} />` : nothing}
+                  <ol class="thread">
+                    ${n.thread.map(
+                      (m) =>
+                        html`<li>
+                          <small
+                            >${m.by} · snapshot ${m.snapshot} ·
+                            ${new Date(m.time).toLocaleString()}</small
+                          >
+                          <p>${m.text}</p>
+                        </li>`,
+                    )}
+                  </ol>
+                  ${n.resolvedIn === undefined ? nothing : html`<small>Resolved in snapshot ${n.resolvedIn}</small>`}
+                  <form
+                    class="note-reply"
+                    @submit=${(e: SubmitEvent) => {
+                      e.preventDefault();
+                      const form = e.currentTarget as HTMLFormElement;
+                      const text = String(new FormData(form).get("text") ?? "").trim();
+                      const action = (e.submitter as HTMLButtonElement | null)?.value as
+                        "reply" | "resolve" | "reopen";
+                      if (action === "reply" && !text) return;
+                      form.reset();
+                      void change(n, action, text || undefined);
+                    }}
+                  >
+                    <textarea
+                      name="text"
+                      aria-label="Reply"
+                      rows="2"
+                      placeholder="Reply"
+                    ></textarea>
+                    <span class="note-actions">
+                      ${
+                        n.status === "open"
+                          ? html`<button value="resolve">Resolve</button>`
+                          : html`<button value="reopen">Reopen</button>`
+                      }
+                      <button class="primary" value="reply">Reply</button>
+                    </span>
+                  </form>`
+              : nothing
+          }
+        </article>`;
+      })}
+    </div>`;
+  }
+
+  /** A Shift-drag over the ruler: a note over the span it marks, its picture the span's first
+   * frame. A span shorter than a frame is a note on that frame. */
+  #spanNote(from: number, to: number, phase: string): void {
+    if (this.#notable !== true) return this.#refuse(this.#notable);
+    const [start, end] = [Math.min(from, to), Math.max(from, to)];
+    if (!this.#noting) this.#startNote();
+    this.#noting!.span = end - start >= 1 / this.#rate ? { start, end } : undefined;
+    this.player?.seek(phase === "end" ? start : to);
+    this.requestUpdate();
+  }
+
+  /** `seconds` as the transport shows a time. */
+  #timecode(seconds: number): string {
+    return timecode(Math.round(seconds * this.#rate), this.#rate);
+  }
+
   /** Frames a second, as a number. */
   get #rate(): number {
     const [n, d = 1] = (this.player?.info.fps ?? "30").split("/").map(Number);
@@ -846,6 +1045,20 @@ export class ValleStudio extends LitElement {
       scope: `${this.session?.root ?? ""}/${this.#entry}`,
       playing: !!this.player?.playing && !this.#scrub,
       snap: this.#snap,
+      notes: this.#notes.flatMap((n) =>
+        n.now
+          ? [
+              {
+                id: n.id,
+                ...n.now,
+                text: n.thread[0]?.text ?? "",
+                resolved: n.status === "resolved",
+                selected: n.id === this.#note,
+              },
+            ]
+          : [],
+      ),
+      noting: this.#noting?.span,
     });
     const ask = this.renderRoot.querySelector<HTMLDialogElement>("#ask");
     if (ask && !ask.open) ask.showModal();
@@ -957,7 +1170,7 @@ export class ValleStudio extends LitElement {
                 </div>`
               : nothing
           }
-          ${this.#noteLayer()} ${this.#transport()}
+          ${this.#noteSeen()} ${this.#noteLayer()} ${this.#transport()}
         </section>
         ${this.#separator("right")} ${this.#right()}
       </main>
@@ -1029,6 +1242,8 @@ export class ValleStudio extends LitElement {
             this.requestUpdate();
           }}
           @seek=${(e: CustomEvent) => this.#seekTimeline(e.detail.time, e.detail.phase !== "end")}
+          @span=${(e: CustomEvent) => this.#spanNote(e.detail.from, e.detail.to, e.detail.phase)}
+          @note=${(e: CustomEvent) => this.#showNote(e.detail)}
         ></timeline-view>
       </section>
       <footer class="statusbar" role="status">
@@ -1502,6 +1717,9 @@ export class ValleStudio extends LitElement {
           [
             ["properties", "Properties"],
             ["code", "Code"],
+            ...(this.session?.kind === "project" && this.timeline
+              ? ([["notes", "Notes"]] as const)
+              : []),
           ] as const
         ).map(
           ([tab, name]) =>
@@ -1531,7 +1749,7 @@ export class ValleStudio extends LitElement {
             </div>
           </div>`,
       )}
-      ${this.#rightTab === "code" ? this.#source() : html`<div class="scroll">${this.#asset ? this.#media() : html`${this.#inspector()}${this.#props()}${this.#composition()}`}</div>`}
+      ${this.#rightTab === "notes" && this.timeline ? this.#notesPanel() : this.#rightTab === "code" ? this.#source() : html`<div class="scroll">${this.#asset ? this.#media() : html`${this.#inspector()}${this.#props()}${this.#composition()}`}</div>`}
     </aside>`;
   }
 
@@ -2527,6 +2745,9 @@ function timecode(frame: number, fps: number): string {
   const parts = [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60];
   return [...parts, frame % base].map((n) => String(n).padStart(2, "0")).join(":");
 }
+
+/** Where the review's notes are kept in a project. */
+const NOTES = "reviews/notes.json";
 
 /** How long ago `opened`, seconds since 1970, was. */
 function ago(opened: number): string {

@@ -97,6 +97,10 @@ every one of them is deleted or trimmed past that point; a note without clips st
 was written. In JSON, each note has `now`, where it is in the timeline as it is now, and
 `picture`, its picture as a path in the project.
 
+In Studio, pause and press N (or the note button) to note the frame shown, dragging over the
+picture to mark a part of it; Shift-drag over the ruler to note a span. Notes are marked on
+the ruler and listed under Notes, where a note is answered, resolved or reopened.
+
 Every message of a note, the note first, records the snapshot it was written against: when
 the sources changed since the last snapshot, one is saved first. `resolve` records the
 snapshot that resolved it as `resolvedIn`, so what changed in between is what was done about

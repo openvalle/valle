@@ -1013,6 +1013,69 @@ export default function Scene() {
     const listed = JSON.parse(run(["project", "-C", project, "notes", "--json"]));
     expect(listed.notes[0]?.now?.start === 0.5, "the CLI lists the note Studio added where it is");
 
+    // A note over a span: a Shift-drag over the ruler marks it, and it is listed with the first
+    // note in the notes panel, where an answer and a resolve are written.
+    const ruled = await evaluate(
+      `const r = ${view}.querySelector(".ruler").getBoundingClientRect(); const c = ${view}.querySelector(".clip").getBoundingClientRect(); return { x: r.x, y: r.y + r.height / 2, perSecond: c.width / studio.layout.tracks[0].clips[0].duration };`,
+    );
+    await page.keyboard.down("Shift");
+    await page.mouse.move(ruled.x + ruled.perSecond * 1, ruled.y);
+    await page.mouse.down();
+    await page.mouse.move(ruled.x + ruled.perSecond * 1.5, ruled.y, { steps: 4 });
+    await page.mouse.up();
+    await page.keyboard.up("Shift");
+    await page.getByRole("textbox", { name: "Note", exact: true }).fill("too long here");
+    await page.getByRole("button", { name: "Add note", exact: true }).click();
+    const spanned = await until("the span's note", async () => {
+      const file = await Bun.file(join(project, "reviews/notes.json")).json();
+      return file.notes[1];
+    });
+    expect(
+      spanned.id === "n2" &&
+        Math.abs(spanned.at.start - 1) < 0.05 &&
+        Math.abs(spanned.at.end - 1.5) < 0.05 &&
+        !spanned.region,
+      `a Shift-drag over the ruler notes a span: ${JSON.stringify(spanned.at)}`,
+    );
+    await until("the notes on the ruler", () =>
+      evaluate(`return ${view}.querySelectorAll(".note-mark").length === 2;`),
+    );
+    expect(true, "the ruler marks both notes");
+    await evaluate(`${view}.querySelector('.note-mark[data-note="n1"]').click();`);
+    await until("the note shown", () =>
+      evaluate('return studio.shadowRoot.querySelector(".note.open img.note-picture")?.complete;'),
+    );
+    expect(
+      (await evaluate("return studio.player.currentFrame;")) === 15 &&
+        (await page.locator(".note-seen .note-region").count()) === 1,
+      "a note on the ruler goes to its frame and shows its part of the picture",
+    );
+    run(["project", "-C", project, "notes", "reply", "n1", "warmer how?", "--by", "ai"]);
+    await until("the answer from outside", () =>
+      page.getByText("warmer how?", { exact: true }).count(),
+    );
+    expect(true, "an answer written by the CLI is shown in the panel");
+    await page.getByRole("textbox", { name: "Reply", exact: true }).fill("more red");
+    await page.getByRole("button", { name: "Reply", exact: true }).click();
+    await page.getByText("more red", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Resolve", exact: true }).click();
+    const resolved = await until("the note resolved", async () => {
+      const n1 = (await Bun.file(join(project, "reviews/notes.json")).json()).notes[0];
+      return n1.status === "resolved" && n1;
+    });
+    expect(
+      resolved.thread.map((m: { by: string }) => m.by).join() === "user,ai,user" &&
+        !(await page.locator('.note[data-note="n1"]').count()),
+      "a resolved note leaves the open notes",
+    );
+    await page.getByLabel("Notes shown").selectOption("resolved");
+    await page.getByRole("button", { name: "Reopen", exact: true }).click();
+    await until("the note reopened", async () => {
+      const n1 = (await Bun.file(join(project, "reviews/notes.json")).json()).notes[0];
+      return n1.status === "open";
+    });
+    expect(true, "a resolved note can be reopened");
+
     // Standalone Studio does not have the renders/ directory created with a project.
     for (const kind of ["motion", "timeline"] as const) {
       const folder = join(dir, kind);

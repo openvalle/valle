@@ -54,6 +54,16 @@ type Drag = {
   guide: number | undefined;
 };
 
+/** A review note where it is on the ruler. */
+export type NoteMark = {
+  id: string;
+  start: number;
+  end?: number;
+  text: string;
+  resolved: boolean;
+  selected: boolean;
+};
+
 /** What the view draws. */
 export type Shown = {
   layout: Layout | undefined;
@@ -66,6 +76,9 @@ export type Shown = {
   scope: string;
   playing: boolean;
   snap: boolean;
+  notes: NoteMark[];
+  /** The span a note being written covers. */
+  noting: { start: number; end: number } | undefined;
 };
 
 export class TimelineView extends LitElement {
@@ -368,6 +381,37 @@ export class TimelineView extends LitElement {
     .track .marker .flag {
       display: none;
     }
+    .note-mark {
+      position: absolute;
+      bottom: 1px;
+      height: 6px;
+      min-width: 8px;
+      margin-left: -4px;
+      padding: 0;
+      border: 0;
+      border-radius: 3px;
+      background: var(--note, #ff3b30);
+      cursor: pointer;
+    }
+    .note-mark.span {
+      margin-left: 0;
+    }
+    .note-mark.resolved {
+      --note: #7f8794;
+      opacity: 0.7;
+    }
+    .note-mark.selected {
+      outline: 1.5px solid #fff;
+      outline-offset: 1px;
+    }
+    .note-draft {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      border-inline: 1px solid #ff3b30;
+      background: #ff3b3026;
+      pointer-events: none;
+    }
     .guide {
       position: absolute;
       z-index: 2;
@@ -407,11 +451,15 @@ export class TimelineView extends LitElement {
     scope: "",
     playing: false,
     snap: true,
+    notes: [],
+    noting: undefined,
   };
   /** Pixels a second. */
   #scale = 80;
   #drag: Drag | undefined;
   #scrubbing = false;
+  /** Where a Shift-drag over the ruler, which marks a span, began. */
+  #spanFrom: number | undefined;
   /** The ids of the tracks locked, which are not edited here. */
   #locked = new Set<string>();
   /** A time kept at a place across the track area, in pixels, through a change of zoom. */
@@ -519,6 +567,25 @@ export class TimelineView extends LitElement {
         <span class="flag">${m.name ?? ""}</span>
       </div>`;
     });
+    const notes = this.#shown.notes.map(
+      (n) =>
+        html`<button
+          class="note-mark ${n.end === undefined ? "" : "span"} ${n.resolved ? "resolved" : ""} ${n.selected ? "selected" : ""}"
+          data-note=${n.id}
+          aria-label=${`Note ${n.id}`}
+          title=${`${n.id}: ${n.text}`}
+          style="left:${n.start * s}px;width:${n.end === undefined ? 0 : (n.end - n.start) * s}px"
+          @pointerdown=${(e: PointerEvent) => e.stopPropagation()}
+          @click=${() => this.#emit("note", n.id)}
+        ></button>`,
+    );
+    const noting = this.#shown.noting;
+    const draft = noting
+      ? html`<div
+          class="note-draft"
+          style="left:${noting.start * s}px;width:${(noting.end - noting.start) * s}px"
+        ></div>`
+      : nothing;
     const guide = this.#drag?.guide;
     const lines = html`${markers}${
         guide === undefined ? nothing : html`<div class="guide" style="left:${guide * s}px"></div>`
@@ -542,7 +609,7 @@ export class TimelineView extends LitElement {
             @pointerup=${(e: PointerEvent) => this.#scrub(e, "end")}
             @pointercancel=${(e: PointerEvent) => this.#scrub(e, "end")}
           >
-            ${ticks}${lines}
+            ${ticks}${draft}${lines}${notes}
           </div>
         </div>
         ${layout.tracks.map((track) => {
@@ -708,7 +775,8 @@ export class TimelineView extends LitElement {
     this.#emit("zoom", zoom);
   };
 
-  /** The ruler pressed, dragged and let go: a time to show, and which of the three it is. */
+  /** The ruler pressed, dragged and let go: a time to show, and which of the three it is. With
+   * Shift, it marks a span from where it was pressed, for a note. */
   #scrub(event: PointerEvent, phase: "start" | "move" | "end") {
     const ruler = event.currentTarget as HTMLElement;
     if (phase === "start") {
@@ -723,7 +791,10 @@ export class TimelineView extends LitElement {
     const duration = this.layout?.duration ?? 0;
     let time = (event.clientX - ruler.getBoundingClientRect().left) / this.#scale;
     if (this.#shown.snap && !event.altKey) time += this.#snap([time], undefined, false)?.by ?? 0;
-    this.#emit("seek", { time: Math.min(Math.max(0, time), duration), phase });
+    time = Math.min(Math.max(0, time), duration);
+    if (phase === "start") this.#spanFrom = event.shiftKey ? time : undefined;
+    if (this.#spanFrom === undefined) this.#emit("seek", { time, phase });
+    else this.#emit("span", { from: this.#spanFrom, to: time, phase });
   }
 
   /** The nearest of the times edges snap to, within reach of one of `times`: the playhead, the
