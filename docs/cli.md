@@ -40,6 +40,7 @@ path. Rendering does not consume or depend on a previous check.
 | `valle project save [-m MESSAGE]` | Saves a snapshot of the sources |
 | `valle project history` | The snapshots |
 | `valle project restore N` | Puts snapshot N back |
+| `valle project notes [list\|show\|add\|reply\|resolve\|reopen\|delete]` | The review's notes, each where it is now; adds, answers and resolves them |
 | `valle project render [TIMELINE] [-o OUT]` | Renders, by default a video into `renders/` |
 | `valle project studio [FOLDER]` | Opens Studio on the project |
 

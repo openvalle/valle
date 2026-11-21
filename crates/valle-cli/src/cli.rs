@@ -214,6 +214,75 @@ pub struct Project {
 }
 
 #[derive(Subcommand)]
+pub enum NotesCommand {
+    /// The notes, each where it is now
+    List {
+        /// Only those still open
+        #[arg(long, conflicts_with = "resolved")]
+        open: bool,
+        /// Only those resolved
+        #[arg(long)]
+        resolved: bool,
+        /// Only those on this timeline
+        #[arg(long)]
+        timeline: Option<String>,
+    },
+    /// One note, with all that was said
+    Show { id: String },
+    /// A note at a frame, or over a span with --end
+    Add {
+        /// What to change
+        text: String,
+        /// Seconds of the timeline
+        #[arg(long)]
+        at: f64,
+        /// Where the span ends, in seconds
+        #[arg(long)]
+        end: Option<f64>,
+        /// The timeline; the entry one unless given
+        #[arg(long)]
+        timeline: Option<String>,
+        /// The part of the picture, as fractions of the canvas: x,y,w,h
+        #[arg(long, value_name = "X,Y,W,H")]
+        region: Option<String>,
+        /// A clip it is about, by id, with seconds into it as id@seconds
+        #[arg(long = "clip", value_name = "ID[@SECONDS]")]
+        clips: Vec<String>,
+        /// The picture seen: a PNG, JPEG or WebP file
+        #[arg(long)]
+        image: Option<PathBuf>,
+        /// Who says it
+        #[arg(long, default_value = "user")]
+        by: String,
+    },
+    /// Add a message to a note
+    Reply {
+        id: String,
+        text: String,
+        #[arg(long, default_value = "user")]
+        by: String,
+    },
+    /// Mark a note done by the sources as they are, saving them as a snapshot if they changed
+    Resolve {
+        id: String,
+        /// What was done
+        text: Option<String>,
+        #[arg(long, default_value = "ai")]
+        by: String,
+    },
+    /// Open a resolved note again
+    Reopen {
+        id: String,
+        /// Why
+        text: Option<String>,
+        #[arg(long, default_value = "user")]
+        by: String,
+    },
+    /// Delete a note and its picture
+    Delete { id: String },
+}
+
+#[derive(Subcommand)]
 pub enum ProjectCommand {
     /// A new project: project.json, main.timeline.json and its folders
     Create {
@@ -266,6 +335,14 @@ pub enum ProjectCommand {
         /// The snapshot, from 1
         #[arg(value_parser = clap::value_parser!(u64).range(1..))]
         snapshot: u64,
+    },
+    /// The review's notes: what to change, at a frame or over a span
+    ///
+    /// Without a command, lists them, each where it is now. Each message of a note is
+    /// recorded against a snapshot, saved first when the sources changed.
+    Notes {
+        #[command(subcommand)]
+        command: Option<NotesCommand>,
     },
     /// Render a timeline, by default a video into renders/
     ///

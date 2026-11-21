@@ -232,3 +232,80 @@ fn missing_media_and_unknown_props_name_authored_fields() {
         );
     }
 }
+
+#[test]
+fn notes_follow_their_clips_and_record_the_snapshots_of_each_message() {
+    let p = Project::new("notes");
+    let doc = |b: f64| {
+        let clip = |id: &str, start: f64| json!({"id":id,"kind":"solid","color":"#000000ff","start":start,"duration":2});
+        p.document(
+            "unused.png",
+            json!({"visual":[{"clips":[clip("a", 0.0), clip("b", b)]}]}),
+        );
+    };
+    doc(2.0);
+    std::fs::write(p.0.join("seen.png"), b"\x89PNG\r\n\x1a\nrest").unwrap();
+    let added = p.run(&[
+        "project",
+        "notes",
+        "add",
+        "the logo covers the caption",
+        "--at",
+        "3",
+        "--end",
+        "3.5",
+        "--clip",
+        "b@1",
+        "--region",
+        "0.6,0,0.4,0.2",
+        "--image",
+        "seen.png",
+    ]);
+    assert_eq!(added["id"], "n1");
+    assert_eq!(added["snapshot"], 1);
+    assert_eq!(added["picture"], "reviews/crops/n1.png");
+    assert!(p.0.join("reviews/crops/n1.png").is_file());
+    p.run(&[
+        "project", "notes", "add", "too dark", "--at", "0.5", "--clip", "a@0.5",
+    ]);
+    doc(5.0);
+    let resolved = p.run(&["project", "notes", "resolve", "n1", "moved it down left"]);
+    assert_eq!(resolved["resolvedIn"], 2);
+    assert_eq!(
+        resolved["thread"][1],
+        json!({"by":"ai","text":"moved it down left","snapshot":2,"time":resolved["thread"][1]["time"]})
+    );
+    let open = p.run(&["project", "notes"]);
+    assert_eq!(open["notes"].as_array().unwrap().len(), 2);
+    assert_eq!(open["notes"][0]["now"], json!({"start":6.0,"end":6.5}));
+    let open = p.run(&["project", "notes", "list", "--open"]);
+    assert_eq!(open["notes"].as_array().unwrap().len(), 1);
+    assert_eq!(open["notes"][0]["id"], "n2");
+    // Its clip trimmed past it, a note is gone, and says where it was.
+    let clip = |id: &str, d: f64| json!({"id":id,"kind":"solid","color":"#000000ff","start":0,"duration":d});
+    p.document(
+        "unused.png",
+        json!({"visual":[{"clips":[clip("a", 0.25)]}]}),
+    );
+    let gone = p.run(&["project", "notes", "show", "n2"]);
+    assert_eq!(gone["gone"], true);
+    assert!(
+        gone["summary"]
+            .as_str()
+            .unwrap()
+            .contains("gone, was at 0.5 s"),
+        "{gone}"
+    );
+    let reopened = p.run(&["project", "notes", "reopen", "n1", "still covered"]);
+    assert_eq!(reopened["status"], "ok");
+    assert_eq!(reopened["thread"][2]["by"], "user");
+    let refused = p.run(&[
+        "project", "notes", "add", "x", "--at", "1", "--region", "1,1",
+    ]);
+    assert_eq!(refused["status"], "error");
+    p.run(&["project", "notes", "delete", "n1"]);
+    assert!(!p.0.join("reviews/crops/n1.png").exists());
+    // Notes are not sources: the history holds only what the edits made.
+    let history = p.run(&["project", "history"]);
+    assert_eq!(history["snapshots"].as_array().unwrap().len(), 3);
+}

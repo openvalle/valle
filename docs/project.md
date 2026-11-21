@@ -14,6 +14,7 @@ promo/
   components/           Motion scenes
   media/                footage, images, sound and fonts
   renders/              what project render writes
+  reviews/              review notes and the pictures they were written on
   .valle/               snapshots and render records
 ```
 
@@ -69,6 +70,42 @@ images and fonts are only listed with their SHA-256, so a snapshot says whether 
 but does not keep them. `restore` puts a snapshot's sources back after saving what they
 replace as a new snapshot, so nothing is lost; files added since are kept, and media is never
 written.
+
+## Notes
+
+A note is what someone reviewing the edit asks to change: at a frame, or over a span with
+`--end`, and optionally about a part of the picture and the clips there. Notes are kept in
+`reviews/notes.json`, with the picture seen in `reviews/crops/`, apart from the timelines:
+writing one never changes the edit, and they are not part of any snapshot.
+
+```sh
+valle project notes                                   # every note, where it is now
+valle project notes list --open
+valle project notes show n3                           # with all that was said
+valle project notes add "the logo covers the caption" --at 8.4 --end 11 \
+  --region 0.62,0.08,0.3,0.18 --clip shot-2@1.4 --image seen.png
+valle project notes reply n3 "which logo?" --by ai
+valle project notes resolve n3 "moved the logo down left, clear of the captions"
+valle project notes reopen n3 "it still covers the second line"
+valle project notes delete n3
+```
+
+`--region` is `x,y,w,h`, each a fraction of the canvas from its top left. `--clip id@seconds`
+names a clip the note is about and how far into it; it can be given more than once. A note
+then moves with the first of its clips that is still there, and is listed as `gone` once
+every one of them is deleted or trimmed past that point; a note without clips stays where it
+was written. In JSON, each note has `now`, where it is in the timeline as it is now, and
+`picture`, its picture as a path in the project.
+
+Every message of a note, the note first, records the snapshot it was written against: when
+the sources changed since the last snapshot, one is saved first. `resolve` records the
+snapshot that resolved it as `resolvedIn`, so what changed in between is what was done about
+it. Replies are by `user` unless `--by` says, and resolutions by `ai`.
+
+To work through the open notes: list them, look at each picture and read each note, find its
+clips with `valle timeline query --clip` or `--at`, make the change, render the frames it is
+at to look, then resolve it saying what was done. Ask with `reply` where a note is unclear,
+and leave it open.
 
 ## Render
 

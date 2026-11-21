@@ -7,6 +7,7 @@
 use std::fs;
 
 use serde_json::{Map, Value, json};
+use valle_timeline::Document;
 
 use crate::history::now;
 use crate::{Error, Project, inside, pretty, write};
@@ -185,6 +186,29 @@ impl Note {
             }
         }
         Ok(())
+    }
+}
+
+impl Note {
+    /// Where the note is in `doc`, its timeline as it is now: moved with the first clip it is
+    /// about that is still there and still shows its moment, or as written where it is about no
+    /// clip; none where every clip it is about is gone or trimmed past it.
+    pub fn now(&self, doc: &Document) -> Option<(f64, Option<f64>)> {
+        if self.targets.is_empty() {
+            return Some((self.start, self.end));
+        }
+        let clips = || doc.tracks.iter().flat_map(|t| &t.clips);
+        self.targets.iter().find_map(|t| {
+            let clip = clips().find(|c| c.id == t.clip)?;
+            let Some(offset) = t.offset else {
+                return Some((self.start, self.end));
+            };
+            if offset > clip.duration.seconds() + 1e-6 {
+                return None;
+            }
+            let start = clip.start.seconds() + offset;
+            Some((start, self.end.map(|end| end - self.start + start)))
+        })
     }
 }
 
@@ -686,6 +710,42 @@ mod tests {
         // A number given before is never given again.
         assert_eq!(p.add_note(new("three")).unwrap().id, "n3");
         assert!(p.delete_note("n1").is_err());
+    }
+
+    #[test]
+    fn a_note_moves_with_its_clip_until_it_is_gone() {
+        let p = project("moves");
+        let doc = |second: f64, trim: f64| {
+            let timeline = json!({
+                "canvas": { "width": 640, "height": 360, "fps": 30 },
+                "tracks": { "visual": [{ "clips": [
+                    { "id": "a", "kind": "solid", "color": "#000000ff", "start": 0, "duration": 2 },
+                    { "id": "b", "kind": "solid", "color": "#ffffffff", "start": second, "duration": trim }
+                ] }] }
+            });
+            valle_timeline::Document::read_edit(&timeline).expect("a timeline")
+        };
+        let target = |clip: &str, offset: f64| Target {
+            clip: clip.into(),
+            offset: Some(offset),
+            run: None,
+            path: None,
+            site: None,
+        };
+        let note = p
+            .add_note(NewNote {
+                start: 3.0,
+                end: Some(3.5),
+                targets: vec![target("gone", 0.0), target("b", 1.0)],
+                ..new("cut here")
+            })
+            .unwrap();
+        assert_eq!(note.now(&doc(2.0, 2.0)), Some((3.0, Some(3.5))));
+        assert_eq!(note.now(&doc(4.0, 2.0)), Some((5.0, Some(5.5))));
+        // Trimmed past its moment, or gone, the note is nowhere.
+        assert_eq!(note.now(&doc(2.0, 0.5)), None);
+        let lone = p.add_note(new("all of it")).unwrap();
+        assert_eq!(lone.now(&doc(9.0, 1.0)), Some((1.5, None)));
     }
 
     #[test]

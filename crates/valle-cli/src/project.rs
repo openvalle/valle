@@ -5,12 +5,13 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
+use valle_project::notes::{NewNote, Note, Region, Target};
 use valle_project::{Project, digest, history::now};
 
 use valle_native::media::{self, Codec};
 
 use crate::args::Args;
-use crate::cli::{self, ProjectCommand, RenderOptions};
+use crate::cli::{self, NotesCommand, ProjectCommand, RenderOptions};
 use crate::motion::counted;
 use crate::{Failure, motion, timeline};
 
@@ -37,6 +38,7 @@ pub fn run(folder: Option<&Path>, command: ProjectCommand) -> Result<Value, Fail
         ProjectCommand::Save { message } => save(&project(folder)?, message.as_deref()),
         ProjectCommand::History => history(&project(folder)?),
         ProjectCommand::Restore { snapshot } => restore(&project(folder)?, snapshot),
+        ProjectCommand::Notes { command } => notes(&project(folder)?, command),
         ProjectCommand::Render {
             timeline,
             out,
@@ -393,6 +395,201 @@ fn history(p: &Project) -> Result<Value, Failure> {
     };
     let snapshots: Vec<Value> = history.iter().map(|s| s.summary()).collect();
     Ok(json!({ "status": "ok", "summary": summary, "snapshots": snapshots }))
+}
+
+fn notes(p: &Project, command: Option<NotesCommand>) -> Result<Value, Failure> {
+    let command = command.unwrap_or(NotesCommand::List {
+        open: false,
+        resolved: false,
+        timeline: None,
+    });
+    let one = |note: Note, done: &str| -> Result<Value, Failure> {
+        let mut out = placed(p, &note);
+        let summary = format!("{done} {}\n{}", note.id, line(&note, &out));
+        out["status"] = "ok".into();
+        out["summary"] = summary.into();
+        Ok(out)
+    };
+    match command {
+        NotesCommand::List {
+            open,
+            resolved,
+            timeline,
+        } => {
+            let timeline = match timeline {
+                Some(name) => Some(p.relative(&p.timeline(Some(&name)).map_err(failed)?)),
+                None => None,
+            };
+            let notes: Vec<Note> = (p.notes().map_err(failed)?.into_iter())
+                .filter(|n| !open || !n.resolved())
+                .filter(|n| !resolved || n.resolved())
+                .filter(|n| {
+                    timeline
+                        .as_ref()
+                        .is_none_or(|t| t.as_deref() == Some(&n.timeline))
+                })
+                .collect();
+            let listed: Vec<Value> = notes.iter().map(|n| placed(p, n)).collect();
+            let lines: Vec<String> = (notes.iter().zip(&listed))
+                .map(|(n, v)| line(n, v))
+                .collect();
+            let summary = match lines.is_empty() {
+                true => "no notes".to_string(),
+                false => lines.join("\n"),
+            };
+            Ok(json!({ "status": "ok", "summary": summary, "notes": listed }))
+        }
+        NotesCommand::Show { id } => {
+            let note = p.note(&id).map_err(failed)?;
+            let mut out = placed(p, &note);
+            let mut summary = line(&note, &out);
+            for m in &note.thread {
+                summary += &format!("\n  {} (snapshot {}): {}", m.by, m.snapshot, m.text);
+            }
+            out["status"] = "ok".into();
+            out["summary"] = summary.into();
+            Ok(out)
+        }
+        NotesCommand::Add {
+            text,
+            at,
+            end,
+            timeline,
+            region,
+            clips,
+            image,
+            by,
+        } => {
+            let region = region.as_deref().map(parse_region).transpose()?;
+            let targets = clips
+                .iter()
+                .map(|c| parse_target(c))
+                .collect::<Result<_, _>>()?;
+            let image = match image {
+                Some(path) => Some(
+                    std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?,
+                ),
+                None => None,
+            };
+            let note = p
+                .add_note(NewNote {
+                    timeline: timeline.unwrap_or_else(|| p.timeline.clone()),
+                    start: at,
+                    end,
+                    region,
+                    targets,
+                    image,
+                    by,
+                    text,
+                })
+                .map_err(failed)?;
+            one(note, "added")
+        }
+        NotesCommand::Reply { id, text, by } => {
+            one(p.reply(&id, &by, &text).map_err(failed)?, "replied to")
+        }
+        NotesCommand::Resolve { id, text, by } => one(
+            p.resolve(&id, &by, text.as_deref()).map_err(failed)?,
+            "resolved",
+        ),
+        NotesCommand::Reopen { id, text, by } => one(
+            p.reopen(&id, &by, text.as_deref()).map_err(failed)?,
+            "reopened",
+        ),
+        NotesCommand::Delete { id } => {
+            p.delete_note(&id).map_err(failed)?;
+            Ok(json!({ "status": "ok", "summary": format!("deleted {id}"), "id": id }))
+        }
+    }
+}
+
+/// A note as `reviews/notes.json` has it, with where it is now in its timeline as `now`, or
+/// `gone` where the clips it is about are, and its picture as a path in the project.
+fn placed(p: &Project, note: &Note) -> Value {
+    let mut out = note.to_json();
+    match p.document(&note.timeline) {
+        Ok(doc) => match note.now(&doc) {
+            Some((start, end)) => {
+                let mut now = json!({ "start": round(start) });
+                if let Some(end) = end {
+                    now["end"] = json!(round(end));
+                }
+                out["now"] = now;
+            }
+            None => out["gone"] = true.into(),
+        },
+        Err(e) => out["problem"] = e.into(),
+    }
+    if let Some(image) = &note.image {
+        out["picture"] = format!("reviews/{image}").into();
+    }
+    out
+}
+
+/// A note on a line: its id, state, where it is now, and what it says first.
+fn line(note: &Note, placed: &Value) -> String {
+    let at = |v: &Value| match (v["start"].as_f64(), v["end"].as_f64()) {
+        (Some(start), Some(end)) => format!("{start}–{end} s"),
+        (Some(start), None) => format!("{start} s"),
+        _ => String::new(),
+    };
+    let place = match (&placed["now"], &placed["problem"]) {
+        (now, _) if now.is_object() => at(now),
+        (_, Value::String(e)) => e.clone(),
+        _ => format!("gone, was at {}", at(&placed["at"])),
+    };
+    let state = match note.resolved_in {
+        Some(n) => format!("resolved in snapshot {n}"),
+        None => "open".to_string(),
+    };
+    let replies = match note.thread.len() - 1 {
+        0 => String::new(),
+        1 => " (1 reply)".to_string(),
+        n => format!(" ({n} replies)"),
+    };
+    let first = note.thread.first().map_or("", |m| m.text.as_str());
+    format!(
+        "{} {state}, {}, {place}: {first}{replies}",
+        note.id, note.timeline
+    )
+}
+
+fn round(seconds: f64) -> f64 {
+    (seconds * 1e6).round() / 1e6
+}
+
+/// `x,y,w,h`, fractions of the canvas.
+fn parse_region(text: &str) -> Result<Region, Failure> {
+    let bad = || {
+        failed(format!(
+            "--region {text}: x,y,w,h as fractions of the canvas"
+        ))
+    };
+    let v: Vec<f64> = (text.split(','))
+        .map(|n| n.trim().parse().map_err(|_| bad()))
+        .collect::<Result<_, _>>()?;
+    match v[..] {
+        [x, y, w, h] => Ok(Region { x, y, w, h }),
+        _ => Err(bad()),
+    }
+}
+
+/// `id`, or `id@seconds` into the clip.
+fn parse_target(text: &str) -> Result<Target, Failure> {
+    let (clip, offset) = match text.rsplit_once('@') {
+        Some((clip, s)) => {
+            let s = (s.parse::<f64>()).map_err(|_| failed(format!("--clip {text}: id@seconds")))?;
+            (clip, Some(s))
+        }
+        None => (text, None),
+    };
+    Ok(Target {
+        clip: clip.to_string(),
+        offset,
+        run: None,
+        path: None,
+        site: None,
+    })
 }
 
 fn restore(p: &Project, n: u64) -> Result<Value, Failure> {
