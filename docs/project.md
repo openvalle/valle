@@ -82,8 +82,7 @@ writing one never changes the edit, and they are not part of any snapshot.
 valle project notes                                   # every note, where it is now
 valle project notes list --open
 valle project notes show n3                           # with all that was said
-valle project notes add "the logo covers the caption" --at 8.4 --end 11 \
-  --region 0.62,0.08,0.3,0.18 --clip shot-2@1.4 --image seen.png
+valle project notes add "logo over the caption" --at 8.4 --region 0.62,0.08,0.3,0.18 --clip shot-2@1.4
 valle project notes reply n3 "which logo?" --by ai
 valle project notes resolve n3 "moved the logo down left, clear of the captions"
 valle project notes reopen n3 "it still covers the second line"
