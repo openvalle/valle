@@ -637,7 +637,7 @@ impl Service {
                 hashed: false,
             });
         let notes = (project.notes()?.into_iter())
-            .filter(|n| timeline.is_none_or(|t| n.timeline == t))
+            .filter(|n| timeline.is_none_or(|t| n.file == t))
             .map(|n| crate::project::placed(&project, &n))
             .collect::<Vec<_>>();
         Ok(json!({ "status": "ok", "notes": notes }))

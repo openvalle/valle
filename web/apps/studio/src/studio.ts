@@ -249,11 +249,15 @@ export class ValleStudio extends LitElement {
     await this.#loadNotes();
   }
 
-  /** The notes on the timeline open, where they are in it now. */
+  /** Whether what is open takes notes: a project's timeline, or a component of it. */
+  get #reviewed(): boolean {
+    return this.session?.kind === "project" && !!this.#entry;
+  }
+
+  /** The notes on the timeline or component open, where they are in it now. */
   async #loadNotes(): Promise<void> {
     const entry = this.#entry;
-    const notes =
-      this.session?.kind === "project" && this.timeline ? await service.notes(entry) : [];
+    const notes = this.#reviewed ? await service.notes(entry) : [];
     if (entry !== this.#entry) return;
     this.#notes = notes;
     if (!notes.some((n) => n.id === this.#note)) this.#note = undefined;
@@ -719,7 +723,6 @@ export class ValleStudio extends LitElement {
   /** Whether a note can be written here, or why not. */
   get #notable(): true | string {
     if (this.session?.kind !== "project") return "Notes are kept in a project";
-    if (!this.timeline) return "Notes are written on a timeline";
     return this.player ? true : "Nothing is playing";
   }
 
@@ -763,12 +766,10 @@ export class ValleStudio extends LitElement {
       const at = noting.span ?? { start: player.currentTime };
       const hit = this.#chosen();
       const region = noting.region ?? (hit && this.#fraction(hit.bounds));
-      const targets = hit && [{ clip: hit.clip!, path: hit.path, site: hit.site }];
+      const targets = hit && [{ clip: hit.clip, path: hit.path, site: hit.site }];
       const picture = await notePicture(await player.frame(at.start), region);
-      const note = await service.addNote(
-        { timeline: this.#entry, at, region, targets, text },
-        picture,
-      );
+      const on = this.timeline ? { timeline: this.#entry } : { component: this.#entry };
+      const note = await service.addNote({ ...on, at, region, targets, text }, picture);
       this.#endNote();
       this.#status = `Added note ${note.id}`;
       this.#note = note.id;
@@ -797,7 +798,8 @@ export class ValleStudio extends LitElement {
   }
 
   /** Picks what is drawn in the region drawn, or at `point` clicked: a click again there goes to
-   * the element beneath. Only elements in a clip are kept, as a note is about clips. */
+   * the element beneath. On a timeline only elements in a clip are kept, as a note there is
+   * about clips; on a component, those with a key path. */
   async #pick(point: [number, number]): Promise<void> {
     const noting = this.#noting;
     const player = this.player;
@@ -812,7 +814,7 @@ export class ValleStudio extends LitElement {
         ? player.pick(region.x * width, region.y * height, region.w * width, region.h * height)
         : player.pick(point[0] * width, point[1] * height));
       if (this.#noting !== noting) return;
-      noting.hits = hits.filter((h) => h.clip);
+      noting.hits = hits.filter((h) => (this.timeline ? h.clip : h.path));
       noting.chosen = noting.hits.length ? 0 : undefined;
       noting.point = region ? undefined : point;
     }
@@ -928,7 +930,7 @@ export class ValleStudio extends LitElement {
         ${
           hit
             ? html`<span class="note-picked">
-                <span>${hit.path ?? "the clip"} in ${hit.clip}</span>
+                <span>${hit.clip ? `${hit.path ?? "the clip"} in ${hit.clip}` : hit.path}</span>
                 ${hit.site ? html`<button type="button" class="link" @click=${() => this.#goTo(hit.site!)}>${hit.site}</button>` : nothing}
                 ${
                   noting.hits!.length > 1
@@ -1001,7 +1003,7 @@ export class ValleStudio extends LitElement {
     const stage = this.renderRoot.querySelector(".stage")?.getBoundingClientRect();
     const picture = this.#picture();
     const now = note?.now;
-    const before = note?.picture && this.#before;
+    const before = note?.picture ? this.#before : undefined;
     if (this.#noting || !note || !now || !stage || !picture || this.player?.playing) {
       return nothing;
     }
@@ -1077,7 +1079,8 @@ export class ValleStudio extends LitElement {
           : html`<div class="empty">
               ${icon("note")}<strong
                 >No ${this.#notesShown === "all" ? "" : `${this.#notesShown} `}notes</strong
-              >Pause and press N to note a frame, or Shift-drag over the ruler to note a span.
+              >Pause and press N to note a
+              frame${this.timeline ? ", or Shift-drag over the ruler to note a span" : ""}.
             </div>`
       }
       ${shown.map((n) => {
@@ -1106,7 +1109,7 @@ export class ValleStudio extends LitElement {
                           ${n.targets.map(
                             (t) =>
                               html`<li>
-                                ${t.path ? `${t.path} in ` : ""}${t.clip}${
+                                ${t.path && t.clip ? `${t.path} in ` : (t.path ?? "")}${t.clip ?? ""}${
                                   t.site
                                     ? html` <button
                                         class="link"
@@ -1912,9 +1915,7 @@ export class ValleStudio extends LitElement {
           [
             ["properties", "Properties"],
             ["code", "Code"],
-            ...(this.session?.kind === "project" && this.timeline
-              ? ([["notes", "Notes"]] as const)
-              : []),
+            ...(this.#reviewed ? ([["notes", "Notes"]] as const) : []),
           ] as const
         ).map(
           ([tab, name]) =>
@@ -1944,7 +1945,7 @@ export class ValleStudio extends LitElement {
             </div>
           </div>`,
       )}
-      ${this.#rightTab === "notes" && this.timeline ? this.#notesPanel() : this.#rightTab === "code" ? this.#source() : html`<div class="scroll">${this.#asset ? this.#media() : html`${this.#inspector()}${this.#props()}${this.#composition()}`}</div>`}
+      ${this.#rightTab === "notes" && this.#reviewed ? this.#notesPanel() : this.#rightTab === "code" ? this.#source() : html`<div class="scroll">${this.#asset ? this.#media() : html`${this.#inspector()}${this.#props()}${this.#composition()}`}</div>`}
     </aside>`;
   }
 

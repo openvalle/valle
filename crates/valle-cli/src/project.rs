@@ -417,6 +417,9 @@ fn notes(p: &Project, command: Option<NotesCommand>) -> Result<Value, Failure> {
             timeline,
         } => {
             let timeline = match timeline {
+                Some(name) if name.ends_with(".motion.tsx") => {
+                    Some(Some(p.reviewed(&name).map_err(failed)?))
+                }
                 Some(name) => Some(p.relative(&p.timeline(Some(&name)).map_err(failed)?)),
                 None => None,
             };
@@ -426,7 +429,7 @@ fn notes(p: &Project, command: Option<NotesCommand>) -> Result<Value, Failure> {
                 .filter(|n| {
                     timeline
                         .as_ref()
-                        .is_none_or(|t| t.as_deref() == Some(&n.timeline))
+                        .is_none_or(|t| t.as_deref() == Some(&n.file))
                 })
                 .collect();
             let listed: Vec<Value> = notes.iter().map(|n| placed(p, n)).collect();
@@ -446,12 +449,15 @@ fn notes(p: &Project, command: Option<NotesCommand>) -> Result<Value, Failure> {
             if !note.targets.is_empty() {
                 let about: Vec<String> = (note.targets.iter())
                     .map(|t| {
-                        let mut s = t.clip.clone();
+                        let mut s = t.clip.clone().unwrap_or_default();
                         if let Some(offset) = t.offset {
                             s += &format!("@{offset}");
                         }
                         if let Some(run) = t.run {
                             s += &format!(" run {run}");
+                        }
+                        if let Some(path) = &t.path {
+                            s = format!("{path} {s}").trim_end().to_string();
                         }
                         s
                     })
@@ -470,16 +476,25 @@ fn notes(p: &Project, command: Option<NotesCommand>) -> Result<Value, Failure> {
             at,
             end,
             timeline,
+            component,
             region,
             clips,
+            elements,
             image,
             by,
         } => {
             let region = region.as_deref().map(parse_region).transpose()?;
-            let targets = clips
+            let mut targets: Vec<Target> = clips
                 .iter()
                 .map(|c| parse_target(c))
                 .collect::<Result<_, _>>()?;
+            targets.extend(elements.into_iter().map(|path| Target {
+                clip: None,
+                offset: None,
+                run: None,
+                path: Some(path),
+                site: None,
+            }));
             let image = match image {
                 Some(path) => Some(
                     std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?,
@@ -488,7 +503,7 @@ fn notes(p: &Project, command: Option<NotesCommand>) -> Result<Value, Failure> {
             };
             let note = p
                 .add_note(NewNote {
-                    timeline: timeline.unwrap_or_else(|| p.timeline.clone()),
+                    file: (component.or(timeline)).unwrap_or_else(|| p.timeline.clone()),
                     start: at,
                     end,
                     region,
@@ -519,10 +534,26 @@ fn notes(p: &Project, command: Option<NotesCommand>) -> Result<Value, Failure> {
 }
 
 /// A note as `reviews/notes.json` has it, with where it is now in its timeline as `now`, or
-/// `gone` where the clips it is about are, and its picture as a path in the project.
+/// `gone` where the clips it is about are, and its picture as a path in the project. A note on
+/// a component is where it was written, while the component is there.
 pub fn placed(p: &Project, note: &Note) -> Value {
     let mut out = note.to_json();
-    match p.document(&note.timeline) {
+    if note.on_component() {
+        match p.root.join(&note.file).is_file() {
+            true => out["now"] = out["at"].clone(),
+            false => out["gone"] = true.into(),
+        }
+    } else {
+        placed_on_timeline(p, note, &mut out);
+    }
+    if let Some(image) = &note.image {
+        out["picture"] = format!("reviews/{image}").into();
+    }
+    out
+}
+
+fn placed_on_timeline(p: &Project, note: &Note, out: &mut Value) {
+    match p.document(&note.file) {
         Ok(doc) => match note.now(&doc) {
             Some((start, end)) => {
                 let mut now = json!({ "start": round(start) });
@@ -535,14 +566,10 @@ pub fn placed(p: &Project, note: &Note) -> Value {
         },
         Err(e) => out["problem"] = e.into(),
     }
-    if let Some(image) = &note.image {
-        out["picture"] = format!("reviews/{image}").into();
-    }
-    out
 }
 
-/// A note Studio adds: JSON of `timeline`, `at` (`start` and `end`), `region`, `targets` and
-/// `text`, by `user` unless `by` says, with the picture seen as `image`, if any.
+/// A note Studio adds: JSON of `timeline` or `component`, `at` (`start` and `end`), `region`,
+/// `targets` and `text`, by `user` unless `by` says, with the picture seen as `image`, if any.
 pub fn new_note(given: &Value, image: &[u8]) -> Result<NewNote, String> {
     let fraction = |k: &str| {
         given["region"][k]
@@ -562,7 +589,7 @@ pub fn new_note(given: &Value, image: &[u8]) -> Result<NewNote, String> {
     let targets = (given["targets"].as_array().into_iter().flatten())
         .map(|t| {
             Ok(Target {
-                clip: text(&t["clip"]).ok_or("targets: each names its clip")?,
+                clip: text(&t["clip"]),
                 offset: t["offset"].as_f64(),
                 run: t["run"].as_u64(),
                 path: text(&t["path"]),
@@ -571,7 +598,8 @@ pub fn new_note(given: &Value, image: &[u8]) -> Result<NewNote, String> {
         })
         .collect::<Result<_, String>>()?;
     Ok(NewNote {
-        timeline: text(&given["timeline"]).ok_or("timeline: the note's timeline")?,
+        file: (text(&given["timeline"]).or_else(|| text(&given["component"])))
+            .ok_or("timeline or component: what the note is on")?,
         start: given["at"]["start"].as_f64().ok_or("at.start: seconds")?,
         end: given["at"]["end"].as_f64(),
         region,
@@ -606,7 +634,7 @@ fn line(note: &Note, placed: &Value) -> String {
     let first = note.thread.first().map_or("", |m| m.text.as_str());
     format!(
         "{} {state}, {}, {place}: {first}{replies}",
-        note.id, note.timeline
+        note.id, note.file
     )
 }
 
@@ -640,7 +668,7 @@ fn parse_target(text: &str) -> Result<Target, Failure> {
         None => (text, None),
     };
     Ok(Target {
-        clip: clip.to_string(),
+        clip: Some(clip.to_string()),
         offset,
         run: None,
         path: None,

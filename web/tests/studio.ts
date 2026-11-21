@@ -1164,6 +1164,33 @@ export default function Scene() {
     await page.getByRole("button", { name: "Compare", exact: true }).click();
     expect(!(await before.count()), "comparing ends");
 
+    // A component reviewed alone takes notes too, on its elements and no clip.
+    await page.getByRole("tab", { name: "Files", exact: true }).click();
+    await openFile("card.motion.tsx", 320);
+    await evaluate("studio.player.seekFrame(15);");
+    await page.getByRole("button", { name: "Add a note", exact: true }).click();
+    const alone = (await layer.boundingBox())!;
+    await page.mouse.click(alone.x + alone.width * 0.2, alone.y + alone.height * 0.3);
+    await picked.getByText("card/title", { exact: true }).waitFor();
+    await page.getByRole("textbox", { name: "Note", exact: true }).fill("bolder title");
+    await page.getByRole("button", { name: "Add note", exact: true }).click();
+    const onComponent = await until("the component's note", async () => {
+      const file = await Bun.file(join(project, "reviews/notes.json")).json();
+      return file.notes[3];
+    });
+    expect(
+      onComponent.component === "card.motion.tsx" &&
+        !onComponent.timeline &&
+        JSON.stringify(onComponent.targets) ===
+          JSON.stringify([{ path: "card/title", site: "card.motion.tsx:6:9" }]),
+      `a component takes notes on its elements: ${JSON.stringify(onComponent)}`,
+    );
+    await page.getByRole("tab", { name: "Notes", exact: true }).click();
+    await until("the component's notes listed", () =>
+      evaluate('return studio.shadowRoot.querySelectorAll(".notes .note").length === 1;'),
+    );
+    expect(true, "the component's notes are listed apart from the timeline's");
+
     // Standalone Studio does not have the renders/ directory created with a project.
     for (const kind of ["motion", "timeline"] as const) {
       const folder = join(dir, kind);

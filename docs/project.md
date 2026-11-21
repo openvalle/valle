@@ -83,6 +83,7 @@ valle project notes                                   # every note, where it is 
 valle project notes list --open
 valle project notes show n3                           # with all that was said
 valle project notes add "logo over the caption" --at 8.4 --region 0.62,0.08,0.3,0.18 --clip shot-2@1.4
+valle project notes add "bolder title" --component intro.motion.tsx --at 1.2 --element card/title
 valle project notes reply n3 "which logo?" --by ai
 valle project notes resolve n3 "moved the logo down left, clear of the captions"
 valle project notes reopen n3 "it still covers the second line"
@@ -107,6 +108,12 @@ Motion component and the `site` of its JSX, `file:line:column`, which opens in t
 Notes are marked on the ruler and listed under Notes, where a note is answered, resolved or
 reopened. Compare lays the picture the note was written on over its frame as it is now, with
 a slider to wipe between them.
+
+A component can be reviewed alone: a note with `--component`, a `*.motion.tsx` of the
+project, is on it in place of a timeline, at seconds of the component, and about its
+elements by key path with `--element`, of no clip. In JSON it has `component` in place of
+`timeline`, and stays where it was written while the component is there. Studio writes these
+when a project's Motion file is open, and `list --timeline` takes a component's path too.
 
 Every message of a note, the note first, records the snapshot it was written against: when
 the sources changed since the last snapshot, one is saved first. `resolve` records the

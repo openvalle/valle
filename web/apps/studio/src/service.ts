@@ -67,14 +67,16 @@ export type Clip = {
 /** A part of the picture, each side a fraction of the canvas, from its top left. */
 export type Region = { x: number; y: number; w: number; h: number };
 
-/** What a note is about: a clip, and where in it. */
-export type Target = { clip: string; offset?: number; run?: number; path?: string; site?: string };
+/** What a note is about: a clip, and where in it; on a component, an element of it. */
+export type Target = { clip?: string; offset?: number; run?: number; path?: string; site?: string };
 
 /** A review note, as `valle project notes --json` lists it: `now` is where it is in its
- * timeline as it is now, none where its clips are gone. */
+ * timeline as it is now, none where its clips are gone. A note on a component reviewed alone
+ * names it as `component`, and stays where it was written. */
 export type Note = {
   id: string;
-  timeline: string;
+  timeline?: string;
+  component?: string;
   snapshot: number;
   at: { start: number; end?: number };
   region?: Region;
@@ -182,13 +184,20 @@ export const service = {
   /** `valle project <args> --json` on the project open. */
   project: (args: string[]) => post<Record<string, any>>("/api/project", { args }),
 
-  /** The project's notes on `timeline`. */
+  /** The project's notes on `timeline`, or on a component. */
   notes: async (timeline: string) =>
     (await json<{ notes: Note[] }>(`/api/notes?timeline=${encodeURIComponent(timeline)}`)).notes,
 
-  /** Adds a note, with the picture seen. */
+  /** Adds a note on a timeline or a component, with the picture seen. */
   addNote: (
-    note: { timeline: string; at: Note["at"]; region?: Region; targets?: Target[]; text: string },
+    note: {
+      timeline?: string;
+      component?: string;
+      at: Note["at"];
+      region?: Region;
+      targets?: Target[];
+      text: string;
+    },
     picture?: Blob,
   ) =>
     json<Note>(`/api/notes?note=${encodeURIComponent(JSON.stringify(note))}`, {

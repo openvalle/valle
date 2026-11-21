@@ -250,7 +250,7 @@ pub enum NotesCommand {
         /// Only those resolved
         #[arg(long)]
         resolved: bool,
-        /// Only those on this timeline
+        /// Only those on this timeline, or this component
         #[arg(long)]
         timeline: Option<String>,
     },
@@ -260,22 +260,32 @@ pub enum NotesCommand {
     Add {
         /// What to change
         text: String,
-        /// Seconds of the timeline
+        /// Seconds of the timeline, or the component
         #[arg(long)]
         at: f64,
         /// Where the span ends, in seconds
         #[arg(long)]
         end: Option<f64>,
         /// The timeline; the entry one unless given
-        #[arg(long)]
+        #[arg(long, conflicts_with = "component")]
         timeline: Option<String>,
+        /// A component reviewed alone, a *.motion.tsx of the project, in place of a timeline
+        #[arg(long)]
+        component: Option<String>,
         /// The part of the picture, as fractions of the canvas: x,y,w,h
         #[arg(long, value_name = "X,Y,W,H")]
         region: Option<String>,
         /// A clip it is about, by id, with seconds into it as id@seconds; without any, the clips
         /// shown at --at are found
-        #[arg(long = "clip", value_name = "ID[@SECONDS]")]
+        #[arg(
+            long = "clip",
+            value_name = "ID[@SECONDS]",
+            conflicts_with = "component"
+        )]
         clips: Vec<String>,
+        /// An element of the component it is about, by its key path; can be given more than once
+        #[arg(long = "element", value_name = "PATH", requires = "component")]
+        elements: Vec<String>,
         /// The picture seen: a PNG, JPEG or WebP file
         #[arg(long)]
         image: Option<PathBuf>,

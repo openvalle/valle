@@ -16,15 +16,15 @@ use crate::{Error, Project, inside, pretty, write};
 /// Where the notes are, in the project.
 pub const FILE: &str = "reviews/notes.json";
 
-/// A note on a timeline.
+/// A note on a timeline, or on a component reviewed alone.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Note {
     pub id: String,
-    /// The timeline it is on, a path in the project.
-    pub timeline: String,
+    /// The timeline or the component, a `*.motion.tsx`, it is on: a path in the project.
+    pub file: String,
     /// The snapshot it was written against.
     pub snapshot: u64,
-    /// Seconds of the timeline: a frame, or a span to `end`.
+    /// Seconds of the timeline or component: a frame, or a span to `end`.
     pub start: f64,
     pub end: Option<f64>,
     /// The part of the picture it is about, in fractions of the canvas; all of it when none.
@@ -49,10 +49,11 @@ pub struct Region {
 }
 
 /// A clip a note is about, and where in it: seconds from its start, a caption's run, or an
-/// element of a scene by its key path and where its JSX is written.
+/// element of a scene by its key path and where its JSX is written. On a component, it is an
+/// element of it, and of no clip.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Target {
-    pub clip: String,
+    pub clip: Option<String>,
     pub offset: Option<f64>,
     pub run: Option<u64>,
     pub path: Option<String>,
@@ -72,12 +73,13 @@ pub struct Message {
 
 /// A note to add: its first message, and the picture seen as PNG, JPEG or WebP.
 pub struct NewNote {
-    /// The timeline, as `Project::timeline` takes its name.
-    pub timeline: String,
+    /// The timeline, as `Project::timeline` takes its name, or a component's path.
+    pub file: String,
     pub start: f64,
     pub end: Option<f64>,
     pub region: Option<Region>,
-    /// What it is about; when none are given, the clips shown at `start`, as `targets` finds.
+    /// What it is about; on a timeline, the clips shown at `start` after those given, as
+    /// `targets` finds them.
     pub targets: Vec<Target>,
     pub image: Option<Vec<u8>>,
     pub by: String,
@@ -89,18 +91,25 @@ impl Note {
         self.resolved_in.is_some()
     }
 
+    /// Whether it is on a component reviewed alone, not a timeline.
+    pub fn on_component(&self) -> bool {
+        self.file.ends_with(".motion.tsx")
+    }
+
     /// The note as `reviews/notes.json` has it.
     pub fn to_json(&self) -> Value {
         let mut at = json!({ "start": self.start });
         if let Some(end) = self.end {
             at["end"] = json!(end);
         }
-        let mut note = json!({
-            "id": self.id,
-            "timeline": self.timeline,
-            "snapshot": self.snapshot,
-            "at": at,
-        });
+        let mut note = json!({ "id": self.id });
+        note[if self.on_component() {
+            "component"
+        } else {
+            "timeline"
+        }] = json!(self.file);
+        note["snapshot"] = json!(self.snapshot);
+        note["at"] = at;
         if let Some(r) = self.region {
             note["region"] = json!({ "x": r.x, "y": r.y, "w": r.w, "h": r.h });
         }
@@ -125,8 +134,12 @@ impl Note {
     /// What a note may not be, wherever it came from.
     fn check(&self, at: &str) -> Result<(), Error> {
         let bad = |field: &str, what: &str| Err(format!("{at}.{field}: {what}"));
-        if !self.timeline.ends_with(".timeline.json") || inside(&self.timeline).is_none() {
-            return bad("timeline", "a timeline's path in the project");
+        let component = self.on_component();
+        if !(component || self.file.ends_with(".timeline.json")) || inside(&self.file).is_none() {
+            return bad(
+                if component { "component" } else { "timeline" },
+                "a timeline's path in the project, or a *.motion.tsx component's",
+            );
         }
         if self.snapshot == 0 || self.resolved_in == Some(0) {
             return bad("snapshot", "snapshots are numbered from 1");
@@ -153,8 +166,16 @@ impl Note {
             }
         }
         for (i, t) in self.targets.iter().enumerate() {
-            if t.clip.is_empty() {
-                return bad(&format!("targets[{i}].clip"), "a clip's id");
+            match (&t.clip, component) {
+                (Some(clip), false) if !clip.is_empty() => {}
+                (None, true) if t.offset.is_none() && t.run.is_none() => {}
+                (_, false) => return bad(&format!("targets[{i}].clip"), "a clip's id"),
+                (_, true) => {
+                    return bad(
+                        &format!("targets[{i}]"),
+                        "on a component, an element: its path and site, of no clip",
+                    );
+                }
             }
             if let Some(offset) = t.offset
                 && !(offset.is_finite() && offset >= 0.0)
@@ -201,7 +222,7 @@ impl Note {
         }
         let clips = || doc.tracks.iter().flat_map(|t| &t.clips);
         self.targets.iter().find_map(|t| {
-            let clip = clips().find(|c| c.id == t.clip)?;
+            let clip = clips().find(|c| Some(&c.id) == t.clip.as_ref())?;
             let Some(offset) = t.offset else {
                 return Some((self.start, self.end));
             };
@@ -244,7 +265,7 @@ pub fn targets(doc: &Document, seconds: f64, heard: bool) -> Vec<Target> {
                 _ => None,
             };
             Target {
-                clip: c.id.clone(),
+                clip: Some(c.id.clone()),
                 offset: Some((into.seconds() * 1e6).round() / 1e6),
                 run,
                 path: None,
@@ -275,7 +296,10 @@ fn with_shown(given: Vec<Target>, shown: Vec<Target>) -> Vec<Target> {
 
 impl Target {
     pub fn to_json(&self) -> Value {
-        let mut t = json!({ "clip": self.clip });
+        let mut t = json!({});
+        if let Some(clip) = &self.clip {
+            t["clip"] = json!(clip);
+        }
         if let Some(offset) = self.offset {
             t["offset"] = json!(offset);
         }
@@ -313,21 +337,24 @@ impl Project {
     /// Adds a note against the sources as they are, saved as a snapshot first if they changed.
     pub fn add_note(&self, new: NewNote) -> Result<Note, Error> {
         // A path in the project first: the current folder may be anywhere.
-        let timeline = match inside(&new.timeline) {
+        let on = match inside(&new.file) {
             Some(rel) if rel.ends_with(".timeline.json") && self.root.join(&rel).is_file() => rel,
+            _ if new.file.ends_with(".motion.tsx") => self.reviewed(&new.file)?,
             _ => {
-                let path = self.timeline(Some(&new.timeline))?;
+                let path = self.timeline(Some(&new.file))?;
                 (self.relative(&path))
-                    .ok_or_else(|| format!("{}: not a timeline of the project", new.timeline))?
+                    .ok_or_else(|| format!("{}: not a timeline of the project", new.file))?
             }
         };
-        // A timeline that does not read yet is still noted on, where it was.
-        let shown = (self.document(&timeline).ok())
-            .map(|doc| targets(&doc, new.start, new.region.is_none()))
-            .unwrap_or_default();
-        let found = match new.targets.is_empty() {
-            true => shown,
-            false => with_shown(new.targets, shown),
+        let found = match on.ends_with(".motion.tsx") {
+            true => new.targets,
+            false => {
+                // A timeline that does not read yet is still noted on, where it was.
+                let shown = (self.document(&on).ok())
+                    .map(|doc| targets(&doc, new.start, new.region.is_none()))
+                    .unwrap_or_default();
+                with_shown(new.targets, shown)
+            }
         };
         let kind = match &new.image {
             Some(bytes) => Some(picture(bytes)?),
@@ -340,7 +367,7 @@ impl Project {
         let note = Note {
             image: kind.map(|ext| format!("crops/{id}.{ext}")),
             id,
-            timeline,
+            file: on,
             snapshot,
             start: new.start,
             end: new.end,
@@ -520,9 +547,10 @@ fn parse(root: &Value) -> Result<Notes, Error> {
 }
 
 fn parse_note(v: &Value, at: &str) -> Result<Note, Error> {
-    const FIELDS: [&str; 10] = [
+    const FIELDS: [&str; 11] = [
         "id",
         "timeline",
+        "component",
         "snapshot",
         "at",
         "region",
@@ -604,7 +632,15 @@ fn parse_note(v: &Value, at: &str) -> Result<Note, Error> {
         .collect::<Result<_, Error>>()?;
     Ok(Note {
         id: string(required(o, "id", at)?, &field("id"))?,
-        timeline: string(required(o, "timeline", at)?, &field("timeline"))?,
+        file: match (o.get("timeline"), o.get("component")) {
+            (Some(v), None) => string(v, &field("timeline"))?,
+            (None, Some(v)) => string(v, &field("component"))?,
+            _ => {
+                return Err(format!(
+                    "{at}: on a timeline or a component, one of the two"
+                ));
+            }
+        },
         snapshot: count(required(o, "snapshot", at)?, &field("snapshot"))?,
         start: number(required(times, "start", &field("at"))?, &field("at.start"))?,
         end: (times.get("end"))
@@ -625,7 +661,7 @@ fn parse_target(v: &Value, at: &str) -> Result<Target, Error> {
     let field = |k: &str| format!("{at}.{k}");
     let text = |k: &str| o.get(k).map(|v| string(v, &field(k))).transpose();
     Ok(Target {
-        clip: string(required(o, "clip", at)?, &field("clip"))?,
+        clip: text("clip")?,
         offset: (o.get("offset"))
             .map(|v| number(v, &field("offset")))
             .transpose()?,
@@ -679,7 +715,7 @@ mod tests {
 
     fn new(text: &str) -> NewNote {
         NewNote {
-            timeline: "main.timeline.json".into(),
+            file: "main.timeline.json".into(),
             start: 1.5,
             end: None,
             region: None,
@@ -703,7 +739,7 @@ mod tests {
                     h: 0.25,
                 }),
                 targets: vec![Target {
-                    clip: "intro".into(),
+                    clip: Some("intro".into()),
                     offset: Some(0.5),
                     run: None,
                     path: Some("card/title".into()),
@@ -795,7 +831,7 @@ mod tests {
             valle_timeline::Document::read_edit(&timeline).expect("a timeline")
         };
         let target = |clip: &str, offset: f64| Target {
-            clip: clip.into(),
+            clip: Some(clip.into()),
             offset: Some(offset),
             run: None,
             path: None,
@@ -835,7 +871,7 @@ mod tests {
         let doc = valle_timeline::Document::read_edit(&timeline).expect("a timeline");
         let found = |seconds: f64, heard: bool| {
             (super::targets(&doc, seconds, heard).into_iter())
-                .map(|t| (t.clip, t.offset.unwrap(), t.run))
+                .map(|t| (t.clip.unwrap(), t.offset.unwrap(), t.run))
                 .collect::<Vec<_>>()
         };
         assert_eq!(
@@ -851,12 +887,16 @@ mod tests {
         // Added without targets, a note is about the clips found there.
         fs::write(p.root.join(&p.timeline), pretty(&timeline)).unwrap();
         let note = p.add_note(new("too dark")).unwrap();
-        let clips: Vec<_> = note.targets.iter().map(|t| t.clip.as_str()).collect();
+        let clips: Vec<_> = note
+            .targets
+            .iter()
+            .filter_map(|t| t.clip.as_deref())
+            .collect();
         assert_eq!(clips, ["line", "over", "back", "music"]);
         assert_eq!(note.targets[0].run, Some(0));
         // What was picked comes first, where it is shown, and the rest after.
         let picked = Target {
-            clip: "over".into(),
+            clip: Some("over".into()),
             offset: None,
             run: None,
             path: Some("card/title".into()),
@@ -868,13 +908,68 @@ mod tests {
                 ..new("the title")
             })
             .unwrap();
-        let clips: Vec<_> = note.targets.iter().map(|t| t.clip.as_str()).collect();
+        let clips: Vec<_> = note
+            .targets
+            .iter()
+            .filter_map(|t| t.clip.as_deref())
+            .collect();
         assert_eq!(clips, ["over", "line", "back", "music"]);
         assert_eq!(
             note.targets[0].offset,
             note.targets[2].offset.map(|o| o - 1.0)
         );
         assert_eq!(note.targets[0].path.as_deref(), Some("card/title"));
+    }
+
+    #[test]
+    fn a_note_on_a_component_is_on_its_elements_and_no_clip() {
+        let p = project("component");
+        fs::write(
+            p.root.join("title.motion.tsx"),
+            "export default () => <View />;",
+        )
+        .unwrap();
+        let element = Target {
+            clip: None,
+            offset: None,
+            run: None,
+            path: Some("card/title".into()),
+            site: Some("title.motion.tsx:6:9".into()),
+        };
+        let note = p
+            .add_note(NewNote {
+                file: "title.motion.tsx".into(),
+                targets: vec![element.clone()],
+                ..new("smaller")
+            })
+            .unwrap();
+        assert_eq!(note.file, "title.motion.tsx");
+        assert_eq!(note.targets, std::slice::from_ref(&element));
+        let saved = &fs::read_to_string(p.root.join(super::FILE)).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(saved).unwrap();
+        assert_eq!(saved["notes"][0]["component"], "title.motion.tsx");
+        assert!(saved["notes"][0].get("timeline").is_none());
+        assert_eq!(p.notes().unwrap(), [note]);
+        // A clip is a timeline's; a component that is not there is no component.
+        let refused = |n: NewNote| p.add_note(n).unwrap_err();
+        assert!(
+            refused(NewNote {
+                file: "title.motion.tsx".into(),
+                targets: vec![Target {
+                    clip: Some("a".into()),
+                    ..element.clone()
+                }],
+                ..new("x")
+            })
+            .contains("of no clip")
+        );
+        assert!(
+            refused(NewNote {
+                file: "gone.motion.tsx".into(),
+                ..new("x")
+            })
+            .contains("no component")
+        );
     }
 
     #[test]
@@ -918,7 +1013,7 @@ mod tests {
         );
         assert!(
             refused(NewNote {
-                timeline: "nope".into(),
+                file: "nope".into(),
                 ..new("x")
             })
             .contains("no timeline")

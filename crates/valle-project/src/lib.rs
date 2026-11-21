@@ -168,6 +168,16 @@ impl Project {
         })
     }
 
+    /// The component reviewed alone that `name` names, a `*.motion.tsx` in the project, as a
+    /// path in it: `name` from the project's folder, or from the current one.
+    pub fn reviewed(&self, name: &str) -> Result<String, Error> {
+        [self.root.join(name), absolute(Path::new(name))]
+            .into_iter()
+            .filter(|p| p.is_file() && p.to_string_lossy().ends_with(".motion.tsx"))
+            .find_map(|p| self.relative(&p))
+            .ok_or_else(|| format!("no component {name}: a *.motion.tsx of the project"))
+    }
+
     /// `path` as a path in the project, `/`-separated, if it is in it.
     pub fn relative(&self, path: &Path) -> Option<String> {
         let rest = absolute(path).strip_prefix(&self.root).ok()?.to_path_buf();

@@ -317,3 +317,62 @@ fn notes_follow_their_clips_and_record_the_snapshots_of_each_message() {
     let history = p.run(&["project", "history"]);
     assert_eq!(history["snapshots"].as_array().unwrap().len(), 3);
 }
+
+#[test]
+fn a_component_reviewed_alone_takes_notes_on_its_elements() {
+    let p = Project::new("component-notes");
+    std::fs::write(
+        p.0.join("title.motion.tsx"),
+        "export default () => <View />;",
+    )
+    .unwrap();
+    let added = p.run(&[
+        "project",
+        "notes",
+        "add",
+        "the title is too small",
+        "--component",
+        "title.motion.tsx",
+        "--at",
+        "1.5",
+        "--element",
+        "card/title",
+    ]);
+    assert_eq!(added["component"], "title.motion.tsx", "{added}");
+    assert_eq!(added["targets"], json!([{"path":"card/title"}]));
+    assert_eq!(added["now"], json!({"start":1.5}));
+    p.run(&["project", "notes", "add", "on the edit", "--at", "0"]);
+    let listed = p.run(&["project", "notes", "list", "--timeline", "title.motion.tsx"]);
+    let ids: Vec<_> = listed["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| &n["id"])
+        .collect();
+    assert_eq!(ids, ["n1"], "{listed}");
+    let shown = p.run(&["project", "notes", "show", "n1"]);
+    assert!(
+        shown["summary"]
+            .as_str()
+            .unwrap()
+            .contains("title.motion.tsx")
+            && shown["summary"]
+                .as_str()
+                .unwrap()
+                .contains("about card/title"),
+        "{shown}"
+    );
+    std::fs::remove_file(p.0.join("title.motion.tsx")).unwrap();
+    assert_eq!(p.run(&["project", "notes", "show", "n1"])["gone"], true);
+    let refused = p.run(&[
+        "project",
+        "notes",
+        "add",
+        "x",
+        "--at",
+        "0",
+        "--component",
+        "no.motion.tsx",
+    ]);
+    assert_eq!(refused["status"], "error");
+}
