@@ -36,6 +36,7 @@ const paths = {
   square: "M5 5h14v14H5Z",
   spark: "m12 3 2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2Z",
   plus: "M12 5v14M5 12h14",
+  note: "M4 4h16v12H9l-5 4Z",
   magnet: "M5 4h4v8a3 3 0 0 0 6 0V4h4v8a7 7 0 0 1-14 0Zm0 4h4m6 0h4",
 } as const;
 

@@ -505,7 +505,7 @@ fn notes(p: &Project, command: Option<NotesCommand>) -> Result<Value, Failure> {
 
 /// A note as `reviews/notes.json` has it, with where it is now in its timeline as `now`, or
 /// `gone` where the clips it is about are, and its picture as a path in the project.
-fn placed(p: &Project, note: &Note) -> Value {
+pub fn placed(p: &Project, note: &Note) -> Value {
     let mut out = note.to_json();
     match p.document(&note.timeline) {
         Ok(doc) => match note.now(&doc) {
@@ -524,6 +524,47 @@ fn placed(p: &Project, note: &Note) -> Value {
         out["picture"] = format!("reviews/{image}").into();
     }
     out
+}
+
+/// A note Studio adds: JSON of `timeline`, `at` (`start` and `end`), `region`, `targets` and
+/// `text`, by `user` unless `by` says, with the picture seen as `image`, if any.
+pub fn new_note(given: &Value, image: &[u8]) -> Result<NewNote, String> {
+    let fraction = |k: &str| {
+        given["region"][k]
+            .as_f64()
+            .ok_or(format!("region.{k}: a fraction"))
+    };
+    let region = match given.get("region").filter(|r| !r.is_null()) {
+        Some(_) => Some(Region {
+            x: fraction("x")?,
+            y: fraction("y")?,
+            w: fraction("w")?,
+            h: fraction("h")?,
+        }),
+        None => None,
+    };
+    let text = |v: &Value| v.as_str().map(str::to_string);
+    let targets = (given["targets"].as_array().into_iter().flatten())
+        .map(|t| {
+            Ok(Target {
+                clip: text(&t["clip"]).ok_or("targets: each names its clip")?,
+                offset: t["offset"].as_f64(),
+                run: t["run"].as_u64(),
+                path: text(&t["path"]),
+                site: text(&t["site"]),
+            })
+        })
+        .collect::<Result<_, String>>()?;
+    Ok(NewNote {
+        timeline: text(&given["timeline"]).ok_or("timeline: the note's timeline")?,
+        start: given["at"]["start"].as_f64().ok_or("at.start: seconds")?,
+        end: given["at"]["end"].as_f64(),
+        region,
+        targets,
+        image: (!image.is_empty()).then(|| image.to_vec()),
+        by: text(&given["by"]).unwrap_or_else(|| "user".into()),
+        text: text(&given["text"]).ok_or("text: what to change")?,
+    })
 }
 
 /// A note on a line: its id, state, where it is now, and what it says first.

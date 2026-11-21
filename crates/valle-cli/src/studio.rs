@@ -310,6 +310,9 @@ impl Service {
             ("POST", "/api/save-file") => self.choose_output(&request.body),
             ("POST", "/api/choose-folder") => self.panel(&["--studio-pick-folder"]),
             ("POST", "/api/edit") => edit(&request.body),
+            ("GET", "/api/notes") => self.notes(request.query("timeline")),
+            ("POST", "/api/notes") => self.add_note(request),
+            ("POST", "/api/note") => self.change_note(&request.body),
             ("GET", "/api/list") => self.list(),
             ("GET", "/api/url") => return url(request.query("u")),
             ("GET", "/api/linked") => return self.linked(request.query("file")),
@@ -615,6 +618,73 @@ impl Service {
         let done = (command.stderr(Stdio::null()).output()).map_err(|e| e.to_string())?;
         let text = String::from_utf8_lossy(&done.stdout);
         serde_json::from_str(text.trim()).map_err(|_| format!("valle project: {text}"))
+    }
+
+    /// The project's notes, of `timeline` if given, each with where it is now, as
+    /// `valle project notes --json` lists them.
+    fn notes(&self, timeline: Option<&str>) -> Result<Value, String> {
+        let project = self.project()?;
+        // Said as changed from now on, when another writes them, as the files read are.
+        let full = project.root.join(valle_project::notes::FILE);
+        let meta = std::fs::metadata(&full).ok();
+        (self.watched.lock().unwrap_or_else(|e| e.into_inner()))
+            .entry(full)
+            .or_insert_with(|| Seen {
+                path: valle_project::notes::FILE.to_string(),
+                len: meta.as_ref().map_or(0, |m| m.len()),
+                modified: meta.and_then(|m| m.modified().ok()),
+                sha256: None,
+                hashed: false,
+            });
+        let notes = (project.notes()?.into_iter())
+            .filter(|n| timeline.is_none_or(|t| n.timeline == t))
+            .map(|n| crate::project::placed(&project, &n))
+            .collect::<Vec<_>>();
+        Ok(json!({ "status": "ok", "notes": notes }))
+    }
+
+    /// A new note: `?note=` JSON of `timeline`, `at`, `region`, `targets` and `text`, with the
+    /// picture seen as the body, if any.
+    fn add_note(&self, request: &Request) -> Result<Value, String> {
+        let project = self.project()?;
+        let given: Value = serde_json::from_str(request.query("note").ok_or("?note=")?)
+            .map_err(|e| e.to_string())?;
+        let new = crate::project::new_note(&given, &request.body)?;
+        let note = project.add_note(new)?;
+        let mut out = crate::project::placed(&project, &note);
+        out["status"] = "ok".into();
+        Ok(out)
+    }
+
+    /// `{ id, do, text?, by? }`: a note replied to, resolved, reopened or deleted.
+    fn change_note(&self, body: &[u8]) -> Result<Value, String> {
+        let project = self.project()?;
+        let body: Value = serde_json::from_slice(body).map_err(|e| e.to_string())?;
+        let id = body["id"].as_str().ok_or("which note?")?;
+        let text = body["text"].as_str().filter(|t| !t.trim().is_empty());
+        let by = body["by"].as_str().unwrap_or("user");
+        let note = match body["do"].as_str() {
+            Some("reply") => project.reply(id, by, text.ok_or("a reply says something")?)?,
+            Some("resolve") => project.resolve(id, by, text)?,
+            Some("reopen") => project.reopen(id, by, text)?,
+            Some("delete") => {
+                project.delete_note(id)?;
+                return Ok(json!({ "status": "ok", "id": id }));
+            }
+            _ => return Err("do: reply, resolve, reopen or delete".into()),
+        };
+        let mut out = crate::project::placed(&project, &note);
+        out["status"] = "ok".into();
+        Ok(out)
+    }
+
+    /// The project open, where a project is.
+    fn project(&self) -> Result<Project, String> {
+        let session = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        match (&session.root, session.kind) {
+            (Some(root), "project") => Project::open(root),
+            _ => Err("notes are kept in a project: open one, or save this as a project".into()),
+        }
     }
 
     /// Starts `valle <motion|timeline|project> render <args>` in the folder open, as the CLI

@@ -969,6 +969,50 @@ export default function Scene() {
     );
     expect(true, "replacing a sound refreshes both the timeline and media browser waveforms");
 
+    // A note on the frame shown: a part of the picture drawn over, kept in reviews/ with the
+    // picture as seen.
+    await page.getByRole("tab", { name: "Files", exact: true }).click();
+    await openFile("cut.timeline.json", 320);
+    await evaluate("studio.player.seekFrame(15);");
+    await page.getByRole("button", { name: "Add a note", exact: true }).click();
+    const layer = page.getByLabel("Draw the part of the picture the note is about");
+    const area = (await layer.boundingBox())!;
+    await page.mouse.move(area.x + area.width * 0.5, area.y + area.height * 0.25);
+    await page.mouse.down();
+    await page.mouse.move(area.x + area.width * 0.75, area.y + area.height * 0.75, { steps: 4 });
+    await page.mouse.up();
+    await page.getByRole("textbox", { name: "Note", exact: true }).fill("make the orange warmer");
+    await page.getByRole("button", { name: "Add note", exact: true }).click();
+    const notes = await until("the note written", async () => {
+      const file = Bun.file(join(project, "reviews/notes.json"));
+      return (await file.exists()) && (await file.json()).notes;
+    });
+    const note = notes[0];
+    const near = (a: number, b: number) => Math.abs(a - b) < 0.02;
+    expect(
+      notes.length === 1 &&
+        note.timeline === "cut.timeline.json" &&
+        note.at.start === 0.5 &&
+        near(note.region.x, 0.5) &&
+        near(note.region.y, 0.25) &&
+        near(note.region.w, 0.25) &&
+        near(note.region.h, 0.5) &&
+        note.thread[0].text === "make the orange warmer",
+      `a note keeps its frame, region and text: ${JSON.stringify(note)}`,
+    );
+    const seen = Bun.file(join(project, "reviews", note.image));
+    const bytes = new Uint8Array(await seen.arrayBuffer());
+    expect(
+      note.image === "crops/n1.png" && bytes[0] === 0x89 && bytes[1] === 0x50,
+      "a note keeps the picture seen",
+    );
+    expect(
+      !(await layer.count()) && !(await evaluate("return studio.player.playing;")),
+      "adding the note closes it on the paused frame",
+    );
+    const listed = JSON.parse(run(["project", "-C", project, "notes", "--json"]));
+    expect(listed.notes[0]?.now?.start === 0.5, "the CLI lists the note Studio added where it is");
+
     // Standalone Studio does not have the renders/ directory created with a project.
     for (const kind of ["motion", "timeline"] as const) {
       const folder = join(dir, kind);

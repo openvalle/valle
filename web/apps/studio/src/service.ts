@@ -64,6 +64,30 @@ export type Clip = {
   media: { file: string | null; trim: number; rate: number } | null;
 };
 
+/** A part of the picture, each side a fraction of the canvas, from its top left. */
+export type Region = { x: number; y: number; w: number; h: number };
+
+/** What a note is about: a clip, and where in it. */
+export type Target = { clip: string; offset?: number; run?: number; path?: string; site?: string };
+
+/** A review note, as `valle project notes --json` lists it: `now` is where it is in its
+ * timeline as it is now, none where its clips are gone. */
+export type Note = {
+  id: string;
+  timeline: string;
+  snapshot: number;
+  at: { start: number; end?: number };
+  region?: Region;
+  targets?: Target[];
+  image?: string;
+  picture?: string;
+  status: "open" | "resolved";
+  resolvedIn?: number;
+  thread: { by: string; text: string; snapshot: number; time: number }[];
+  now?: { start: number; end?: number };
+  gone?: boolean;
+};
+
 /** A file as read: its text, and its SHA-256, which a write says it replaces. */
 export type Read = { text: string; sha256: string };
 
@@ -157,6 +181,24 @@ export const service = {
 
   /** `valle project <args> --json` on the project open. */
   project: (args: string[]) => post<Record<string, any>>("/api/project", { args }),
+
+  /** The project's notes on `timeline`. */
+  notes: async (timeline: string) =>
+    (await json<{ notes: Note[] }>(`/api/notes?timeline=${encodeURIComponent(timeline)}`)).notes,
+
+  /** Adds a note, with the picture seen. */
+  addNote: (
+    note: { timeline: string; at: Note["at"]; region?: Region; targets?: Target[]; text: string },
+    picture?: Blob,
+  ) =>
+    json<Note>(`/api/notes?note=${encodeURIComponent(JSON.stringify(note))}`, {
+      method: "POST",
+      body: picture ?? "",
+    }),
+
+  /** Replies to, resolves, reopens or deletes a note. */
+  changeNote: (id: string, action: "reply" | "resolve" | "reopen" | "delete", text?: string) =>
+    post<Note>("/api/note", { id, do: action, text }),
 
   /** Starts a render; it says how it goes as `render` events with its id. */
   render: async (args: string[], overwrite = false) =>

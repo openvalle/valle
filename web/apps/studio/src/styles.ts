@@ -500,6 +500,47 @@ export const styles = css`
     height: 100%;
     object-fit: contain;
   }
+  .note-layer {
+    position: absolute;
+    z-index: 1;
+    cursor: crosshair;
+    touch-action: none;
+    outline: 1px dashed var(--accent);
+  }
+  .note-region {
+    position: absolute;
+    border: 2px solid #ff3b30;
+    background: #ff3b3022;
+    pointer-events: none;
+  }
+  .note-form {
+    position: absolute;
+    z-index: 2;
+    top: 12px;
+    width: min(300px, calc(100% - 24px));
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px;
+    border: 1px solid var(--edge);
+    border-radius: 6px;
+    background: var(--panel);
+  }
+  .note-form[data-side="right"] {
+    right: 12px;
+  }
+  .note-form[data-side="left"] {
+    left: 12px;
+  }
+  .note-form textarea {
+    resize: vertical;
+    font: inherit;
+  }
+  .note-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+  }
   .error {
     position: absolute;
     z-index: 1;

@@ -17,6 +17,7 @@ import {
   address,
   mediaUrl,
   type Listed,
+  type Region,
   type Session,
   service,
 } from "./service.ts";
@@ -27,6 +28,26 @@ const TEXT = /\.(tsx?|json|css|txt|md|srt|vtt|lrc|csv|wgsl)$/;
 
 /** An edit undone and redone: a file's text before and after. */
 type Step = { path: string; before: string; after: string };
+
+/** The longest side of the picture a note keeps. */
+const NOTE_PICTURE = 1280;
+
+/** A frame as a note keeps it: no larger than it needs, with its region outlined. */
+async function notePicture(png: Blob, region: Region | undefined): Promise<Blob> {
+  const bitmap = await createImageBitmap(png);
+  const scale = Math.min(1, NOTE_PICTURE / Math.max(bitmap.width, bitmap.height));
+  const [w, h] = [Math.round(bitmap.width * scale), Math.round(bitmap.height * scale)];
+  const canvas = new OffscreenCanvas(w, h);
+  const context = canvas.getContext("2d")!;
+  context.drawImage(bitmap, 0, 0, w, h);
+  bitmap.close();
+  if (region) {
+    context.strokeStyle = "#ff3b30";
+    context.lineWidth = Math.max(2, Math.round(Math.max(w, h) / 400));
+    context.strokeRect(region.x * w, region.y * h, region.w * w, region.h * h);
+  }
+  return canvas.convertToBlob({ type: "image/png" });
+}
 
 /** A render the service runs: how far it is, and what it made. */
 type Job = { id: number; done: number; frames: number; result?: Record<string, any> };
@@ -112,6 +133,10 @@ export class ValleStudio extends LitElement {
   #toast = "";
   #fading: ReturnType<typeof setTimeout> | undefined;
   #ask: Ask | undefined;
+  /** A note being written on the frame shown: the part of the picture it is about, if one is
+   * drawn, and where a drag of it began. */
+  #noting: { region?: Region; from?: [number, number]; saving?: boolean } | undefined;
+  #resized = new ResizeObserver(() => this.requestUpdate());
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -130,6 +155,7 @@ export class ValleStudio extends LitElement {
   disconnectedCallback(): void {
     super.disconnectedCallback();
     removeEventListener("keydown", this.#key);
+    this.#resized.disconnect();
     this.#events?.close();
     clearTimeout(this.#reload);
     this.#opening++;
@@ -647,8 +673,156 @@ export class ValleStudio extends LitElement {
     else if (key === "End") step(last);
     else if (key === "k") player.pause();
     else if (key === "l") player.play();
+    else if (key === "n" && this.#notable === true && !this.#noting) this.#startNote();
+    else if (key === "Escape" && this.#noting) this.#endNote();
     else return;
     event.preventDefault();
+  }
+
+  /** Whether a note can be written here, or why not. */
+  get #notable(): true | string {
+    if (this.session?.kind !== "project") return "Notes are kept in a project";
+    if (!this.timeline) return "Notes are written on a timeline";
+    return this.player ? true : "Nothing is playing";
+  }
+
+  /** Pauses on the frame shown, to write a note on it. */
+  #startNote(): void {
+    this.player?.pause();
+    this.#noting = {};
+    const stage = this.renderRoot.querySelector(".stage");
+    if (stage) this.#resized.observe(stage);
+    this.requestUpdate();
+    void this.updateComplete.then(() =>
+      this.renderRoot.querySelector<HTMLTextAreaElement>(".note-form textarea")?.focus(),
+    );
+  }
+
+  #endNote(): void {
+    this.#noting = undefined;
+    this.#resized.disconnect();
+    this.requestUpdate();
+  }
+
+  /** Where the picture is drawn in the page: the canvas's box, the picture fitted in whole. */
+  #picture(): DOMRect | undefined {
+    const canvas = this.renderRoot.querySelector<HTMLCanvasElement>(".canvas canvas");
+    const info = this.player?.info;
+    if (!canvas || !info) return undefined;
+    const box = canvas.getBoundingClientRect();
+    const scale = Math.min(box.width / info.width, box.height / info.height);
+    const [w, h] = [info.width * scale, info.height * scale];
+    return new DOMRect(box.x + (box.width - w) / 2, box.y + (box.height - h) / 2, w, h);
+  }
+
+  /** Adds the note written on the frame shown, with the picture as seen, its region drawn on. */
+  async #addNote(text: string): Promise<void> {
+    const noting = this.#noting;
+    const player = this.player;
+    if (!noting || !player || noting.saving || !text.trim()) return;
+    noting.saving = true;
+    this.requestUpdate();
+    try {
+      const start = player.currentTime;
+      const picture = await notePicture(await player.frame(start), noting.region);
+      const note = await service.addNote(
+        { timeline: this.#entry, at: { start }, region: noting.region, text },
+        picture,
+      );
+      this.#endNote();
+      this.#status = `Added note ${note.id}`;
+      await this.#refresh();
+    } catch (error) {
+      noting.saving = false;
+      this.#refuse((error as Error).message);
+    }
+  }
+
+  /** What covers the picture while a note is written: the region drawn on it, and the note. */
+  #noteLayer() {
+    const noting = this.#noting;
+    const stage = this.renderRoot.querySelector(".stage")?.getBoundingClientRect();
+    const picture = this.#picture();
+    if (!noting || !stage || !picture) return nothing;
+    const at = (e: PointerEvent): [number, number] => [
+      Math.min(1, Math.max(0, (e.clientX - picture.x) / picture.width)),
+      Math.min(1, Math.max(0, (e.clientY - picture.y) / picture.height)),
+    ];
+    const drag = (e: PointerEvent) => {
+      if (!noting.from) return;
+      const [[x0, y0], [x1, y1]] = [noting.from, at(e)];
+      const region = {
+        x: Math.min(x0, x1),
+        y: Math.min(y0, y1),
+        w: Math.abs(x1 - x0),
+        h: Math.abs(y1 - y0),
+      };
+      // A click, or a drag too small to mean a part, is about the whole picture.
+      noting.region = region.w > 0.01 && region.h > 0.01 ? region : undefined;
+      this.requestUpdate();
+    };
+    const region = noting.region;
+    const side = region && region.x + region.w / 2 > 0.5 ? "left" : "right";
+    return html`<div
+        class="note-layer"
+        aria-label="Draw the part of the picture the note is about"
+        style=${`left: ${picture.x - stage.x}px; top: ${picture.y - stage.y}px; width: ${picture.width}px; height: ${picture.height}px`}
+        @pointerdown=${(e: PointerEvent) => {
+          if (e.button !== 0) return;
+          noting.from = at(e);
+          noting.region = undefined;
+          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+          this.requestUpdate();
+        }}
+        @pointermove=${drag}
+        @pointerup=${(e: PointerEvent) => {
+          drag(e);
+          noting.from = undefined;
+          this.renderRoot.querySelector<HTMLTextAreaElement>(".note-form textarea")?.focus();
+        }}
+      >
+        ${
+          region
+            ? html`<div
+                class="note-region"
+                style=${`left: ${region.x * 100}%; top: ${region.y * 100}%; width: ${region.w * 100}%; height: ${region.h * 100}%`}
+              ></div>`
+            : nothing
+        }
+      </div>
+      <form
+        class="note-form"
+        data-side=${side}
+        @submit=${(e: SubmitEvent) => {
+          e.preventDefault();
+          const text = new FormData(e.currentTarget as HTMLFormElement).get("text");
+          void this.#addNote(String(text ?? ""));
+        }}
+      >
+        <strong>Note at ${timecode(this.#shownFrame, this.#rate)}</strong>
+        <small class="muted"
+          >${region ? "About the part drawn" : "About the whole picture: drag over it to mark a part"}</small
+        >
+        <textarea
+          name="text"
+          aria-label="Note"
+          placeholder="What should change?"
+          rows="3"
+          @keydown=${(e: KeyboardEvent) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              this.#endNote();
+            } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              (e.currentTarget as HTMLTextAreaElement).form?.requestSubmit();
+            }
+          }}
+        ></textarea>
+        <span class="note-actions">
+          <button type="button" class="quiet" @click=${() => this.#endNote()}>Cancel</button>
+          <button type="submit" class="primary" ?disabled=${noting.saving}>Add note</button>
+        </span>
+      </form>`;
   }
 
   /** Frames a second, as a number. */
@@ -783,7 +957,7 @@ export class ValleStudio extends LitElement {
                 </div>`
               : nothing
           }
-          ${this.#transport()}
+          ${this.#noteLayer()} ${this.#transport()}
         </section>
         ${this.#separator("right")} ${this.#right()}
       </main>
@@ -1123,6 +1297,16 @@ export class ValleStudio extends LitElement {
           }}
         >
           ${icon(player?.muted ? "muted" : "volume")}
+        </button>
+        <button
+          class="icon quiet"
+          title=${this.#notable === true ? "Add a note on this frame (N)" : this.#notable}
+          aria-label="Add a note"
+          aria-pressed=${!!this.#noting}
+          ?disabled=${this.#notable !== true}
+          @click=${() => (this.#noting ? this.#endNote() : this.#startNote())}
+        >
+          ${icon("note")}
         </button>
       </span>
     </div>`;
