@@ -45,5 +45,15 @@ To let the user watch or adjust the work, give them `valle project studio` in a 
 `valle motion studio FILE` and `valle timeline studio FILE`. Studio writes files when they
 save: read a file again before you change it.
 
+When the user has reviewed an edit and asks you to work through the notes, run
+`valle project notes list --open --json`. Each note has `now`, where it is in the timeline
+now, or `gone`; `region`, the part of the picture it is about; `targets`, the clips it is on,
+the top one first; and `picture`, the frame they saw with the part outlined: look at it. Find
+the clip with `valle timeline query`, change the source, `check`, and render the note's frames
+to look at the result. Then `valle project notes resolve ID "what you changed"`. Where a note
+is unclear, or what it asks cannot be done, `valle project notes reply ID "your question"
+--by ai` instead, and leave it open. Do not delete notes. `valle docs project --section notes`
+explains them.
+
 Report the files you made and how far you got: rendered and looked at, rendered only, checked
 only, or blocked with the message that blocked it.
