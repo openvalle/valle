@@ -1081,16 +1081,19 @@ export class ValleStudio extends LitElement {
       note.component === this.#entry &&
       JSON.stringify(props) !== JSON.stringify(asked)
     ) {
-      this.#asked = { ...props };
+      const wanted = { ...props };
+      this.#asked = wanted;
       this.#binding = this.#binding
         .catch(() => {})
         .then(() => player.setProps(props))
         .then(() => {
           if (this.player === player) this.#values = { ...props };
         });
-      this.#binding.catch(
-        (error: Error) => looking === this.#looking && this.#refuse(error.message),
-      );
+      // Not bound, the player still plays those it had: asked again, they are bound again.
+      this.#binding.catch((error: Error) => {
+        if (this.#asked === wanted) this.#asked = undefined;
+        if (looking === this.#looking) this.#refuse(error.message);
+      });
     }
     void this.#binding.then(go, go);
     this.requestUpdate();

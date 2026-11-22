@@ -647,8 +647,8 @@ impl Service {
         Ok(json!({ "status": "ok", "notes": notes }))
     }
 
-    /// A new note: `?note=` JSON of `timeline`, `at`, `region`, `targets` and `text`, with the
-    /// picture seen as the body, if any.
+    /// A new note: the body is a line of JSON of `timeline` or `component`, `at`, `region`,
+    /// `targets`, `props`, `seen` and `text`, then the bytes of the picture seen, if any.
     fn add_note(&self, request: &Request) -> Result<Value, String> {
         let project = self.project()?;
         // The note's JSON, a line of its own, then the picture's bytes: what it was drawn from

@@ -11,7 +11,7 @@ use valle_timeline::query::source_at;
 use valle_timeline::time::Tick;
 use valle_timeline::{Clip, Content, Document, Kind, SourceTime};
 
-use crate::history::{linked, now};
+use crate::history::{Source, linked, now};
 use crate::{Error, Project, inside, pretty, write};
 
 /// Where the notes are, in the project.
@@ -497,30 +497,33 @@ impl Project {
             Some(bytes) => Some(picture(bytes)?),
             None => None,
         };
-        // What it is on is kept, wherever it is, as all a note is on.
-        let (snapshot, _) = self.save_with(None, "note", std::slice::from_ref(&on))?;
-        let kept = self.snapshot(snapshot)?.files;
-        for (path, seen) in &new.seen {
-            let again = "look at it again, then add the note";
-            let at = self.root.join(path);
-            let same = match kept.iter().find(|f| &f.path == path) {
-                Some(f) if seen.contains(':') => self.is_version(path, seen, &f.sha256),
-                Some(f) => &f.sha256 == seen,
-                // Read but no source, it is checked where it is.
-                None if !at.is_file() => {
+        // What it is on is kept, wherever it is, as all a note is on; the files the picture was
+        // drawn from are checked against it before it is saved, so a note refused saves none.
+        let seen = |kept: &[Source]| {
+            for (path, seen) in &new.seen {
+                let again = "look at it again, then add the note";
+                let at = self.root.join(path);
+                let same = match kept.iter().find(|f| &f.path == path) {
+                    Some(f) if seen.contains(':') => self.is_version(path, seen, &f.sha256),
+                    Some(f) => &f.sha256 == seen,
+                    // Read but no source, it is checked where it is.
+                    None if !at.is_file() => {
+                        return Err(format!(
+                            "{path} is gone since the picture was drawn: {again}"
+                        ));
+                    }
+                    None if seen.contains(':') => crate::version(&at).as_ref() == Some(seen),
+                    None => crate::digest(&at).ok().as_ref() == Some(seen),
+                };
+                if !same {
                     return Err(format!(
-                        "{path} is gone since the picture was drawn: {again}"
+                        "{path} changed after the picture was drawn: {again}"
                     ));
                 }
-                None if seen.contains(':') => crate::version(&at).as_ref() == Some(seen),
-                None => crate::digest(&at).ok().as_ref() == Some(seen),
-            };
-            if !same {
-                return Err(format!(
-                    "{path} changed after the picture was drawn: {again}"
-                ));
             }
-        }
+            Ok(())
+        };
+        let (snapshot, _) = self.save_with(None, "note", std::slice::from_ref(&on), seen)?;
         let _lock = self.lock()?;
         let mut file = self.read_notes()?;
         let id = format!("n{}", file.next);
@@ -1210,6 +1213,8 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("changed after the picture"), "{err}");
         assert_eq!(p.notes().unwrap().len(), 1);
+        // Refused, it saved no snapshot.
+        assert_eq!(p.history().unwrap().len(), 1);
         let now = crate::digest(&p.root.join(other)).unwrap();
         p.add_note(NewNote {
             file: other.into(),

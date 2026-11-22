@@ -177,18 +177,21 @@ impl Project {
     /// Saves the sources as a new snapshot, or gives the last one if none of them changed since:
     /// its number, and whether it is new.
     pub fn save(&self, message: Option<&str>, by: &str) -> Result<(u64, bool), Error> {
-        self.save_with(message, by, &[])
+        self.save_with(message, by, &[], |_| Ok(()))
     }
 
-    /// As `save`, keeping the component at each of `reviewed` too.
+    /// As `save`, keeping the component at each of `reviewed` too, once `check` takes the
+    /// sources to save: one it refuses saves nothing.
     pub(crate) fn save_with(
         &self,
         message: Option<&str>,
         by: &str,
         reviewed: &[String],
+        check: impl Fn(&[Source]) -> Result<(), Error>,
     ) -> Result<(u64, bool), Error> {
         let _lock = self.lock()?;
         let files = self.sources_with(reviewed)?;
+        check(&files)?;
         let history = self.history()?;
         if let Some(last) = history.last()
             && last.files == files
