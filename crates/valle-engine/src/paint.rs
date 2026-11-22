@@ -60,6 +60,7 @@ use crate::style::background::{Area, Composite, ImageSize, Layer, Repeat};
 use crate::style::color::Rgba;
 use crate::style::filter;
 use crate::style::gradient::Image;
+use crate::style::instances::Row;
 use crate::style::transform::Function;
 use crate::style::{Blend, DecorationStyle, Fit, PaintPart, Shadow, Style};
 use crate::svg::Element;
@@ -760,6 +761,107 @@ impl<'a> Painter<'a> {
     }
 }
 
+/// Where an instance row of a box whose border box is at `origin` paints, and its own transform,
+/// with `style` the box's, given the row's transform; none where it paints nothing.
+pub(crate) fn placed_row(style: &mut Style, origin: Rect, row: &Row) -> Option<(Rect, Matrix)> {
+    let border = Rect {
+        x: origin.x + row.rect.x,
+        y: origin.y + row.rect.y,
+        ..row.rect
+    };
+    let rect = snap(border);
+    if rect.width <= 0.0 || rect.height <= 0.0 || row.opacity <= 0.0 || row.color[3] <= 0.0 {
+        return None;
+    }
+    style.transform.clone_from(&row.transform);
+    style.individual = row.individual;
+    style.transform_origin = row.origin.clone();
+    style.transform_origin_z = row.origin_z;
+    let matrix = transform(style, border, border, None, None)
+        .unwrap_or(Matrix4::IDENTITY)
+        .flatten();
+    matrix.inverse().is_some().then_some((border, matrix))
+}
+
+/// Where each box last paints among the boxes of the frame, as `paint` orders them: by stacking
+/// context and z-index, backgrounds before text; none for a box that paints nowhere it is, as
+/// one hidden or drawn as a picture.
+pub fn painted(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Option<usize>> {
+    let cache = Cache::default();
+    let painter = Painter::new(template, styles, layout, &[], &cache);
+    let mut order = Vec::new();
+    painter.order(None, &mut order);
+    let mut out = vec![None; template.nodes.len()];
+    for (at, i) in order.into_iter().enumerate() {
+        out[i] = Some(at);
+    }
+    out
+}
+
+impl Painter<'_> {
+    /// The boxes stacking context `i` paints, in the order `context` paints them.
+    fn order(&self, i: Option<usize>, out: &mut Vec<usize>) {
+        let mut layered = Vec::new();
+        self.collect(i, &mut layered);
+        layered.sort_by_key(|&d| self.z(d));
+        let below = layered.partition_point(|&d| self.z(d) < 0);
+        out.extend(i);
+        for &d in &layered[..below] {
+            self.order_layer(d, out);
+        }
+        self.order_content(i, out);
+        for &d in &layered[below..] {
+            self.order_layer(d, out);
+        }
+    }
+
+    fn order_layer(&self, d: usize, out: &mut Vec<usize>) {
+        match self.stacking(d) || self.styles[d].instances.is_some() {
+            true => self.order(Some(d), out),
+            false => {
+                out.push(d);
+                self.order_content(Some(d), out);
+            }
+        }
+    }
+
+    /// As `content`: the backgrounds of `i`'s blocks, then text and atomic items.
+    fn order_content(&self, i: Option<usize>, out: &mut Vec<usize>) {
+        fn backgrounds(p: &Painter<'_>, i: Option<usize>, out: &mut Vec<usize>) {
+            for c in p.children(i) {
+                if !p.layered(c) && !p.atomic(c) {
+                    out.push(c);
+                    backgrounds(p, Some(c), out);
+                }
+            }
+        }
+        fn foreground(p: &Painter<'_>, i: Option<usize>, out: &mut Vec<usize>) {
+            // Only what it draws over its background: a box under a layer below it stays under.
+            out.extend(i.filter(|&i| p.draws_over(i)));
+            for c in p.children(i) {
+                if p.atomic(c) {
+                    out.push(c);
+                    p.order_content(Some(c), out);
+                } else if !p.layered(c) {
+                    foreground(p, Some(c), out);
+                }
+            }
+        }
+        backgrounds(self, i, out);
+        foreground(self, i, out);
+    }
+
+    /// Whether `i` draws text, an image or an SVG over its background, as `foreground` does.
+    fn draws_over(&self, i: usize) -> bool {
+        self.layout.lines[i].is_some()
+            || matches!(self.template.nodes[i].kind, Kind::Image { .. })
+            || matches!(
+                self.styles[i].svg.as_deref().map(|c| &c.element),
+                Some(Element::Svg { .. })
+            )
+    }
+}
+
 /// Each box's transform from its px to the canvas's: its ancestors' and its own.
 pub fn transforms(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Matrix> {
     transforms_of(template, styles, layout, 0..template.nodes.len())
@@ -1102,29 +1204,10 @@ impl Painter<'_> {
             let mut style = s.clone();
             let mut instances = Vec::with_capacity(rows.len());
             for row in rows.iter() {
-                let border = Rect {
-                    x: origin.x + row.rect.x,
-                    y: origin.y + row.rect.y,
-                    ..row.rect
+                let Some((border, matrix)) = placed_row(&mut style, origin, row) else {
+                    continue;
                 };
                 let rect = snap(border);
-                if rect.width <= 0.0
-                    || rect.height <= 0.0
-                    || row.opacity <= 0.0
-                    || row.color[3] <= 0.0
-                {
-                    continue;
-                }
-                style.transform.clone_from(&row.transform);
-                style.individual = row.individual;
-                style.transform_origin = row.origin.clone();
-                style.transform_origin_z = row.origin_z;
-                let matrix = transform(&style, border, border, None, None)
-                    .unwrap_or(Matrix4::IDENTITY)
-                    .flatten();
-                if matrix.inverse().is_none() {
-                    continue;
-                }
                 let radii = row
                     .radii
                     .each_ref()

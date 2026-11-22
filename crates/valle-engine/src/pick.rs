@@ -2,8 +2,9 @@
 //! the picture means it. Each box that paints something of its own is a hit where its border
 //! box is, through its transform and those around it, inside the boxes around it that clip what
 //! overflows them. A hidden box, one at no opacity, and those of a `<Mask>`'s source or drawn as
-//! a picture (which another box shows) are not. Hits come in tree order reversed, which is the
-//! order they paint in, the top first, z-index aside.
+//! a picture (which another box shows) are not. Hits come in the order the frame paints them,
+//! by stacking context and z-index, the top first; each row of a table of boxes packed from a
+//! `.map()` is a hit of its own, with its key.
 
 use std::rc::Rc;
 
@@ -11,8 +12,10 @@ use serde_json::{Value, json};
 use taffy::Overflow;
 
 use crate::layout::Rect;
+use crate::paint::{self, Matrix};
 use crate::scene::Frame;
 use crate::style::gradient::Image;
+use crate::style::instances;
 use crate::template::{Kind, Tag};
 
 /// A box hit, and where it is: its key path and where its JSX is written, when it has them, the
@@ -77,16 +80,13 @@ impl Hit {
 
 /// The boxes `frame` draws at `point`, in canvas px, the top one first.
 pub fn at(frame: &Frame, point: [f32; 2]) -> Vec<Hit> {
-    let mut hits = Picker::new(frame).hits(|p, i| p.contains(i, point).then_some(1.0));
-    hits.reverse();
-    hits
+    Picker::new(frame).hits(|p, shape| p.contains(shape, point).then_some(1.0))
 }
 
 /// The boxes `frame` draws in `area`, in canvas px: those most in it first, and of those the top
 /// one first.
 pub fn within(frame: &Frame, area: Rect) -> Vec<Hit> {
-    let mut hits = Picker::new(frame).hits(|p, i| p.cover(i, area));
-    hits.reverse();
+    let mut hits = Picker::new(frame).hits(|p, shape| p.cover(shape, area));
     // Stable, so boxes as much in it keep the top first.
     hits.sort_by(|a, b| b.cover.total_cmp(&a.cover));
     hits
@@ -105,6 +105,15 @@ pub fn named(hits: &[Hit]) -> Vec<Value> {
     named
 }
 
+/// What a hit is tested on: box `node`'s border box, or one of its instance rows', with the
+/// transform from its px to the canvas.
+struct Shape {
+    node: usize,
+    border: Rect,
+    matrix: Matrix,
+    path: Option<Rc<str>>,
+}
+
 struct Picker<'a> {
     frame: &'a Frame,
     parents: Vec<Option<usize>>,
@@ -112,6 +121,8 @@ struct Picker<'a> {
     /// picture, and not at no opacity.
     shown: Vec<bool>,
     clips: Vec<Vec<Rc<str>>>,
+    /// Where each box paints last, as the frame paints them.
+    painted: Vec<Option<usize>>,
 }
 
 impl<'a> Picker<'a> {
@@ -145,24 +156,66 @@ impl<'a> Picker<'a> {
             parents,
             shown,
             clips,
+            painted: paint::painted(t, &frame.styles, &frame.layout),
         }
     }
 
-    /// The boxes that paint, in tree order, that `hit` finds, with how much of each it does.
-    fn hits(&self, hit: impl Fn(&Self, usize) -> Option<f32>) -> Vec<Hit> {
+    /// The shapes that paint that `hit` finds, with how much of each it does, the one painted
+    /// last first.
+    fn hits(&self, hit: impl Fn(&Self, &Shape) -> Option<f32>) -> Vec<Hit> {
         let t = &*self.frame.template;
-        (0..t.nodes.len())
-            .filter(|&i| self.shown[i] && self.paints(i))
-            .filter_map(|i| {
-                let cover = hit(self, i)?;
-                let node = &t.nodes[i];
-                Some(Hit {
+        let mut found: Vec<(usize, usize, Hit)> = Vec::new();
+        for i in (0..t.nodes.len()).filter(|&i| self.shown[i] && self.paints(i)) {
+            let Some(order) = self.painted[i] else {
+                continue;
+            };
+            for (row, shape) in self.shapes(i).into_iter().enumerate() {
+                if let Some(cover) = hit(self, &shape) {
+                    found.push((order, row, self.hit(shape, cover)));
+                }
+            }
+        }
+        // Later rows of a table paint over earlier ones.
+        found.sort_by_key(|a| std::cmp::Reverse((a.0, a.1)));
+        found.into_iter().map(|(_, _, hit)| hit).collect()
+    }
+
+    fn hit(&self, shape: Shape, cover: f32) -> Hit {
+        let node = &self.frame.template.nodes[shape.node];
+        Hit {
+            node: shape.node,
+            path: shape.path,
+            site: node.site.clone(),
+            clips: self.clips[shape.node].clone(),
+            bounds: shape.matrix.bounds(shape.border),
+            cover,
+        }
+    }
+
+    /// What box `i` paints on: its border box, or each of its instance rows'.
+    fn shapes(&self, i: usize) -> Vec<Shape> {
+        let f = self.frame;
+        let (s, border) = (&f.styles[i], f.layout.boxes[i].border);
+        let Some(rows) = &s.instances else {
+            let path = f.template.nodes[i].path.clone();
+            return vec![Shape {
+                node: i,
+                border,
+                matrix: f.transforms[i],
+                path,
+            }];
+        };
+        let table = (f.template.instances.iter()).find(|(n, _)| *n as usize == i);
+        let paths = table.map_or_else(Vec::new, |(_, t)| instances::paths(t));
+        let mut style = s.clone();
+        (rows.iter().enumerate())
+            .filter_map(|(r, row)| {
+                let (border, own) = paint::placed_row(&mut style, border, row)?;
+                Some(Shape {
                     node: i,
-                    path: node.path.clone(),
-                    site: node.site.clone(),
-                    clips: self.clips[i].clone(),
-                    bounds: self.frame.transforms[i].bounds(self.frame.layout.boxes[i].border),
-                    cover,
+                    border,
+                    matrix: f.transforms[i].times(own),
+                    path: paths.get(r).cloned().flatten(),
                 })
             })
             .collect()
@@ -173,6 +226,10 @@ impl<'a> Picker<'a> {
         let s = &self.frame.styles[i];
         if !s.visible {
             return false;
+        }
+        // Its rows paint, each that has a color.
+        if s.instances.is_some() {
+            return true;
         }
         match &self.frame.template.nodes[i].kind {
             Kind::Text { .. } | Kind::Image { .. } | Kind::Shader { .. } => true,
@@ -187,11 +244,10 @@ impl<'a> Picker<'a> {
         }
     }
 
-    /// Whether `point` is in box `i`'s border box, and in the padding box of each box around it
-    /// that clips.
-    fn contains(&self, i: usize, point: [f32; 2]) -> bool {
-        let inside = |j: usize, r: Rect| {
-            let Some(back) = self.frame.transforms[j].inverse() else {
+    /// Whether `point` is in `shape`, and in the padding box of each box around it that clips.
+    fn contains(&self, shape: &Shape, point: [f32; 2]) -> bool {
+        let inside = |m: Matrix, r: Rect| {
+            let Some(back) = m.inverse() else {
                 return false;
             };
             let [x, y] = back.apply(point);
@@ -207,18 +263,17 @@ impl<'a> Picker<'a> {
             && point[1] >= 0.0
             && point[0] < canvas[0]
             && point[1] < canvas[1]
-            && inside(i, self.frame.layout.boxes[i].border)
-            && self
-                .clippers(i)
-                .all(|j| inside(j, self.frame.layout.boxes[j].padding))
+            && inside(shape.matrix, shape.border)
+            && (self.clippers(shape.node))
+                .all(|j| inside(self.frame.transforms[j], self.frame.layout.boxes[j].padding))
     }
 
-    /// How much of box `i`, as the rectangle around it on the canvas and inside those around it
+    /// How much of `shape`, as the rectangle around it on the canvas and inside those around it
     /// that clip, is in `area`; none if none of it is.
-    fn cover(&self, i: usize, area: Rect) -> Option<f32> {
+    fn cover(&self, shape: &Shape, area: Rect) -> Option<f32> {
         let on = |j: usize, r: Rect| self.frame.transforms[j].bounds(r);
         let [w, h] = self.frame.layout.canvas;
-        let mut seen = on(i, self.frame.layout.boxes[i].border);
+        let mut seen = shape.matrix.bounds(shape.border);
         let whole = seen.width * seen.height;
         if whole <= 0.0 {
             return None;
@@ -230,7 +285,7 @@ impl<'a> Picker<'a> {
             height: h,
         };
         for clip in self
-            .clippers(i)
+            .clippers(shape.node)
             .map(|j| on(j, self.frame.layout.boxes[j].padding))
         {
             seen = overlap(seen, clip)?;

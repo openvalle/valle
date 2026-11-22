@@ -843,6 +843,9 @@ pub struct Template {
 pub struct Instances {
     pub fields: Vec<Rc<str>>,
     pub rows: Vec<Vec<Prop>>,
+    /// The key path of each row's box, packed from boxes of their own; none with a formula,
+    /// whose `key` gives them.
+    pub paths: Vec<Option<Rc<str>>>,
     /// With a shared formula, rows supply its initial slots instead of final style values.
     pub formula: Option<Rc<InstanceProgram>>,
 }

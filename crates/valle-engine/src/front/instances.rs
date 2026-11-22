@@ -159,11 +159,16 @@ pub(crate) fn pack(t: &mut Template) -> Result<(), Error> {
                     .collect()
             })
             .collect();
+        let paths = group
+            .iter()
+            .map(|&i| t.nodes[i as usize].path.clone())
+            .collect();
         t.instances.push((
             first as u32,
             Rc::new(Instances {
                 fields,
                 rows,
+                paths,
                 formula: None,
             }),
         ));

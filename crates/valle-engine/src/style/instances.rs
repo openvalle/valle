@@ -176,6 +176,31 @@ impl Formula {
     }
 }
 
+/// The key path of each row of `table`'s boxes, where it has one its row fixes.
+pub fn paths(table: &Instances) -> Vec<Option<Rc<str>>> {
+    let (Some(f), Some(shared)) = (Formula::new(table), table.formula.as_ref()) else {
+        let mut paths = table.paths.clone();
+        paths.resize(table.rows.len(), None);
+        return paths;
+    };
+    let Some(key) = &shared.key else {
+        return vec![None; table.rows.len()];
+    };
+    let path = |v: &V| -> Rc<str> {
+        match shared.prefix.is_empty() {
+            true => v.text().into_owned().into(),
+            false => format!("{}/{}", shared.prefix, v.text()).into(),
+        }
+    };
+    (table.rows.iter())
+        .map(|row| match key {
+            Prop::Const(v) => Some(path(v)),
+            Prop::Expr(e) if f.dynamic[*e as usize] => None,
+            Prop::Expr(e) => f.prepare(row).ok()?.get(*e as usize).map(path),
+        })
+        .collect()
+}
+
 impl Table {
     pub fn new(table: &Instances, place: Rc<str>) -> Result<Self, String> {
         let formula = Formula::new(table);
@@ -337,6 +362,7 @@ mod tests {
         use crate::template::{Bin, Cmp, Op, Part, Program};
         let table = Instances {
             fields: Vec::new(),
+            paths: Vec::new(),
             rows: vec![
                 vec![Prop::Const(V::Num(2.0)), Prop::Const(V::Str("a".into()))],
                 vec![Prop::Const(V::Num(-3.0)), Prop::Const(V::Str("b".into()))],

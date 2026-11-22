@@ -877,6 +877,62 @@ mod tests {
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     }
 
+    #[test]
+    fn a_pick_follows_z_index_and_finds_each_box_a_map_draws() {
+        big_stack(|| {
+            let mut s = load(indoc! {"
+                export const composition = { width: 200, height: 100, fps: 30, duration: 1 };
+                export default function Scene() {
+                  return (
+                    <View style={{ position: 'absolute', inset: 0 }}>
+                      <View key=\"red\" style={{ position: 'absolute', left: 0, top: 0, width: 100, height: 100, backgroundColor: 'red', zIndex: 10 }} />
+                      <View key=\"blue\" style={{ position: 'absolute', left: 0, top: 0, width: 100, height: 100, backgroundColor: 'blue', zIndex: 0 }} />
+                      {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => (
+                        <View key={`bar${i}`} style={{ position: 'absolute', left: 100 + i * 10, top: 50, width: 10, height: 50, backgroundColor: 'red' }} />
+                      ))}
+                      <View key=\"parent\" style={{ position: 'absolute', left: 100, top: 0, width: 50, height: 40, backgroundColor: 'green', zIndex: 1 }}>
+                        <View key=\"under\" style={{ position: 'absolute', left: 0, top: 0, width: 50, height: 40, backgroundColor: 'yellow', zIndex: -1 }} />
+                      </View>
+                    </View>
+                  );
+                }
+            "})
+            .expect("loads");
+            let f = s.frame(Tick::ZERO).expect("a frame");
+            // The bars are packed as one table of rows, as a `.map()` of boxes is.
+            assert!(
+                f.styles
+                    .iter()
+                    .any(|s| s.instances.as_ref().is_some_and(|r| r.len() == 10))
+            );
+            let paths = |p: [f32; 2]| {
+                (crate::pick::at(&f, p).into_iter())
+                    .filter_map(|h| h.path.map(|p| p.to_string()))
+                    .collect::<Vec<_>>()
+            };
+            // Painted over by its z-index, red is on top though blue comes later.
+            assert_eq!(paths([50.0, 50.0]), ["red", "blue"]);
+            // Below zero in a stacking context, a child paints over its background.
+            assert_eq!(paths([125.0, 20.0]), ["parent/under", "parent"]);
+            for (x, bar) in [(101.0, "bar0"), (155.0, "bar5"), (199.0, "bar9")] {
+                assert_eq!(paths([x, 75.0]), [bar], "at {x}");
+            }
+            let hit = &crate::pick::at(&f, [155.0, 75.0])[0];
+            assert_eq!([hit.bounds.x, hit.bounds.width], [150.0, 10.0]);
+            assert!(paths([175.0, 25.0]).is_empty());
+            let many = crate::pick::within(
+                &f,
+                Rect {
+                    x: 100.0,
+                    y: 50.0,
+                    width: 100.0,
+                    height: 50.0,
+                },
+            );
+            assert_eq!(many.iter().filter(|h| h.cover == 1.0).count(), 10);
+        });
+    }
+
     fn load(source: &'static str) -> Result<Scene, Error> {
         Scene::load(
             "s.motion.tsx",

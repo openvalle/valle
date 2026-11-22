@@ -680,6 +680,7 @@ pub fn variant(
                 Rc::new(crate::template::Instances {
                     fields,
                     rows,
+                    paths: Vec::new(),
                     formula: Some(Rc::new(crate::template::InstanceProgram {
                         program: kernel.clone(),
                         imports,
