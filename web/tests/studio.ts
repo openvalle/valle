@@ -76,15 +76,16 @@ export default function Scene() {
   await Bun.write(
     join(project, "card.motion.tsx"),
     `export const composition = { width: 320, height: 180, fps: 30, duration: 2 };
-export default function Scene() {
+export default function Scene({ word }) {
   return (
     <View style={{ position: "absolute", inset: 0 }}>
       <View key="card" style={{ position: "absolute", left: 40, top: 40, width: 120, height: 60, backgroundColor: "#fff" }}>
-        <Text key="title" style={{ fontSize: 20 }}>Hi</Text>
+        <Text key="title" style={{ fontSize: 20 }}>{word}</Text>
       </View>
     </View>
   );
 }
+export const controls = { props: { word: string({ default: "Hi" }) } };
 `,
   );
   await Bun.write(
@@ -1151,6 +1152,9 @@ export default function Scene() {
     );
 
     // A note's frame as it was seen is compared over the frame as it is now, wiped across.
+    await until("the note's mark", () =>
+      evaluate(`return !!${view}.querySelector('.note-mark[data-note="n3"]');`),
+    );
     await evaluate(`${view}.querySelector('.note-mark[data-note="n3"]').click();`);
     await page.getByRole("button", { name: "Compare", exact: true }).click();
     const before = page.getByAltText("n3 as it was seen", { exact: true });
@@ -1167,6 +1171,12 @@ export default function Scene() {
     // A component reviewed alone takes notes too, on its elements and no clip.
     await page.getByRole("tab", { name: "Files", exact: true }).click();
     await openFile("card.motion.tsx", 320);
+    await page.getByRole("tab", { name: "Properties", exact: true }).click();
+    await page.getByLabel("word", { exact: true }).fill("Hello");
+    await page.getByLabel("word", { exact: true }).press("Enter");
+    await until("the preview's word", () =>
+      evaluate("return studio.player.frame(0).then(() => true, () => false);"),
+    );
     await evaluate("studio.player.seekFrame(15);");
     await page.getByRole("button", { name: "Add a note", exact: true }).click();
     const alone = (await layer.boundingBox())!;
@@ -1181,6 +1191,7 @@ export default function Scene() {
     expect(
       onComponent.component === "card.motion.tsx" &&
         !onComponent.timeline &&
+        onComponent.props?.word === "Hello" &&
         JSON.stringify(onComponent.targets) ===
           JSON.stringify([{ path: "card/title", site: "card.motion.tsx:6:9" }]),
       `a component takes notes on its elements: ${JSON.stringify(onComponent)}`,
@@ -1190,6 +1201,140 @@ export default function Scene() {
       evaluate('return studio.shadowRoot.querySelectorAll(".notes .note").length === 1;'),
     );
     expect(true, "the component's notes are listed apart from the timeline's");
+    // Opened again, a note on a component plays it with the props it was seen with.
+    await page.getByRole("tab", { name: "Properties", exact: true }).click();
+    await page.getByLabel("word", { exact: true }).fill("Hi");
+    await page.getByLabel("word", { exact: true }).press("Enter");
+    await page.getByRole("tab", { name: "Notes", exact: true }).click();
+    const listedNote = page.locator(".notes .note button.file").first();
+    if ((await listedNote.getAttribute("aria-expanded")) === "true") await listedNote.click();
+    await listedNote.click();
+    await page.getByRole("tab", { name: "Properties", exact: true }).click();
+    await until(
+      "the note's props",
+      async () => (await page.getByLabel("word", { exact: true }).inputValue()) === "Hello",
+    );
+    await Bun.sleep(300);
+    expect(
+      !(await page.getByRole("alert").filter({ hasText: "nothing is open" }).count()),
+      "a note on a component is shown with the props it was written on, and no error",
+    );
+
+    // Chosen one after the other, the note chosen last is the one shown.
+    await page.getByLabel("word", { exact: true }).fill("Hi");
+    await page.getByLabel("word", { exact: true }).press("Enter");
+    await evaluate("studio.player.seekFrame(45);");
+    await page.getByRole("button", { name: "Add a note", exact: true }).click();
+    await page.getByRole("textbox", { name: "Note", exact: true }).fill("plain");
+    await page.getByRole("button", { name: "Add note", exact: true }).click();
+    await page.getByRole("tab", { name: "Notes", exact: true }).click();
+    await until("both notes listed", () =>
+      evaluate('return studio.shadowRoot.querySelectorAll(".notes .note").length === 2;'),
+    );
+    const byText = (text: string) =>
+      page.locator(".notes .note button.file").filter({ hasText: text });
+    await byText("plain").click();
+    await byText("bolder title").click();
+    await byText("plain").click();
+    await Bun.sleep(1500);
+    await page.getByRole("tab", { name: "Properties", exact: true }).click();
+    expect(
+      (await evaluate("return studio.player.currentFrame;")) === 45 &&
+        (await page.getByLabel("word", { exact: true }).inputValue()) === "Hi",
+      "of notes chosen quickly, the last is the one the player shows",
+    );
+
+    // A note begun on one file is not added to another opened before it is.
+    await page.getByRole("tab", { name: "Files", exact: true }).click();
+    await openFile("picked.timeline.json", 320);
+    await page.getByRole("button", { name: "Add a note", exact: true }).click();
+    await page.getByRole("textbox", { name: "Note", exact: true }).fill("half written");
+    await openFile("cut.timeline.json", 320);
+    expect(
+      !(await page.getByRole("textbox", { name: "Note", exact: true }).count()),
+      "opening another file ends the note begun",
+    );
+
+    // A draft that does not play is no picture to note: the note waits, and nothing is saved.
+    await page.getByRole("tab", { name: "Code", exact: true }).click();
+    const code = page.getByRole("textbox", { name: "Source code" });
+    const written = await code.inputValue();
+    // It is added while the draft is still being checked, which is slow here.
+    await page.route("**/api/edit", async (route) => {
+      await Bun.sleep(1500);
+      await route.continue();
+    });
+    await code.fill("{");
+    await page.getByRole("button", { name: "Add a note", exact: true }).click();
+    await page.getByRole("textbox", { name: "Note", exact: true }).fill("broken");
+    await Bun.sleep(600);
+    await page.getByRole("button", { name: "Add note", exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "Fix the preview" }).waitFor();
+    const notesNow = await Bun.file(join(project, "reviews/notes.json")).json();
+    expect(
+      !notesNow.notes.some((n: { thread: { text: string }[] }) => n.thread[0].text === "broken") &&
+        (await Bun.file(cut).text()) === written &&
+        (await page.getByRole("textbox", { name: "Note", exact: true }).inputValue()) === "broken",
+      "a draft that fails to play adds no note and saves nothing, and the note is kept",
+    );
+    await page.unroute("**/api/edit");
+    await page.getByRole("button", { name: "Add a note", exact: true }).click();
+    await code.fill(written);
+
+    // A note is written against the sources as seen: an unsaved edit is saved first.
+    await code.fill((await code.inputValue()).replace("#2563ebff", "#ff0000ff"));
+    await until("the red draft", () =>
+      evaluate('return studio.drafts.includes("cut.timeline.json");'),
+    );
+    await page.getByRole("button", { name: "Add a note", exact: true }).click();
+    await page.getByRole("textbox", { name: "Note", exact: true }).fill("too red");
+    await page.getByRole("button", { name: "Add note", exact: true }).click();
+    const red = await until("the note on the draft", async () => {
+      const file = await Bun.file(join(project, "reviews/notes.json")).json();
+      return file.notes.find((n: { thread: { text: string }[] }) => n.thread[0].text === "too red");
+    });
+    const kept = await Bun.file(
+      join(project, ".valle/history", String(red.snapshot), "files/cut.timeline.json"),
+    ).text();
+    expect(
+      kept.includes("#ff0000ff") && !(await evaluate("return studio.drafts.length;")),
+      "a note saves the draft seen, and its snapshot keeps it",
+    );
+
+    // An edit from outside between the picture and the note's arrival is not noted on.
+    await page.route("**/api/notes", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      const later = await Bun.file(cut).text();
+      await Bun.write(cut, later.replace("#ff0000ff", "#00ff00ff"));
+      await route.continue();
+    });
+    await page.getByRole("button", { name: "Add a note", exact: true }).click();
+    await page.getByRole("textbox", { name: "Note", exact: true }).fill("raced");
+    await page.getByRole("button", { name: "Add note", exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "changed after the picture" }).waitFor();
+    await page.unroute("**/api/notes");
+    const raced = await Bun.file(join(project, "reviews/notes.json")).json();
+    expect(
+      !raced.notes.some((n: { thread: { text: string }[] }) => n.thread[0].text === "raced"),
+      "a note is refused where a file changed after its picture was drawn",
+    );
+    await page.getByRole("button", { name: "Add a note", exact: true }).click();
+
+    const pickedPath = join(project, "picked.timeline.json");
+    await page.getByRole("tab", { name: "Files", exact: true }).click();
+    await openFile("picked.timeline.json", 320);
+    // Where an edit outside moves its clip, Studio goes to the note where it is now.
+    const later = await Bun.file(pickedPath).json();
+    later.tracks.visual[1].clips[0].start = 1;
+    later.tracks.visual[1].clips[0].duration = 1;
+    await Bun.write(pickedPath, JSON.stringify(later, null, 2));
+    const listed3 = JSON.parse(run(["project", "-C", project, "notes", "show", "n3", "--json"]));
+    await until("the note's new place", async () => {
+      await evaluate(`${view}.querySelector('.note-mark[data-note="n3"]')?.click();`);
+      const time = await evaluate("return studio.player.currentTime;");
+      return Math.abs(time - listed3.now.start) < 1e-6;
+    });
+    expect(listed3.now.start === 1.5, "Studio goes to a note where its moved clip has it");
 
     // Standalone Studio does not have the renders/ directory created with a project.
     for (const kind of ["motion", "timeline"] as const) {

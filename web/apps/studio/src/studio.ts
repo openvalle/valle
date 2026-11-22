@@ -98,6 +98,16 @@ export class ValleStudio extends LitElement {
   player: Player | undefined;
   /** Draft sources and service URLs used by the current timeline preview. */
   #preview?: { entry: string; sources: Map<string, string>; reads: Set<string> };
+  /** The entry and drafts the preview last played without an error, as `#sources` says them. */
+  #shown: string | undefined;
+  /** Each file in the folder the player open read, by path, as it read it: its SHA-256, or
+   * the version of one read in parts. */
+  #fetched = new Map<string, string>();
+  /** Each choice of a note to look at, so one superseded is let go. */
+  #looking = 0;
+  /** The props asked of the player last, and the bindings of them, one after another. */
+  #asked: Record<string, unknown> | undefined;
+  #binding: Promise<unknown> = Promise.resolve();
   #error = "";
   layout: Layout | undefined;
   #selected: string | undefined;
@@ -139,11 +149,13 @@ export class ValleStudio extends LitElement {
   #toast = "";
   #fading: ReturnType<typeof setTimeout> | undefined;
   #ask: Ask | undefined;
-  /** A note being written on the frame shown, or over a span from it: the part of the picture
-   * it is about, if one is drawn, and where a drag of it began; the elements picked there, the
-   * one chosen, and the point clicked, which a click again goes beneath. */
+  /** A note being written on the frame shown, or over a span from it, of the file it was begun
+   * on: the part of the picture it is about, if one is drawn, and where a drag of it began; the
+   * elements picked there, the one chosen, and the point clicked, which a click again goes
+   * beneath. */
   #noting:
     | {
+        entry: string;
         region?: Region;
         from?: [number, number];
         span?: { start: number; end: number };
@@ -206,7 +218,10 @@ export class ValleStudio extends LitElement {
     clearTimeout(this.#reload);
     this.player?.pause();
     if (changed) {
+      // A note is on the file it was begun on.
+      if (this.#noting) this.#endNote();
       this.#values = {};
+      this.#asked = undefined;
       this.#exportJob = undefined;
       if (!entry.endsWith(".timeline.json") && this.#format === "wav") {
         this.#format = "mp4";
@@ -278,6 +293,11 @@ export class ValleStudio extends LitElement {
     return this.#entry.endsWith(".timeline.json");
   }
 
+  /** The entry open and the drafts, as one string to compare with what was shown. */
+  #sources(): string {
+    return JSON.stringify([this.#entry, this.text(this.#entry), [...this.#drafts].sort()]);
+  }
+
   /** Update a timeline in place when only its text changed. Other sources need a fresh player. */
   async #play({
     edit = false,
@@ -286,7 +306,10 @@ export class ValleStudio extends LitElement {
     playing = this.player?.playing ?? false,
   }: { edit?: boolean; layout?: Layout; time?: number; playing?: boolean } = {}): Promise<boolean> {
     clearTimeout(this.#reload);
+    this.#reload = undefined;
     const opening = ++this.#opening;
+    const seen = this.#sources();
+    this.#shown = undefined;
     const entry = this.#entry;
     const text = this.text(entry);
     const sources = new Map(this.#drafts);
@@ -317,6 +340,7 @@ export class ValleStudio extends LitElement {
         this.layout = layout;
         this.#time = this.#shownFrame = 0;
         this.#error = "";
+        this.#shown = seen;
         stage?.replaceChildren();
         await previous?.close();
         return opening === this.#opening;
@@ -326,9 +350,11 @@ export class ValleStudio extends LitElement {
         if (opening !== this.#opening) return false;
         this.layout = layout;
         this.#error = "";
+        this.#shown = seen;
         return true;
       }
       const canvas = document.createElement("canvas");
+      const fetched = new Map<string, string>();
       const files: Record<string, Blob> = {};
       for (const [path, source] of this.#drafts) files[path] = new Blob([source]);
       const reads = new Set<string>();
@@ -338,10 +364,16 @@ export class ValleStudio extends LitElement {
         entry,
         base: "/api/files/",
         fonts: "/api/fonts/",
-        fetch: (url, init) => {
+        fetch: async (url, init) => {
           const path = resourceAddress(url);
           reads.add(path);
-          return fetch(path, init);
+          const response = await fetch(path, init);
+          const version =
+            response.headers.get("x-valle-sha256") ?? response.headers.get("x-valle-version");
+          if (version && path.startsWith("/api/files/")) {
+            fetched.set(decodeURIComponent(path.slice("/api/files/".length)), version);
+          }
+          return response;
         },
         files,
         props: this.#values,
@@ -353,11 +385,13 @@ export class ValleStudio extends LitElement {
         return false;
       }
       this.player = player;
+      this.#fetched = fetched;
       this.layout = layout;
       this.#preview = layout ? { entry, sources, reads } : undefined;
       stage?.replaceChildren(canvas);
       this.#shownFrame = player.currentFrame;
       this.#error = "";
+      this.#shown = seen;
       player.on("time", ({ time, frame }) => {
         if (this.player !== player) return;
         this.#time = time;
@@ -368,6 +402,7 @@ export class ValleStudio extends LitElement {
       player.on("error", (error) => {
         if (this.player !== player) return;
         this.#error = error.message;
+        this.#shown = undefined;
         this.requestUpdate();
       });
       player.on("stats", (stats) => {
@@ -530,6 +565,8 @@ export class ValleStudio extends LitElement {
    * A file changed outside keeps its draft and is said to conflict. */
   async save(): Promise<void> {
     if (this.#editing) await this.#editing;
+    // Saved, what was shown is still what the sources say.
+    const shown = this.#shown !== undefined && this.#shown === this.#sources();
     const paths = [...this.#drafts.keys()].sort(
       (a, b) => Number(a === this.#entry) - Number(b === this.#entry),
     );
@@ -547,6 +584,7 @@ export class ValleStudio extends LitElement {
         this.#conflicts.add(path);
       }
     }
+    if (shown) this.#shown = this.#sources();
     this.#status = this.#conflicts.size ? "" : "saved";
     await this.#refresh();
   }
@@ -576,6 +614,8 @@ export class ValleStudio extends LitElement {
       } else if (this.#files.has(path)) {
         await this.#read(path);
         await this.#play({ edit: path === this.#entry });
+        // Where the notes are follows the clips they are on.
+        await this.#loadNotes();
       } else if (this.#preview?.reads.has(url)) {
         await this.#play();
       }
@@ -729,7 +769,7 @@ export class ValleStudio extends LitElement {
   /** Pauses on the frame shown, to write a note on it. */
   #startNote(): void {
     this.player?.pause();
-    this.#noting = {};
+    this.#noting = { entry: this.#entry };
     const stage = this.renderRoot.querySelector(".stage");
     if (stage) this.#resized.observe(stage);
     this.requestUpdate();
@@ -755,21 +795,54 @@ export class ValleStudio extends LitElement {
     return new DOMRect(box.x + (box.width - w) / 2, box.y + (box.height - h) / 2, w, h);
   }
 
-  /** Adds the note written on the frame shown, with the picture as seen, its region drawn on. */
+  /** Adds the note written on the frame shown, with the picture as seen, its region drawn on.
+   * The drafts are saved first, so the snapshot the note is written against is what was seen;
+   * what is not yet shown without an error, typed since or still being checked, is played
+   * first, and while it fails to play or a file conflicts, the note is kept to add once it is
+   * settled. */
   async #addNote(text: string): Promise<void> {
     const noting = this.#noting;
-    const player = this.player;
-    if (!noting || !player || noting.saving || !text.trim()) return;
+    if (!noting || !this.player || noting.saving || !text.trim()) return;
+    if (noting.entry !== this.#entry) return this.#endNote();
     noting.saving = true;
     this.requestUpdate();
     try {
-      const at = noting.span ?? { start: player.currentTime };
+      const at = noting.span ?? { start: this.player.currentTime };
+      const sources = this.#sources();
+      if (this.#shown !== sources) await this.#play({ edit: true, time: at.start });
+      // Replaying a draft of a component opens another player, of the same entry.
+      const player = this.player;
+      const shown = this.#shown === sources && this.#shown === this.#sources() && !this.#error;
+      if (!shown || !player || this.#noting !== noting || noting.entry !== this.#entry) {
+        noting.saving = false;
+        return this.#refuse("Fix the preview, then add the note: it is kept.");
+      }
+      const drafted = new Set(this.#drafts.keys());
+      await this.save();
+      if (this.#conflicts.size) {
+        noting.saving = false;
+        return this.#refuse("Settle the file conflict, then add the note: it is kept.");
+      }
+      // The files as the picture was drawn from them, which the note's snapshot must have.
+      const seen: Record<string, string> = Object.fromEntries(this.#fetched);
+      for (const [path, read] of this.#files) {
+        const used = path === noting.entry || path in seen || drafted.has(path);
+        if (read.sha256 && used) seen[path] = read.sha256;
+      }
       const hit = this.#chosen();
       const region = noting.region ?? (hit && this.#fraction(hit.bounds));
       const targets = hit && [{ clip: hit.clip, path: hit.path, site: hit.site }];
       const picture = await notePicture(await player.frame(at.start), region);
-      const on = this.timeline ? { timeline: this.#entry } : { component: this.#entry };
-      const note = await service.addNote({ ...on, at, region, targets, text }, picture);
+      // A file read again while the picture was drawn is not what it shows.
+      if (this.#shown !== this.#sources() || this.player !== player) {
+        noting.saving = false;
+        return this.#refuse("The sources changed: look again, then add the note: it is kept.");
+      }
+      // A component is seen with the props its preview plays it with.
+      const on = this.timeline
+        ? { timeline: noting.entry }
+        : { component: noting.entry, props: { ...this.#values } };
+      const note = await service.addNote({ ...on, at, region, targets, seen, text }, picture);
       this.#endNote();
       this.#status = `Added note ${note.id}`;
       this.#note = note.id;
@@ -990,10 +1063,36 @@ export class ValleStudio extends LitElement {
     this.#note = id;
     this.#rightTab = "notes";
     this.#inspectorVisible = true;
-    if (note.now) {
-      this.player?.pause();
-      this.player?.seek(note.now.start);
+    const player = this.player;
+    const looking = ++this.#looking;
+    player?.pause();
+    // Only the note chosen last moves the player.
+    const go = () => {
+      if (looking !== this.#looking || this.player !== player) return;
+      if (note.now) player?.seek(note.now.start);
+      this.requestUpdate();
+    };
+    // A component is shown with the props its note was written on, then sought: binding them
+    // opens the scene again, so it waits for those asked before.
+    const props = note.props ?? {};
+    const asked = this.#asked ?? this.#values;
+    if (
+      player &&
+      note.component === this.#entry &&
+      JSON.stringify(props) !== JSON.stringify(asked)
+    ) {
+      this.#asked = { ...props };
+      this.#binding = this.#binding
+        .catch(() => {})
+        .then(() => player.setProps(props))
+        .then(() => {
+          if (this.player === player) this.#values = { ...props };
+        });
+      this.#binding.catch(
+        (error: Error) => looking === this.#looking && this.#refuse(error.message),
+      );
     }
+    void this.#binding.then(go, go);
     this.requestUpdate();
   }
 
@@ -2706,6 +2805,7 @@ ${Array.from({ length: source.split("\n").length }, (_, i) => i + 1).join("\n")}
         .then(
           () => {
             this.#values = values;
+            this.#asked = undefined;
             this.#status = "";
           },
           (error: Error) => (this.#status = error.message),

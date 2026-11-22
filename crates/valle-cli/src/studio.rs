@@ -428,6 +428,7 @@ impl Service {
             Ok(response) => response,
             Err(e) => return Response::new(404, "text/plain", e.to_string()),
         };
+        let version = valle_project::version(full);
         let meta = std::fs::metadata(full).ok();
         self.watched
             .lock()
@@ -440,7 +441,10 @@ impl Service {
                 sha256: None,
                 hashed: false,
             });
-        response
+        match version {
+            Some(version) => response.header("x-valle-version", version),
+            None => response,
+        }
     }
 
     /// The file at `path` in the folder, whose changes are said from now on.
@@ -647,9 +651,13 @@ impl Service {
     /// picture seen as the body, if any.
     fn add_note(&self, request: &Request) -> Result<Value, String> {
         let project = self.project()?;
-        let given: Value = serde_json::from_str(request.query("note").ok_or("?note=")?)
-            .map_err(|e| e.to_string())?;
-        let new = crate::project::new_note(&given, &request.body)?;
+        // The note's JSON, a line of its own, then the picture's bytes: what it was drawn from
+        // can be more than an address holds.
+        let body = &request.body;
+        let line = body.iter().position(|&b| b == b'\n').unwrap_or(body.len());
+        let given: Value = serde_json::from_slice(&body[..line]).map_err(|e| e.to_string())?;
+        let image = body.get(line + 1..).unwrap_or_default();
+        let new = crate::project::new_note(&given, image)?;
         let note = project.add_note(new)?;
         let mut out = crate::project::placed(&project, &note);
         out["status"] = "ok".into();

@@ -81,6 +81,7 @@ export type Note = {
   at: { start: number; end?: number };
   region?: Region;
   targets?: Target[];
+  props?: Record<string, unknown>;
   image?: string;
   picture?: string;
   status: "open" | "resolved";
@@ -193,6 +194,9 @@ export const service = {
     note: {
       timeline?: string;
       component?: string;
+      props?: Record<string, unknown>;
+      /** The SHA-256 of the files the picture was drawn from, by path. */
+      seen?: Record<string, string>;
       at: Note["at"];
       region?: Region;
       targets?: Target[];
@@ -200,9 +204,10 @@ export const service = {
     },
     picture?: Blob,
   ) =>
-    json<Note>(`/api/notes?note=${encodeURIComponent(JSON.stringify(note))}`, {
+    // The note's JSON on a line of its own, then the picture's bytes.
+    json<Note>("/api/notes", {
       method: "POST",
-      body: picture ?? "",
+      body: new Blob([JSON.stringify(note), "\n", picture ?? ""]),
     }),
 
   /** Replies to, resolves, reopens or deletes a note. */
