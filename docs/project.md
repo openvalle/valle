@@ -135,7 +135,8 @@ it. Replies are by `user` unless `--by` says, and resolutions by `ai`.
 To work through the open notes: list them, look at each picture and read each note, find its
 clips with `valle timeline query --clip` or `--at`, make the change, render the frames it is
 at to look, then resolve it saying what was done. Ask with `reply` where a note is unclear,
-and leave it open.
+and leave it open. An agent proposes first, as a `reply` to each note, and changes what the
+reviewer confirms; a note reopened is read again from its whole thread.
 
 ## Render
 

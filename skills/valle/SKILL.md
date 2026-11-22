@@ -56,5 +56,11 @@ and `picture`, the frame they saw with the part outlined: look at it. Find the c
 cannot be done, `valle project notes reply ID "your question" --by ai` instead, and leave it
 open. Do not delete notes. `valle docs project --section notes` explains them.
 
+Unless the user asks you to change them straight away, propose first: for each open note,
+`valle project notes reply ID "what you would change" --by ai`, then stop and tell them the
+proposals are in Studio's Notes. Change what they confirm, in the thread or to you, and
+resolve it. A note reopened has been looked at and is not right yet: read its whole
+`thread`, what was proposed, done and said since, before you propose again.
+
 Report the files you made and how far you got: rendered and looked at, rendered only, checked
 only, or blocked with the message that blocked it.
