@@ -1,7 +1,9 @@
 //! Snapshots of a project's sources, numbered from 1 in `.valle/history/<n>/`: `snapshot.json`
 //! lists every source file with its SHA-256, and `files/` keeps the text ones as they were:
 //! `project.json`, the timelines, everything in `components/`, and the data and shaders in
-//! `media/`. Videos, sounds, images, fonts and models are only listed: a snapshot says whether
+//! `media/`, with each timeline a note is on and what it plays, and each component a timeline
+//! plays or a note is on and the modules it imports, wherever they are in the project.
+//! Videos, sounds, images, fonts and models are only listed: a snapshot says whether
 //! they changed, and restoring never writes them. A full render saves one and keeps its record
 //! beside it, in `renders.json`.
 
@@ -56,10 +58,57 @@ impl Project {
 
     /// Every source file now, by path.
     pub fn sources(&self) -> Result<Vec<Source>, Error> {
+        self.sources_with(&[])
+    }
+
+    /// The sources, with the timeline or component at each of `reviewed`, a path in the project,
+    /// and what it plays or imports, as those notes are on.
+    fn sources_with(&self, reviewed: &[String]) -> Result<Vec<Source>, Error> {
         let mut paths = vec![FILE.to_string()];
-        paths.extend(self.timelines());
+        let mut on = self.noted();
+        on.extend(reviewed.iter().cloned());
+        let (mut components, noted): (Vec<String>, Vec<String>) =
+            on.into_iter().partition(|p| p.ends_with(".motion.tsx"));
+        let mut timelines = self.timelines();
+        timelines.extend(noted.into_iter().filter(|p| self.root.join(p).is_file()));
+        timelines.sort();
+        timelines.dedup();
+        for rel in timelines.clone() {
+            if let Ok(doc) = self.document(&rel) {
+                let named = self
+                    .dependencies(&rel, &doc)
+                    .into_iter()
+                    .filter_map(|n| n.path);
+                timelines.extend(named.filter(|p| p.ends_with(".timeline.json")));
+            }
+        }
+        timelines.sort();
+        timelines.dedup();
+        paths.extend(timelines.iter().cloned());
         for dir in ["components", "media"] {
             walk(&self.root, dir, &mut paths);
+        }
+        for rel in &timelines {
+            let Ok(doc) = self.document(rel) else {
+                continue;
+            };
+            let named = self.dependencies(rel, &doc).into_iter();
+            components.extend(named.filter_map(|n| n.path.filter(|p| p.ends_with(".motion.tsx"))));
+        }
+        components.sort();
+        components.dedup();
+        for component in &components {
+            paths.extend(self.modules(component));
+        }
+        // What the timelines name in the project is listed, as a preview reads it.
+        for rel in &timelines {
+            if let Ok(doc) = self.document(rel) {
+                paths.extend(
+                    self.dependencies(rel, &doc)
+                        .into_iter()
+                        .filter_map(|n| n.path),
+                );
+            }
         }
         paths.sort();
         paths.dedup();
@@ -67,9 +116,14 @@ impl Project {
         let sources = (paths.into_iter())
             .filter(|p| self.root.join(p).is_file())
             .map(|path| {
-                let kept = !path.starts_with("media/") || {
-                    let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
-                    ext.is_some_and(|e| KEPT.contains(&e.as_str()))
+                let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+                let ext = ext.as_deref().unwrap_or("");
+                let text = KEPT.contains(&ext) || CODE.contains(&ext);
+                // Out of media/, a file is kept but a picture, a sound or a video a timeline names.
+                let kept = match path.split_once('/').map(|(dir, _)| dir) {
+                    Some("media") => KEPT.contains(&ext),
+                    Some("components") => true,
+                    _ => text || path == FILE || path.ends_with(".timeline.json"),
                 };
                 let sha256 = cache.of(&self.root, &path)?;
                 Ok(Source { path, sha256, kept })
@@ -123,8 +177,18 @@ impl Project {
     /// Saves the sources as a new snapshot, or gives the last one if none of them changed since:
     /// its number, and whether it is new.
     pub fn save(&self, message: Option<&str>, by: &str) -> Result<(u64, bool), Error> {
+        self.save_with(message, by, &[])
+    }
+
+    /// As `save`, keeping the component at each of `reviewed` too.
+    pub(crate) fn save_with(
+        &self,
+        message: Option<&str>,
+        by: &str,
+        reviewed: &[String],
+    ) -> Result<(u64, bool), Error> {
         let _lock = self.lock()?;
-        let files = self.sources()?;
+        let files = self.sources_with(reviewed)?;
         let history = self.history()?;
         if let Some(last) = history.last()
             && last.files == files
@@ -245,6 +309,32 @@ impl Project {
     }
 }
 
+impl Project {
+    /// The component at `path` in the project and the files it reads there: the modules it
+    /// imports, and its resources' defaults. One that does not compile is itself.
+    fn modules(&self, path: &str) -> Vec<String> {
+        let root = self.root.to_string_lossy().replace('\\', "/");
+        let read = |p: &str| fs::read_to_string(p).ok();
+        let Ok(files) = valle_engine::front::files(&format!("{root}/{path}"), &read) else {
+            return vec![path.to_string()];
+        };
+        (files.into_iter())
+            .filter_map(|f| self.relative(Path::new(&f)))
+            .collect()
+    }
+
+    /// Whether `version`, as `crate::version` gives it, is the version of `path` whose SHA-256
+    /// the cache of digests knows as `sha256`.
+    pub(crate) fn is_version(&self, path: &str, version: &str, sha256: &str) -> bool {
+        let cache = Digests::open(self);
+        (cache.known.get(path))
+            .is_some_and(|(len, time, sha)| sha == sha256 && format!("{len}:{time}") == version)
+    }
+}
+
+/// Extensions of the modules a component imports.
+const CODE: [&str; 8] = ["tsx", "ts", "jsx", "js", "mjs", "json", "css", "wgsl"];
+
 /// Milliseconds since 1970.
 pub fn now() -> u64 {
     let since = SystemTime::now().duration_since(UNIX_EPOCH);
@@ -272,7 +362,7 @@ pub(crate) fn walk(root: &Path, dir: &str, paths: &mut Vec<String>) {
 
 /// Whether a symbolic link, or something but a folder, is on the way to `path`, or `path` is
 /// there and not a file.
-fn linked(root: &Path, path: &str) -> bool {
+pub(crate) fn linked(root: &Path, path: &str) -> bool {
     let mut at = root.to_path_buf();
     let parts: Vec<&str> = path.split('/').collect();
     for (i, part) in parts.iter().enumerate() {

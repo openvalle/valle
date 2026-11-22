@@ -273,6 +273,19 @@ pub fn write(path: &Path, bytes: &[u8], replace: bool) -> Result<(), Error> {
     written.map_err(|e| format!("{}: {e}", shown()))
 }
 
+/// A file's version by its size and time of change, `len:nanoseconds`, as the snapshots' cache
+/// of digests knows it: what a video read in parts is known by, as reading all of it to digest
+/// it would be slow.
+pub fn version(path: &Path) -> Option<String> {
+    let meta = fs::metadata(path).ok()?;
+    let time = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    Some(format!("{}:{}", meta.len(), time.as_nanos()))
+}
+
 /// The SHA-256 of a file, in hex.
 pub fn digest(path: &Path) -> Result<String, Error> {
     let mut file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -649,6 +662,20 @@ mod tests {
         assert_eq!(shown["timelines"][0]["clips"], 1);
         assert_eq!(shown["timelines"][0]["canvas"]["fps"], "30000/1001");
         assert_eq!(shown["missing"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn a_snapshot_keeps_the_components_a_timeline_plays_wherever_they_are() {
+        let p = project("played", json!({ "title": "title.motion.tsx" }));
+        put(
+            &p.root.join("title.motion.tsx"),
+            "import { K } from './lib/k';\nexport default function Title() { return <View />; }",
+        );
+        put(&p.root.join("lib/k.ts"), "export const K = 1;\n");
+        let (n, _) = p.save(None, "save").expect("saved");
+        let kept = p.root.join(format!(".valle/history/{n}/files"));
+        assert!(kept.join("title.motion.tsx").is_file());
+        assert!(kept.join("lib/k.ts").is_file());
     }
 
     #[test]

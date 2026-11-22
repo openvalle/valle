@@ -65,7 +65,9 @@ valle project restore 2
 ```
 
 A snapshot, in `.valle/history/<n>/`, keeps the sources as they were: `project.json`, the
-timelines, everything in `components/`, and the data and shaders in `media/`. Videos, sounds,
+timelines, each timeline a note is on, everything in `components/`, each component a timeline
+plays or a note is on and the modules it imports, wherever they are in the project, and the
+data and shaders in `media/`. Videos, sounds,
 images and fonts are only listed with their SHA-256, so a snapshot says whether they changed
 but does not keep them. `restore` puts a snapshot's sources back after saving what they
 replace as a new snapshot, so nothing is lost; files added since are kept, and media is never
@@ -94,9 +96,19 @@ valle project notes delete n3
 names a clip the note is about and how far into it; it can be given more than once. Without
 `--clip`, the note is about the clips shown at `--at`, the one on top first: captions, then
 the picture's clips from the top track down, then, for a note on no part of the picture, the
-sound. A caption's `targets` entry has the timed `run` shown then, from 0. A note moves with
-the first of its clips that is still there, and is listed as `gone` once every one of them
-is deleted or trimmed past that point; a note on no clip stays where it was written. In JSON,
+sound. A caption's `targets` entry has the timed `run` shown then, from 0, and a clip that
+plays a source, a video, a sound, a nested timeline or a Motion component, has `source`, the
+seconds of it shown then, and `sourceEnd` at the end of a span within the clip; a span over
+a cut keeps its length past the clip's end, and one whose end is trimmed off ends with the
+clip. A note moves with the first
+of its clips that is still there, following its `source` through trims and changes of speed;
+where the clip shows that moment more than once, as when held or played back, it stays at
+the one nearest where it was written. It is listed as `gone` once every one of its clips is
+deleted or trimmed past that point; a note on no clip stays where it was written. A note on
+a component has the `props` its preview was played with, if any, and Studio plays it with
+them when the note is opened. Studio sends each file its picture was drawn from, by its
+SHA-256 or, for a video or sound it read in parts, its size and time of change, and a note is
+refused where one of them changed or went meanwhile, as when an agent edited it. In JSON,
 each note has `now`, where it is in the timeline as it is now, and `picture`, its picture as
 a path in the project.
 

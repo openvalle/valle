@@ -7,10 +7,11 @@
 use std::fs;
 
 use serde_json::{Map, Value, json};
+use valle_timeline::query::source_at;
 use valle_timeline::time::Tick;
-use valle_timeline::{Content, Document, Kind};
+use valle_timeline::{Clip, Content, Document, Kind, SourceTime};
 
-use crate::history::now;
+use crate::history::{linked, now};
 use crate::{Error, Project, inside, pretty, write};
 
 /// Where the notes are, in the project.
@@ -31,6 +32,8 @@ pub struct Note {
     pub region: Option<Region>,
     /// What it is about, as far as was found.
     pub targets: Vec<Target>,
+    /// On a component, the props its preview was played with but its defaults.
+    pub props: Option<Map<String, Value>>,
     /// The picture seen, a path in `reviews/`.
     pub image: Option<String>,
     /// The snapshot that resolved it, while it is resolved.
@@ -55,6 +58,11 @@ pub struct Region {
 pub struct Target {
     pub clip: Option<String>,
     pub offset: Option<f64>,
+    /// Seconds of what the clip plays, a video, a sound, a timeline or a scene, then: the note
+    /// follows the picture there through trims and changes of speed.
+    pub source: Option<f64>,
+    /// For a note over a span, the seconds of the source it plays at the span's end.
+    pub source_end: Option<f64>,
     pub run: Option<u64>,
     pub path: Option<String>,
     pub site: Option<String>,
@@ -81,6 +89,12 @@ pub struct NewNote {
     /// What it is about; on a timeline, the clips shown at `start` after those given, as
     /// `targets` finds them.
     pub targets: Vec<Target>,
+    /// On a component, the props its preview was played with but its defaults.
+    pub props: Option<Map<String, Value>>,
+    /// The files the picture was drawn from, by path in the project, each by its SHA-256 or,
+    /// read in parts, its version as `crate::version` gives it: the note is refused where its
+    /// snapshot has another or none, as when a file changed or went after it was seen.
+    pub seen: Vec<(String, String)>,
     pub image: Option<Vec<u8>>,
     pub by: String,
     pub text: String,
@@ -117,6 +131,9 @@ impl Note {
             let targets: Vec<Value> = self.targets.iter().map(Target::to_json).collect();
             note["targets"] = json!(targets);
         }
+        if let Some(props) = &self.props {
+            note["props"] = json!(props);
+        }
         if let Some(image) = &self.image {
             note["image"] = json!(image);
         }
@@ -134,11 +151,22 @@ impl Note {
     /// What a note may not be, wherever it came from.
     fn check(&self, at: &str) -> Result<(), Error> {
         let bad = |field: &str, what: &str| Err(format!("{at}.{field}: {what}"));
+        // As add_note numbers them: its picture is named by it.
+        let number = (self.id.strip_prefix('n')).and_then(|n| n.parse::<u64>().ok());
+        if !number.is_some_and(|n| n > 0 && format!("n{n}") == self.id) {
+            return bad("id", "n and the note's number, from 1");
+        }
         let component = self.on_component();
         if !(component || self.file.ends_with(".timeline.json")) || inside(&self.file).is_none() {
             return bad(
                 if component { "component" } else { "timeline" },
                 "a timeline's path in the project, or a *.motion.tsx component's",
+            );
+        }
+        if self.props.is_some() && !component {
+            return bad(
+                "props",
+                "a component's, which a timeline's clips give their own",
             );
         }
         if self.snapshot == 0 || self.resolved_in == Some(0) {
@@ -189,10 +217,15 @@ impl Note {
                 return bad(&format!("targets[{i}]"), "path and site are not empty");
             }
         }
+        // Its own picture only: deleting the note deletes it.
         if let Some(image) = &self.image
-            && !image.starts_with("crops/")
+            && !(image.strip_prefix(&format!("crops/{}.", self.id)))
+                .is_some_and(|ext| ["png", "jpg", "webp"].contains(&ext))
         {
-            return bad("image", "a picture's path in reviews/crops/");
+            return bad(
+                "image",
+                &format!("its picture, crops/{}.png, .jpg or .webp", self.id),
+            );
         }
         if self.thread.is_empty() {
             return bad("thread", "the note itself first");
@@ -223,16 +256,102 @@ impl Note {
         let clips = || doc.tracks.iter().flat_map(|t| &t.clips);
         self.targets.iter().find_map(|t| {
             let clip = clips().find(|c| Some(&c.id) == t.clip.as_ref())?;
-            let Some(offset) = t.offset else {
-                return Some((self.start, self.end));
+            let duration = clip.duration.seconds();
+            let span = self.end.map(|end| end - self.start);
+            let (written, playing) = (t.offset.unwrap_or(0.0), plays(clip));
+            // A clip shows its last moment just before its end.
+            let offset = match (t.source.filter(|_| playing), t.offset) {
+                (Some(source), _) => clip_time(clip, source, written, [-1e-6, duration - 1e-6])?,
+                (None, Some(offset)) if offset < duration - 1e-6 => offset,
+                (None, Some(_)) => return None,
+                (None, None) => return Some((self.start, self.end)),
             };
-            if offset > clip.duration.seconds() + 1e-6 {
-                return None;
-            }
-            let start = clip.start.seconds() + offset;
-            Some((start, self.end.map(|end| end - self.start + start)))
+            // A span past the clip's end, over a cut, keeps its length past it.
+            let end = span.and_then(|span| {
+                let near = written + span;
+                // An end in the clip that a trim took off is at the clip's end.
+                let end = match t.source_end.filter(|_| playing) {
+                    Some(source) => (clip_time(clip, source, near, [1e-6, duration + 1e-6]))
+                        .map_or(duration, |end| end.min(duration)),
+                    None => offset + span,
+                };
+                (end > offset + 1e-6).then_some(end)
+            });
+            let start = clip.start.seconds();
+            Some((start + offset, end.map(|end| start + end)))
         })
     }
+}
+
+/// Whether `clip` plays a source of its own, whose time its trim and speed say.
+fn plays(clip: &Clip) -> bool {
+    matches!(
+        clip.content,
+        Content::Video { .. }
+            | Content::Audio { .. }
+            | Content::Timeline { .. }
+            | Content::Motion(_)
+    )
+}
+
+/// The seconds into `clip`, within `[from, to]`, at which it plays `source` seconds of its
+/// source, the nearest to `near` where it plays them more than once, as a time map going back or
+/// held does; none where it does not play them.
+fn clip_time(clip: &Clip, source: f64, near: f64, [lo, hi]: [f64; 2]) -> Option<f64> {
+    let same = |y: f64| (y - source).abs() < 1e-6;
+    // The spans of the clip's time that play it: a moment, or a while where it is held.
+    let mut spans = Vec::new();
+    match &clip.source.time {
+        SourceTime::Linear { trim, rate } => {
+            let rate = rate.as_f64();
+            if rate != 0.0 {
+                let x = (source - trim.seconds()) / rate;
+                spans.push((x, x));
+            }
+        }
+        SourceTime::Map(points) => {
+            let points: Vec<(f64, f64)> = (points.iter())
+                .map(|(x, y)| (x.seconds(), y.seconds()))
+                .collect();
+            let (first, last) = (points[0], points[points.len() - 1]);
+            // It holds its ends past them.
+            if same(first.1) {
+                spans.push((f64::NEG_INFINITY, first.0));
+            }
+            for w in points.windows(2) {
+                let [(x0, y0), (x1, y1)] = [w[0], w[1]];
+                if same(y0) && same(y1) {
+                    spans.push((x0, x1));
+                } else if y0.min(y1) - 1e-6 <= source && source <= y0.max(y1) + 1e-6 {
+                    let x = x0 + (source - y0) * (x1 - x0) / (y1 - y0);
+                    spans.push((x, x));
+                }
+            }
+            if same(last.1) {
+                spans.push((last.0, f64::INFINITY));
+            }
+        }
+    }
+    (spans.into_iter())
+        .map(|(from, to)| (from.max(lo), to.min(hi)))
+        .filter(|(from, to)| from <= to)
+        .map(|(from, to)| near.clamp(from, to).max(0.0))
+        .min_by(|a, b| (a - near).abs().total_cmp(&(b - near).abs()))
+}
+
+/// The seconds of its source that `t`'s clip in `doc` plays `seconds` into it, if it plays one
+/// and is still playing then.
+fn source_of(doc: &Document, t: &Target, seconds: f64) -> Option<f64> {
+    let clip =
+        (doc.tracks.iter().flat_map(|t| &t.clips)).find(|c| Some(&c.id) == t.clip.as_ref())?;
+    let into = Tick::from_seconds(seconds).ok()?;
+    let within = seconds <= clip.duration.seconds() + 1e-6;
+    (plays(clip) && within).then(|| round(source_at(&clip.source.time, into).seconds()))
+}
+
+/// Seconds rounded as notes keep them.
+fn round(seconds: f64) -> f64 {
+    (seconds * 1e6).round() / 1e6
 }
 
 /// The clips of `doc` shown at `seconds`, the one drawn on top first: captions over the picture,
@@ -266,7 +385,9 @@ pub fn targets(doc: &Document, seconds: f64, heard: bool) -> Vec<Target> {
             };
             Target {
                 clip: Some(c.id.clone()),
-                offset: Some((into.seconds() * 1e6).round() / 1e6),
+                offset: Some(round(into.seconds())),
+                source: None,
+                source_end: None,
                 run,
                 path: None,
                 site: None,
@@ -302,6 +423,12 @@ impl Target {
         }
         if let Some(offset) = self.offset {
             t["offset"] = json!(offset);
+        }
+        if let Some(source) = self.source {
+            t["source"] = json!(source);
+        }
+        if let Some(end) = self.source_end {
+            t["sourceEnd"] = json!(end);
         }
         if let Some(run) = self.run {
             t["run"] = json!(run);
@@ -348,19 +475,52 @@ impl Project {
         };
         let found = match on.ends_with(".motion.tsx") {
             true => new.targets,
-            false => {
-                // A timeline that does not read yet is still noted on, where it was.
-                let shown = (self.document(&on).ok())
-                    .map(|doc| targets(&doc, new.start, new.region.is_none()))
-                    .unwrap_or_default();
-                with_shown(new.targets, shown)
-            }
+            // A timeline that does not read yet is still noted on, where it was.
+            false => match self.document(&on) {
+                Ok(doc) => {
+                    let shown = targets(&doc, new.start, new.region.is_none());
+                    let mut found = with_shown(new.targets, shown);
+                    for t in &mut found {
+                        let Some(offset) = t.offset else { continue };
+                        t.source = t.source.or_else(|| source_of(&doc, t, offset));
+                        if let Some(end) = new.end {
+                            let to = offset + end - new.start;
+                            t.source_end = t.source_end.or_else(|| source_of(&doc, t, to));
+                        }
+                    }
+                    found
+                }
+                Err(_) => new.targets,
+            },
         };
         let kind = match &new.image {
             Some(bytes) => Some(picture(bytes)?),
             None => None,
         };
-        let (snapshot, _) = self.save(None, "note")?;
+        // What it is on is kept, wherever it is, as all a note is on.
+        let (snapshot, _) = self.save_with(None, "note", std::slice::from_ref(&on))?;
+        let kept = self.snapshot(snapshot)?.files;
+        for (path, seen) in &new.seen {
+            let again = "look at it again, then add the note";
+            let at = self.root.join(path);
+            let same = match kept.iter().find(|f| &f.path == path) {
+                Some(f) if seen.contains(':') => self.is_version(path, seen, &f.sha256),
+                Some(f) => &f.sha256 == seen,
+                // Read but no source, it is checked where it is.
+                None if !at.is_file() => {
+                    return Err(format!(
+                        "{path} is gone since the picture was drawn: {again}"
+                    ));
+                }
+                None if seen.contains(':') => crate::version(&at).as_ref() == Some(seen),
+                None => crate::digest(&at).ok().as_ref() == Some(seen),
+            };
+            if !same {
+                return Err(format!(
+                    "{path} changed after the picture was drawn: {again}"
+                ));
+            }
+        }
         let _lock = self.lock()?;
         let mut file = self.read_notes()?;
         let id = format!("n{}", file.next);
@@ -373,6 +533,7 @@ impl Project {
             end: new.end,
             region: new.region,
             targets: found,
+            props: new.props.filter(|p| !p.is_empty()),
             resolved_in: None,
             thread: vec![Message {
                 by: new.by,
@@ -382,6 +543,10 @@ impl Project {
             }],
         };
         note.check("the note")?;
+        let image_at = note.image.as_ref().map(|p| format!("reviews/{p}"));
+        if let Some(path) = &image_at {
+            self.unlinked(path)?;
+        }
         let image = note
             .image
             .as_ref()
@@ -435,7 +600,10 @@ impl Project {
             .ok_or_else(|| format!("no note {id}: valle project notes lists them"))?;
         let note = file.notes.remove(i);
         self.write_notes(&file)?;
-        if let Some(image) = note.image {
+        // As read, its picture is its own: check allows no other, and none through a link.
+        if let Some(image) = note.image
+            && self.unlinked(&format!("reviews/{image}")).is_ok()
+        {
             let _ = fs::remove_file(self.root.join("reviews").join(image));
         }
         Ok(())
@@ -472,6 +640,27 @@ impl Project {
         Ok(note)
     }
 
+    /// `path` in the project if no symbolic link is on the way to it, which would take a write or
+    /// a delete out of `reviews/`.
+    fn unlinked(&self, path: &str) -> Result<(), Error> {
+        match linked(&self.root, path) {
+            true => Err(format!(
+                "{path}: a symbolic link is on the way to it, or it is not a file"
+            )),
+            false => Ok(()),
+        }
+    }
+
+    /// The timelines and components notes are on, as the file has them; none where it does not
+    /// read.
+    pub(crate) fn noted(&self) -> Vec<String> {
+        let notes = self.read_notes().map(|f| f.notes).unwrap_or_default();
+        let mut on: Vec<String> = notes.into_iter().map(|n| n.file).collect();
+        on.sort();
+        on.dedup();
+        on
+    }
+
     fn read_notes(&self) -> Result<Notes, Error> {
         let path = self.root.join(FILE);
         let text = match fs::read_to_string(&path) {
@@ -489,6 +678,7 @@ impl Project {
     }
 
     fn write_notes(&self, file: &Notes) -> Result<(), Error> {
+        self.unlinked(FILE)?;
         let notes: Vec<Value> = file.notes.iter().map(Note::to_json).collect();
         let root = json!({ "next": file.next, "notes": notes });
         write(&self.root.join(FILE), &pretty(&root), true)
@@ -547,7 +737,7 @@ fn parse(root: &Value) -> Result<Notes, Error> {
 }
 
 fn parse_note(v: &Value, at: &str) -> Result<Note, Error> {
-    const FIELDS: [&str; 11] = [
+    const FIELDS: [&str; 12] = [
         "id",
         "timeline",
         "component",
@@ -555,6 +745,7 @@ fn parse_note(v: &Value, at: &str) -> Result<Note, Error> {
         "at",
         "region",
         "targets",
+        "props",
         "image",
         "status",
         "resolvedIn",
@@ -648,6 +839,12 @@ fn parse_note(v: &Value, at: &str) -> Result<Note, Error> {
             .transpose()?,
         region,
         targets,
+        props: match o.get("props") {
+            None => None,
+            Some(v) => Some(
+                (v.as_object().cloned()).ok_or_else(|| format!("{}: an object", field("props")))?,
+            ),
+        },
         image: (o.get("image"))
             .map(|v| string(v, &field("image")))
             .transpose()?,
@@ -657,13 +854,31 @@ fn parse_note(v: &Value, at: &str) -> Result<Note, Error> {
 }
 
 fn parse_target(v: &Value, at: &str) -> Result<Target, Error> {
-    let o = object(v, at, &["clip", "offset", "run", "path", "site"])?;
+    let o = object(
+        v,
+        at,
+        &[
+            "clip",
+            "offset",
+            "source",
+            "sourceEnd",
+            "run",
+            "path",
+            "site",
+        ],
+    )?;
     let field = |k: &str| format!("{at}.{k}");
     let text = |k: &str| o.get(k).map(|v| string(v, &field(k))).transpose();
     Ok(Target {
         clip: text("clip")?,
         offset: (o.get("offset"))
             .map(|v| number(v, &field("offset")))
+            .transpose()?,
+        source: (o.get("source"))
+            .map(|v| number(v, &field("source")))
+            .transpose()?,
+        source_end: (o.get("sourceEnd"))
+            .map(|v| number(v, &field("sourceEnd")))
             .transpose()?,
         run: o.get("run").map(|v| count(v, &field("run"))).transpose()?,
         path: text("path")?,
@@ -720,6 +935,8 @@ mod tests {
             end: None,
             region: None,
             targets: Vec::new(),
+            props: None,
+            seen: Vec::new(),
             image: None,
             by: "user".into(),
             text: text.into(),
@@ -741,6 +958,8 @@ mod tests {
                 targets: vec![Target {
                     clip: Some("intro".into()),
                     offset: Some(0.5),
+                    source: None,
+                    source_end: None,
                     run: None,
                     path: Some("card/title".into()),
                     site: Some("components/title.motion.tsx:4:7".into()),
@@ -833,6 +1052,8 @@ mod tests {
         let target = |clip: &str, offset: f64| Target {
             clip: Some(clip.into()),
             offset: Some(offset),
+            source: None,
+            source_end: None,
             run: None,
             path: None,
             site: None,
@@ -851,6 +1072,180 @@ mod tests {
         assert_eq!(note.now(&doc(2.0, 0.5)), None);
         let lone = p.add_note(new("all of it")).unwrap();
         assert_eq!(lone.now(&doc(9.0, 1.0)), Some((1.5, None)));
+    }
+
+    #[test]
+    fn a_note_on_footage_follows_its_picture_through_trims_and_speed() {
+        let p = project("footage");
+        let timeline = |trim: f64, rate: f64, duration: f64| {
+            json!({
+                "canvas": { "width": 640, "height": 360, "fps": 30 },
+                "tracks": { "visual": [{ "clips": [{ "id": "shot", "kind": "video", "src": "x.mp4",
+                    "start": 0, "duration": duration, "trimStart": trim, "rate": rate }] }] }
+            })
+        };
+        let doc =
+            |t: serde_json::Value| valle_timeline::Document::read_edit(&t).expect("a timeline");
+        fs::write(p.root.join(&p.timeline), pretty(&timeline(0.0, 1.0, 8.0))).unwrap();
+        let at = |start: f64| {
+            p.add_note(NewNote {
+                start,
+                ..new("here")
+            })
+            .unwrap()
+        };
+        let (first, second) = (at(1.0), at(3.0));
+        assert_eq!(second.targets[0].source, Some(3.0));
+        // The first 2 s trimmed off: what was at 3 s is at 1 s, and what was at 1 s is gone.
+        let trimmed = doc(timeline(2.0, 1.0, 6.0));
+        assert_eq!(first.now(&trimmed), None);
+        assert_eq!(second.now(&trimmed), Some((1.0, None)));
+        // Played twice as fast from the start, 3 s of it is at 1.5 s.
+        assert_eq!(second.now(&doc(timeline(0.0, 2.0, 4.0))), Some((1.5, None)));
+        // Cut at 4 s, the clip no longer shows what was at 4 s.
+        let fourth = at(4.0);
+        assert_eq!(fourth.now(&doc(timeline(0.0, 1.0, 4.0))), None);
+        // Over a span, both ends follow: 2 to 4 s of it, twice as fast, is 1 to 2 s.
+        let span = p
+            .add_note(NewNote {
+                start: 2.0,
+                end: Some(4.0),
+                ..new("over")
+            })
+            .unwrap();
+        assert_eq!(span.targets[0].source_end, Some(4.0));
+        assert_eq!(
+            span.now(&doc(timeline(0.0, 2.0, 4.0))),
+            Some((1.0, Some(2.0)))
+        );
+        // Its end trimmed off, a span ends with the clip.
+        assert_eq!(
+            span.now(&doc(timeline(0.0, 1.0, 3.0))),
+            Some((2.0, Some(3.0)))
+        );
+        // Played forth then back, or held, a moment is shown more than once: the note stays at
+        // the one it was written on.
+        let mapped = |map: serde_json::Value| {
+            doc(json!({
+                "canvas": { "width": 640, "height": 360, "fps": 30 },
+                "tracks": { "visual": [{ "clips": [{ "id": "shot", "kind": "video", "src": "x.mp4",
+                    "start": 0, "duration": 8, "timeMap": map }] }] }
+            }))
+        };
+        for map in [
+            json!([[0, 0], [4, 4], [8, 0]]),
+            json!([[0, 0], [2, 2], [6, 2], [8, 4]]),
+        ] {
+            fs::write(
+                p.root.join(&p.timeline),
+                pretty(&json!({
+                    "canvas": { "width": 640, "height": 360, "fps": 30 },
+                    "tracks": { "visual": [{ "clips": [{ "id": "shot", "kind": "video",
+                        "src": "x.mp4", "start": 0, "duration": 8, "timeMap": map }] }] }
+                })),
+            )
+            .unwrap();
+            let late = at(if map[1][0] == 4 { 6.0 } else { 4.0 });
+            assert_eq!(
+                late.now(&mapped(map.clone())),
+                Some((late.start, None)),
+                "{map}"
+            );
+        }
+        // A span over a cut, from one clip into the next, keeps its end there.
+        fs::write(
+            p.root.join(&p.timeline),
+            pretty(&json!({
+                "canvas": { "width": 640, "height": 360, "fps": 30 },
+                "tracks": { "visual": [{ "clips": [
+                    { "id": "a", "kind": "video", "src": "x.mp4", "start": 0, "duration": 2 },
+                    { "id": "b", "kind": "video", "src": "x.mp4", "start": 2, "duration": 2 }
+                ] }] }
+            })),
+        )
+        .unwrap();
+        let cut = p
+            .add_note(NewNote {
+                start: 1.0,
+                end: Some(3.0),
+                ..new("the cut")
+            })
+            .unwrap();
+        let now = p.document(&p.timeline).unwrap();
+        assert_eq!(cut.targets[0].source_end, None);
+        assert_eq!(cut.now(&now), Some((1.0, Some(3.0))));
+        // A solid plays no source: its note keeps the offset.
+        let solid = json!({ "canvas": { "width": 640, "height": 360, "fps": 30 },
+            "tracks": { "visual": [{ "clips": [{ "id": "shot", "kind": "solid", "color": "#000000ff",
+                "start": 1, "duration": 8 }] }] } });
+        assert_eq!(second.now(&doc(solid)), Some((4.0, None)));
+    }
+
+    #[test]
+    fn a_note_keeps_the_timeline_it_is_on_and_the_sources_seen() {
+        let p = project("seen");
+        let other = "cut-v2.timeline.json";
+        let text = json!({ "canvas": { "width": 640, "height": 360, "fps": 30 }, "tracks": {} });
+        fs::write(p.root.join(other), pretty(&text)).unwrap();
+        let note = p
+            .add_note(NewNote {
+                file: other.into(),
+                ..new("on the other cut")
+            })
+            .unwrap();
+        let kept = p
+            .root
+            .join(format!(".valle/history/{}/files", note.snapshot));
+        assert!(kept.join(other).is_file());
+        // A file seen one way and changed since is not noted on.
+        let sha = crate::digest(&p.root.join(other)).unwrap();
+        let changed = json!({ "canvas": text["canvas"], "tracks": { "visual": [] } });
+        fs::write(p.root.join(other), pretty(&changed)).unwrap();
+        let err = p
+            .add_note(NewNote {
+                file: other.into(),
+                seen: vec![(other.into(), sha)],
+                ..new("seen before")
+            })
+            .unwrap_err();
+        assert!(err.contains("changed after the picture"), "{err}");
+        assert_eq!(p.notes().unwrap().len(), 1);
+        let now = crate::digest(&p.root.join(other)).unwrap();
+        p.add_note(NewNote {
+            file: other.into(),
+            seen: vec![(other.into(), now)],
+            ..new("seen as it is")
+        })
+        .unwrap();
+        // A module read and moved since is gone from the note's snapshot.
+        fs::write(p.root.join("theme.ts"), "export const T = 1;\n").unwrap();
+        let theme = crate::digest(&p.root.join("theme.ts")).unwrap();
+        fs::rename(p.root.join("theme.ts"), p.root.join("theme-old.ts")).unwrap();
+        let err = p
+            .add_note(NewNote {
+                file: other.into(),
+                seen: vec![("theme.ts".into(), theme)],
+                ..new("moved")
+            })
+            .unwrap_err();
+        assert!(err.contains("theme.ts is gone"), "{err}");
+        // A video read in parts is known by its version, and replaced it is another.
+        let footage = json!({ "canvas": text["canvas"], "resources": { "shot": "media/shot.mp4" },
+            "tracks": { "visual": [{ "clips": [{ "id": "s", "src": "shot", "start": 0, "duration": 1 }] }] } });
+        fs::write(p.root.join(other), pretty(&footage)).unwrap();
+        fs::write(p.root.join("media/shot.mp4"), "blue").unwrap();
+        let blue = crate::version(&p.root.join("media/shot.mp4")).unwrap();
+        let on_video = |text: &str| {
+            p.add_note(NewNote {
+                file: other.into(),
+                seen: vec![("media/shot.mp4".into(), blue.clone())],
+                ..new(text)
+            })
+        };
+        on_video("blue").unwrap();
+        fs::write(p.root.join("media/shot.mp4"), "red, longer").unwrap();
+        let err = on_video("red").unwrap_err();
+        assert!(err.contains("media/shot.mp4 changed"), "{err}");
     }
 
     #[test]
@@ -898,6 +1293,8 @@ mod tests {
         let picked = Target {
             clip: Some("over".into()),
             offset: None,
+            source: None,
+            source_end: None,
             run: None,
             path: Some("card/title".into()),
             site: Some("scene.motion.tsx:6:9".into()),
@@ -926,24 +1323,43 @@ mod tests {
         let p = project("component");
         fs::write(
             p.root.join("title.motion.tsx"),
-            "export default () => <View />;",
+            "import { K } from './k';\nexport default function Title() { return <View />; }",
         )
         .unwrap();
+        fs::write(p.root.join("k.ts"), "export const K = 1;\n").unwrap();
         let element = Target {
             clip: None,
             offset: None,
+            source: None,
+            source_end: None,
             run: None,
             path: Some("card/title".into()),
             site: Some("title.motion.tsx:6:9".into()),
         };
+        let accent = json!({ "accent": "#ff0000" });
         let note = p
             .add_note(NewNote {
                 file: "title.motion.tsx".into(),
                 targets: vec![element.clone()],
+                props: accent.as_object().cloned(),
                 ..new("smaller")
             })
             .unwrap();
         assert_eq!(note.file, "title.motion.tsx");
+        // Out of components/, it is kept, with what it imports, and played as it was seen.
+        let kept = p
+            .root
+            .join(format!(".valle/history/{}/files", note.snapshot));
+        assert!(kept.join("title.motion.tsx").is_file() && kept.join("k.ts").is_file());
+        assert_eq!(note.to_json()["props"], accent);
+        // A later snapshot keeps it too, while a note is on it.
+        fs::write(p.root.join("k.ts"), "export const K = 2;\n").unwrap();
+        let (later, _) = p.save(None, "save").unwrap();
+        assert!(
+            p.root
+                .join(format!(".valle/history/{later}/files/k.ts"))
+                .is_file()
+        );
         assert_eq!(note.targets, std::slice::from_ref(&element));
         let saved = &fs::read_to_string(p.root.join(super::FILE)).unwrap();
         let saved: serde_json::Value = serde_json::from_str(saved).unwrap();
@@ -1028,6 +1444,48 @@ mod tests {
         let note = json!({ "id": "n1", "timeline": "main.timeline.json", "snapshot": 1,
             "at": { "start": 0 }, "status": "open",
             "thread": [{ "by": "user", "text": "x", "snapshot": 1 }] });
+        // Through a link out of reviews/, a picture is neither written nor deleted.
+        #[cfg(unix)]
+        {
+            let away = p.root.join("away");
+            fs::create_dir_all(&away).unwrap();
+            fs::write(away.join("n1.png"), "theirs").unwrap();
+            std::os::unix::fs::symlink(&away, p.root.join("reviews/crops")).unwrap();
+            let mut linked = note.clone();
+            linked["image"] = json!("crops/n1.png");
+            fs::write(
+                p.root.join(super::FILE),
+                json!({ "notes": [linked] }).to_string(),
+            )
+            .unwrap();
+            p.delete_note("n1").unwrap();
+            assert_eq!(fs::read_to_string(away.join("n1.png")).unwrap(), "theirs");
+            let png = b"\x89PNG\r\n\x1a\n".to_vec();
+            let err = p
+                .add_note(NewNote {
+                    image: Some(png),
+                    ..new("x")
+                })
+                .unwrap_err();
+            assert!(err.contains("symbolic link"), "{err}");
+            assert_eq!(fs::read_dir(&away).unwrap().count(), 1);
+            fs::remove_file(p.root.join("reviews/crops")).unwrap();
+        }
+        for image in ["crops/../../project.json", "crops/n2.png", "crops/n1.gif"] {
+            let mut stray = note.clone();
+            stray["image"] = json!(image);
+            assert!(
+                bad(json!({ "notes": [stray] })).contains("its picture"),
+                "{image}"
+            );
+        }
+        // Its picture is named by its id, so the id is a number as notes are given.
+        for id in ["../x", "n01", "n0", "x1"] {
+            let mut stray = note.clone();
+            stray["id"] = json!(id);
+            stray["image"] = json!(format!("crops/{id}.png"));
+            assert!(bad(json!({ "notes": [stray] })).contains(".id:"), "{id}");
+        }
         let mut odd = note.clone();
         odd["colour"] = json!("red");
         assert!(bad(json!({ "notes": [odd] })).contains("no field colour"));

@@ -491,6 +491,8 @@ fn notes(p: &Project, command: Option<NotesCommand>) -> Result<Value, Failure> {
             targets.extend(elements.into_iter().map(|path| Target {
                 clip: None,
                 offset: None,
+                source: None,
+                source_end: None,
                 run: None,
                 path: Some(path),
                 site: None,
@@ -508,6 +510,8 @@ fn notes(p: &Project, command: Option<NotesCommand>) -> Result<Value, Failure> {
                     end,
                     region,
                     targets,
+                    props: None,
+                    seen: Vec::new(),
                     image,
                     by,
                     text,
@@ -591,6 +595,8 @@ pub fn new_note(given: &Value, image: &[u8]) -> Result<NewNote, String> {
             Ok(Target {
                 clip: text(&t["clip"]),
                 offset: t["offset"].as_f64(),
+                source: t["source"].as_f64(),
+                source_end: t["sourceEnd"].as_f64(),
                 run: t["run"].as_u64(),
                 path: text(&t["path"]),
                 site: text(&t["site"]),
@@ -604,6 +610,10 @@ pub fn new_note(given: &Value, image: &[u8]) -> Result<NewNote, String> {
         end: given["at"]["end"].as_f64(),
         region,
         targets,
+        props: given["props"].as_object().cloned(),
+        seen: (given["seen"].as_object().into_iter().flatten())
+            .filter_map(|(path, sha)| Some((path.clone(), sha.as_str()?.to_string())))
+            .collect(),
         image: (!image.is_empty()).then(|| image.to_vec()),
         by: text(&given["by"]).unwrap_or_else(|| "user".into()),
         text: text(&given["text"]).ok_or("text: what to change")?,
@@ -670,6 +680,8 @@ fn parse_target(text: &str) -> Result<Target, Failure> {
     Ok(Target {
         clip: Some(clip.to_string()),
         offset,
+        source: None,
+        source_end: None,
         run: None,
         path: None,
         site: None,
