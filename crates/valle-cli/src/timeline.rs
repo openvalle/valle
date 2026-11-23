@@ -112,14 +112,13 @@ pub fn pick(
     };
     let mut named = valle_engine::pick::named(&hits);
     // Lines in the files beside the timeline, as its folder names them.
-    let dir = std::path::Path::new(&args.file)
-        .parent()
-        .map(|d| d.to_string_lossy() + "/");
+    let path = args.file.replace('\\', "/");
+    let dir = path.rfind('/').map(|end| &path[..=end]);
     for v in &mut named {
-        let (Some(dir), Some(site)) = (&dir, v["site"].as_str()) else {
+        let (Some(dir), Some(site)) = (dir, v["site"].as_str()) else {
             continue;
         };
-        if let Some(near) = site.strip_prefix(&**dir).filter(|_| dir != "/") {
+        if let Some(near) = site.strip_prefix(dir) {
             v["site"] = json!(near);
         }
     }
