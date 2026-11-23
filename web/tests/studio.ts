@@ -1336,6 +1336,31 @@ export const controls = { props: { word: string({ default: "Hi" }) } };
     });
     expect(listed3.now.start === 1.5, "Studio goes to a note where its moved clip has it");
 
+    // Keep the reviewer's words when scrubbing across a cut, but drop the old frame's pick.
+    await page.getByRole("button", { name: "Add a note", exact: true }).click();
+    const picture = (await layer.boundingBox())!;
+    await page.mouse.click(picture.x + picture.width * 0.2, picture.y + picture.height * 0.3);
+    await picked.getByText("card/title in a", { exact: true }).waitFor();
+    await page.getByRole("textbox", { name: "Note", exact: true }).fill("check the background");
+    await page.getByRole("slider", { name: "Preview frame" }).fill("15");
+    await until("the background frame", () =>
+      evaluate("return studio.player.currentFrame === 15;"),
+    );
+    await page.getByRole("button", { name: "Add note", exact: true }).click();
+    const onBackground = await until("the note after scrubbing", async () => {
+      const file = await Bun.file(join(project, "reviews/notes.json")).json();
+      return file.notes.find(
+        (n: { thread: { text: string }[] }) => n.thread[0].text === "check the background",
+      );
+    });
+    expect(
+      onBackground.at.start === 0.5 &&
+        !onBackground.region &&
+        onBackground.targets.length === 1 &&
+        onBackground.targets[0].clip === "bg",
+      "a note after scrubbing keeps its text and targets only the new frame",
+    );
+
     // Standalone Studio does not have the renders/ directory created with a project.
     for (const kind of ["motion", "timeline"] as const) {
       const folder = join(dir, kind);

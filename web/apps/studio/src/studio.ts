@@ -35,6 +35,16 @@ const TEXT = /\.(tsx?|json|css|txt|md|srt|vtt|lrc|csv|wgsl)$/;
 /** An edit undone and redone: a file's text before and after. */
 type Step = { path: string; before: string; after: string };
 
+/** The region and element picked on one preview frame. */
+type NoteSelection = {
+  frame: number;
+  region?: Region;
+  from?: [number, number];
+  hits?: Hit[];
+  chosen?: number;
+  point?: [number, number];
+};
+
 /** The longest side of the picture a note keeps. */
 const NOTE_PICTURE = 1280;
 
@@ -149,19 +159,12 @@ export class ValleStudio extends LitElement {
   #toast = "";
   #fading: ReturnType<typeof setTimeout> | undefined;
   #ask: Ask | undefined;
-  /** A note being written on the frame shown, or over a span from it, of the file it was begun
-   * on: the part of the picture it is about, if one is drawn, and where a drag of it began; the
-   * elements picked there, the one chosen, and the point clicked, which a click again goes
-   * beneath. */
+  /** A note being written on the file it was begun on, at a frame or over a span. */
   #noting:
     | {
         entry: string;
-        region?: Region;
-        from?: [number, number];
+        selection: NoteSelection;
         span?: { start: number; end: number };
-        hits?: Hit[];
-        chosen?: number;
-        point?: [number, number];
         saving?: boolean;
       }
     | undefined;
@@ -390,12 +393,16 @@ export class ValleStudio extends LitElement {
       this.#preview = layout ? { entry, sources, reads } : undefined;
       stage?.replaceChildren(canvas);
       this.#shownFrame = player.currentFrame;
+      if (this.#noting) this.#noting.selection = { frame: this.#shownFrame };
       this.#error = "";
       this.#shown = seen;
       player.on("time", ({ time, frame }) => {
         if (this.player !== player) return;
         this.#time = time;
         this.#shownFrame = frame;
+        if (this.#noting && this.#noting.selection.frame !== frame) {
+          this.#noting.selection = { frame };
+        }
         this.#finishScrub();
         this.requestUpdate();
       });
@@ -768,8 +775,9 @@ export class ValleStudio extends LitElement {
 
   /** Pauses on the frame shown, to write a note on it. */
   #startNote(): void {
-    this.player?.pause();
-    this.#noting = { entry: this.#entry };
+    if (!this.player) return;
+    this.player.pause();
+    this.#noting = { entry: this.#entry, selection: { frame: this.player.currentFrame } };
     const stage = this.renderRoot.querySelector(".stage");
     if (stage) this.#resized.observe(stage);
     this.requestUpdate();
@@ -808,6 +816,8 @@ export class ValleStudio extends LitElement {
     this.requestUpdate();
     try {
       const at = noting.span ?? { start: this.player.currentTime };
+      const selection = noting.selection;
+      const frame = Math.min(this.player.info.frames - 1, Math.floor(at.start * this.#rate + 1e-9));
       const sources = this.#sources();
       if (this.#shown !== sources) await this.#play({ edit: true, time: at.start });
       // Replaying a draft of a component opens another player, of the same entry.
@@ -829,8 +839,10 @@ export class ValleStudio extends LitElement {
         const used = path === noting.entry || path in seen || drafted.has(path);
         if (read.sha256 && used) seen[path] = read.sha256;
       }
-      const hit = this.#chosen();
-      const region = noting.region ?? (hit && this.#fraction(hit.bounds));
+      const mark =
+        selection === noting.selection && selection.frame === frame ? selection : undefined;
+      const hit = this.#chosen(mark);
+      const region = mark?.region ?? (hit && this.#fraction(hit.bounds));
       const targets = hit && [{ clip: hit.clip, path: hit.path, site: hit.site }];
       const picture = await notePicture(await player.frame(at.start), region);
       // A file read again while the picture was drawn is not what it shows.
@@ -854,9 +866,8 @@ export class ValleStudio extends LitElement {
   }
 
   /** The element picked for the note being written. */
-  #chosen(): Hit | undefined {
-    const noting = this.#noting;
-    return noting?.chosen === undefined ? undefined : noting.hits?.[noting.chosen];
+  #chosen(selection: NoteSelection | undefined): Hit | undefined {
+    return selection?.hits?.[selection.chosen ?? 0];
   }
 
   /** `bounds`, in canvas px, as the part of the picture it is, inside it. */
@@ -873,23 +884,24 @@ export class ValleStudio extends LitElement {
   /** Picks what is drawn in the region drawn, or at `point` clicked: a click again there goes to
    * the element beneath. On a timeline only elements in a clip are kept, as a note there is
    * about clips; on a component, those with a key path. */
-  async #pick(point: [number, number]): Promise<void> {
-    const noting = this.#noting;
+  async #pick(selection: NoteSelection, point: [number, number]): Promise<void> {
     const player = this.player;
-    if (!noting || !player) return;
+    if (!player || selection !== this.#noting?.selection || selection.frame !== player.currentFrame)
+      return;
     const { width, height } = player.info;
-    const region = noting.region;
-    const near = noting.point && Math.hypot(noting.point[0] - point[0], noting.point[1] - point[1]);
-    if (!region && near !== undefined && near < 0.005 && noting.hits?.length) {
-      noting.chosen = ((noting.chosen ?? -1) + 1) % noting.hits.length;
+    const region = selection.region;
+    const near =
+      selection.point && Math.hypot(selection.point[0] - point[0], selection.point[1] - point[1]);
+    if (!region && near !== undefined && near < 0.005 && selection.hits?.length) {
+      selection.chosen = ((selection.chosen ?? -1) + 1) % selection.hits.length;
     } else {
       const hits = await (region
         ? player.pick(region.x * width, region.y * height, region.w * width, region.h * height)
         : player.pick(point[0] * width, point[1] * height));
-      if (this.#noting !== noting) return;
-      noting.hits = hits.filter((h) => (this.timeline ? h.clip : h.path));
-      noting.chosen = noting.hits.length ? 0 : undefined;
-      noting.point = region ? undefined : point;
+      if (selection !== this.#noting?.selection || selection.frame !== player.currentFrame) return;
+      selection.hits = hits.filter((h) => (this.timeline ? h.clip : h.path));
+      selection.chosen = selection.hits.length ? 0 : undefined;
+      selection.point = region ? undefined : point;
     }
     this.requestUpdate();
   }
@@ -921,13 +933,14 @@ export class ValleStudio extends LitElement {
     const stage = this.renderRoot.querySelector(".stage")?.getBoundingClientRect();
     const picture = this.#picture();
     if (!noting || !stage || !picture) return nothing;
+    const selection = noting.selection;
     const at = (e: PointerEvent): [number, number] => [
       Math.min(1, Math.max(0, (e.clientX - picture.x) / picture.width)),
       Math.min(1, Math.max(0, (e.clientY - picture.y) / picture.height)),
     ];
     const drag = (e: PointerEvent) => {
-      if (!noting.from) return;
-      const [[x0, y0], [x1, y1]] = [noting.from, at(e)];
+      if (!selection.from) return;
+      const [[x0, y0], [x1, y1]] = [selection.from, at(e)];
       const region = {
         x: Math.min(x0, x1),
         y: Math.min(y0, y1),
@@ -935,11 +948,11 @@ export class ValleStudio extends LitElement {
         h: Math.abs(y1 - y0),
       };
       // A click, or a drag too small to mean a part, is about the whole picture.
-      noting.region = region.w > 0.01 && region.h > 0.01 ? region : undefined;
+      selection.region = region.w > 0.01 && region.h > 0.01 ? region : undefined;
       this.requestUpdate();
     };
-    const region = noting.region;
-    const hit = this.#chosen();
+    const region = selection.region;
+    const hit = this.#chosen(selection);
     const info = this.player?.info;
     const marked = region ?? (hit && this.#fraction(hit.bounds));
     const side = marked && marked.x + marked.w / 2 > 0.5 ? "left" : "right";
@@ -949,18 +962,18 @@ export class ValleStudio extends LitElement {
         style=${`left: ${picture.x - stage.x}px; top: ${picture.y - stage.y}px; width: ${picture.width}px; height: ${picture.height}px`}
         @pointerdown=${(e: PointerEvent) => {
           if (e.button !== 0) return;
-          noting.from = at(e);
-          noting.region = undefined;
-          if (!noting.point) noting.hits = noting.chosen = undefined;
+          selection.from = at(e);
+          selection.region = undefined;
+          if (!selection.point) selection.hits = selection.chosen = undefined;
           (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
           this.requestUpdate();
         }}
         @pointermove=${drag}
         @pointerup=${(e: PointerEvent) => {
           drag(e);
-          const from = noting.from;
-          noting.from = undefined;
-          if (from) void this.#pick(at(e));
+          const from = selection.from;
+          selection.from = undefined;
+          if (from) void this.#pick(selection, at(e));
           this.renderRoot.querySelector<HTMLTextAreaElement>(".note-form textarea")?.focus();
         }}
       >
@@ -1006,17 +1019,17 @@ export class ValleStudio extends LitElement {
                 <span>${hit.clip ? `${hit.path ?? "the clip"} in ${hit.clip}` : hit.path}</span>
                 ${hit.site ? html`<button type="button" class="link" @click=${() => this.#goTo(hit.site!)}>${hit.site}</button>` : nothing}
                 ${
-                  noting.hits!.length > 1
+                  selection.hits!.length > 1
                     ? html`<button
                         type="button"
                         class="quiet"
                         title="Or click there again"
                         @click=${() => {
-                          noting.chosen = (noting.chosen! + 1) % noting.hits!.length;
+                          selection.chosen = (selection.chosen! + 1) % selection.hits!.length;
                           this.requestUpdate();
                         }}
                       >
-                        Beneath (${noting.chosen! + 1} of ${noting.hits!.length})
+                        Beneath (${selection.chosen! + 1} of ${selection.hits!.length})
                       </button>`
                     : nothing
                 }
@@ -1024,7 +1037,7 @@ export class ValleStudio extends LitElement {
                   type="button"
                   class="quiet"
                   @click=${() => {
-                    noting.hits = noting.chosen = noting.point = undefined;
+                    selection.hits = selection.chosen = selection.point = undefined;
                     this.requestUpdate();
                   }}
                 >
