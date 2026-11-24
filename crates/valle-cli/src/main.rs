@@ -269,6 +269,12 @@ fn run(cli: Cli) -> Result<Value, Failure> {
             studio::run("timeline", Some(file), serve, events)
         }
         Command::Media(Media::Model(model)) => media::model(model, json),
+        Command::Media(Media::Transcribe {
+            file,
+            output,
+            language,
+            text_only,
+        }) => media::transcribe(&file, output.as_deref(), language, !text_only, json),
         Command::Docs { topic, section } => docs::run(topic, section),
         Command::Update { version } => update::run(version, json),
         Command::Project(p) => match p.command {

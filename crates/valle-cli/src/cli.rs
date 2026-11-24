@@ -83,6 +83,29 @@ pub enum Media {
     /// The models media tools run, installed in ~/.valle/models or $VALLE_MODELS_DIR
     #[command(subcommand, arg_required_else_help = true)]
     Model(Model),
+    /// What is said in a video or sound file, with each word's time, as JSON
+    ///
+    /// Runs on the CPU with Qwen3-ASR and, for word times, Qwen3-ForcedAligner, which `valle
+    /// media model install` puts in place; they are not downloaded here. Times are seconds into
+    /// the file. Needs about 5 GB of memory with word times, and 3.5 GB without.
+    #[command(after_help = "Examples:\n  \
+        valle media transcribe interview.mp4 -o interview.transcript.json\n  \
+        valle media transcribe voice.wav --language zh --text-only")]
+    Transcribe {
+        /// A video or sound file FFmpeg reads
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        /// Write the transcript to this .json file, in place of printing it
+        #[arg(short, value_name = "OUT")]
+        output: Option<PathBuf>,
+        /// The language spoken, as an English name or ISO code, such as zh or English; without
+        /// it, each part's is detected
+        #[arg(long)]
+        language: Option<String>,
+        /// The text alone, without each word's time: only the speech model is needed
+        #[arg(long)]
+        text_only: bool,
+    },
 }
 
 #[derive(Subcommand)]

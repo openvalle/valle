@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use valle_media::download::{self, Source};
 use valle_media::models::{self, ModelSpec};
+use valle_media::transcribe::{self as asr, SAMPLE_RATE, Transcript};
+use valle_native::media;
 
 use crate::Failure;
 use crate::cli::Model;
@@ -136,6 +138,98 @@ fn done(installed: &[(&ModelSpec, std::path::PathBuf)]) -> Value {
         })).collect::<Vec<_>>(),
         "summary": summary.join("\n"),
     })
+}
+
+pub fn transcribe(
+    file: &Path,
+    output: Option<&Path>,
+    language: Option<String>,
+    words: bool,
+    quiet: bool,
+) -> Result<Value, Failure> {
+    let root = models::root().map_err(|e| Failure::new("media", e))?;
+    let missing = asr::missing(&root, words);
+    if !missing.is_empty() {
+        let names: Vec<String> = missing
+            .iter()
+            .map(|s| format!("{} ({})", s.id, gigabytes(models::size(s))))
+            .collect();
+        let ids: Vec<&str> = missing.iter().map(|s| s.id.as_str()).collect();
+        let failure = Failure::new("model", format!("needs {} installed", names.join(" and ")));
+        return Err(failure.hint(format!(
+            "{}; or --from a folder that holds one. valle media model list says what is installed",
+            install_command(&ids)
+        )));
+    }
+    if output.is_some_and(|o| o.extension().is_none_or(|e| e != "json")) {
+        return Err(Failure::new("usage", "-o is a .json file"));
+    }
+    let samples = media::sound_at(file, SAMPLE_RATE, 1)
+        .map_err(|e| Failure::new("video", e))?
+        .ok_or_else(|| Failure::new("media", format!("{} has no sound", file.display())))?;
+    if !quiet {
+        let seconds = samples.len() as f64 / f64::from(SAMPLE_RATE);
+        eprintln!("Transcribing {:.1} s of {}", seconds, file.display());
+    }
+    let transcript =
+        asr::transcribe(&root, samples, language, words).map_err(|e| Failure::new("media", e))?;
+    let document = document(&transcript, words);
+    let segments = transcript.segments.len();
+    let text = transcript.text.trim();
+    let Some(output) = output else {
+        let mut value = document;
+        value["status"] = "ok".into();
+        value["summary"] = text.into();
+        return Ok(value);
+    };
+    let json = serde_json::to_string_pretty(&document).expect("a transcript is JSON");
+    std::fs::write(output, json + "\n")
+        .map_err(|e| Failure::new("media", format!("{}: {e}", output.display())))?;
+    Ok(json!({
+        "status": "ok",
+        "file": output.display().to_string(),
+        "language": transcript.language,
+        "duration": seconds(transcript.duration_ms),
+        "segments": segments,
+        "summary": format!("Wrote {} segments to {}\n{text}", segments, output.display()),
+    }))
+}
+
+/// A transcript as written: times in seconds into the file, as a timeline gives them.
+fn document(transcript: &Transcript, words: bool) -> Value {
+    let segments: Vec<Value> = transcript
+        .segments
+        .iter()
+        .map(|s| {
+            let mut segment = json!({
+                "start": seconds(s.start_ms),
+                "end": seconds(s.end_ms),
+                "language": s.language,
+                "text": s.text,
+            });
+            if words {
+                segment["words"] = s
+                    .words
+                    .iter()
+                    .map(|w| {
+                        json!({ "text": w.text, "start": seconds(w.start_ms), "end": seconds(w.end_ms) })
+                    })
+                    .collect();
+            }
+            segment
+        })
+        .collect();
+    json!({
+        "model": transcript.model,
+        "language": transcript.language,
+        "duration": seconds(transcript.duration_ms),
+        "text": transcript.text,
+        "segments": segments,
+    })
+}
+
+fn seconds(ms: u64) -> f64 {
+    ms as f64 / 1000.0
 }
 
 /// The command that installs `ids`.
