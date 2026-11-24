@@ -3372,7 +3372,7 @@ dependencies = [
 
 [[package]]
 name = "valle-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "brotli",
  "brotli-decompressor",
@@ -3393,7 +3393,7 @@ dependencies = [
 
 [[package]]
 name = "valle-engine"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "fearless_simd",
  "harfrust",
@@ -3454,7 +3454,7 @@ dependencies = [
 
 [[package]]
 name = "valle-media"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ring",
  "serde_json",
@@ -3464,7 +3464,7 @@ dependencies = [
 
 [[package]]
 name = "valle-native"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ash",
  "brotli-decompressor",
@@ -3482,7 +3482,7 @@ dependencies = [
 
 [[package]]
 name = "valle-project"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ring",
  "serde_json",
@@ -3492,14 +3492,14 @@ dependencies = [
 
 [[package]]
 name = "valle-timeline"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "valle-web"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "js-sys",
  "serde_json",
@@ -4029,7 +4029,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ring",
  "ureq",
