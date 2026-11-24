@@ -116,10 +116,22 @@ pub const RATE: u32 = 48_000;
 /// The sound of the file at `path`: interleaved stereo 32-bit float samples at `RATE`; none
 /// when it has no audio.
 pub fn sound(path: &Path) -> Result<Option<Vec<f32>>, String> {
+    sound_at(path, RATE, 2)
+}
+
+/// The sound of the file at `path`, interleaved 32-bit float samples, `channels` of them at
+/// `rate` samples a second; none when it has no audio. FFmpeg's default matrix mixes the
+/// channels, so a stereo pair goes to mono at -3 dB each, and a loud mix can pass 1.
+pub fn sound_at(path: &Path, rate: u32, channels: u16) -> Result<Option<Vec<f32>>, String> {
+    if rate == 0 || !(1..=8).contains(&channels) {
+        return Err(format!(
+            "cannot decode sound to {channels} channels at {rate} Hz"
+        ));
+    }
     match version()? {
-        Version::V7 => v7::sound::decode(path),
-        Version::V8 => v8::sound::decode(path),
-        Version::V9 => v9::sound::decode(path),
+        Version::V7 => v7::sound::decode(path, rate, channels),
+        Version::V8 => v8::sound::decode(path, rate, channels),
+        Version::V9 => v9::sound::decode(path, rate, channels),
     }
 }
 

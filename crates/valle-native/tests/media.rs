@@ -189,6 +189,30 @@ fn audio_resamples_mono_and_preserves_stereo_and_the_tail() {
 }
 
 #[test]
+fn sound_decodes_to_a_chosen_rate_and_channel_count() {
+    let dir = Folder::new("rate");
+    let path = dir.0.join("sound.wav");
+    // A second at 44.1 kHz, the same 440 Hz tone in both channels, the right at half the left.
+    let stereo: Vec<i16> = (0..44_100)
+        .flat_map(|i| {
+            let s = (i as f64 * std::f64::consts::TAU * 440.0 / 44_100.0).sin() * 16384.0;
+            [s as i16, (s / 2.0) as i16]
+        })
+        .collect();
+    wav(&path, 44_100, 2, &stereo);
+    let mono = media::sound_at(&path, 16_000, 1).unwrap().unwrap();
+    assert_eq!(mono.len(), 16_000);
+    // FFmpeg's default matrix sums the pair at -3 dB each: (0.5 + 0.25) / sqrt 2.
+    let peak = mono[100..15_900].iter().fold(0f32, |m, s| m.max(s.abs()));
+    assert!(
+        (peak - 0.75 * std::f32::consts::FRAC_1_SQRT_2).abs() < 0.002,
+        "peak {peak}"
+    );
+    assert!(media::sound_at(&path, 0, 1).is_err());
+    assert!(media::sound_at(&path, 16_000, 0).is_err());
+}
+
+#[test]
 fn muxed_pcm_keeps_channels_and_a_partial_final_block() {
     let dir = Folder::new("mux");
     let path = dir.0.join("video.mov");
