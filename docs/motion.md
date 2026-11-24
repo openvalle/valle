@@ -126,21 +126,21 @@ gives `width`, `height`, `fps`, `duration` and `clipDuration`.
 
 ## Elements
 
-| Tag           | What it is                                                                                            |
-| ------------- | ----------------------------------------------------------------------------------------------------- |
-| `View`        | A box, like a `div`: layout, background, border, children                                             |
-| `Text`        | A run of text; text must be inside a `Text`. `split` and `perUnit` animate characters, words or lines |
-| `Span`        | Styled text inside a `Text`                                                                           |
-| `Image`       | `src`: a `resource://name`, a relative path or an `https://` address                                  |
-| `Video`       | `src`, with `trimStart` and `rate`, or `time` for the source time directly                            |
-| `Mask`        | `source={<…/>}`, `mode` `alpha` or `luminance`, `invert`: shows its children through another tree     |
-| `TimeScope`   | `offset` and `rate`: a child clock, `(time - offset) × rate`                                          |
-| `Echo`        | `count`, `delay`, `decay`: copies of its children at earlier times                                    |
-| `Shutter`     | `samples`, `angle`: motion blur from several sub-frame samples                                        |
-| `World`       | `camera={{ center, zoom, rotation }}`: a 2D camera over its children                                  |
-| `ShaderLayer` | Your own WGSL shader: `code` or `source`, `uniforms`, `inputs`, `outset`; see below                   |
-| `Transition`  | Goes between two children over the scene's time                                                       |
-| `svg`         | Inline SVG: `path`, `circle`, `rect`, `line`, `polyline`, `polygon`, `g`, gradients, `text`           |
+| Tag           | What it is                                                                                                                       |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `View`        | A box, like a `div`: layout, background, border, children                                                                        |
+| `Text`        | A run of text; text must be inside a `Text`. `split` and `perUnit` animate characters, words or lines                            |
+| `Span`        | Styled text inside a `Text`                                                                                                      |
+| `Image`       | `src`: an image resource as `resource://name`, its file a relative path or an `https://` address, or a Timeline's `input://name` |
+| `Video`       | `src`, with `trimStart` and `rate`, or `time` for the source time directly                                                       |
+| `Mask`        | `source={<…/>}`, `mode` `alpha` or `luminance`, `invert`: shows its children through another tree                                |
+| `TimeScope`   | `offset` and `rate`: a child clock, `(time - offset) × rate`                                                                     |
+| `Echo`        | `count`, `delay`, `decay`: copies of its children at earlier times                                                               |
+| `Shutter`     | `samples`, `angle`: motion blur from several sub-frame samples                                                                   |
+| `World`       | `camera={{ center, zoom, rotation }}`: a 2D camera over its children                                                             |
+| `ShaderLayer` | Your own WGSL shader: `code` or `source`, `uniforms`, `inputs`, `outset`; see below                                              |
+| `Transition`  | Goes between two children over the scene's time                                                                                  |
+| `svg`         | Inline SVG: `path`, `circle`, `rect`, `line`, `polyline`, `polygon`, `g`, gradients, `text`                                      |
 
 HTML tags (`div`, `span`, `img`, `h1`…) are errors that name the tag to use instead.
 
