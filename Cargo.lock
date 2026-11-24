@@ -2572,6 +2572,7 @@ dependencies = [
  "serde_json",
  "ureq",
  "valle-engine",
+ "valle-media",
  "valle-native",
  "valle-project",
  "valle-timeline",

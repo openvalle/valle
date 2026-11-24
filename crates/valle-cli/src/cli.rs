@@ -52,6 +52,9 @@ pub enum Command {
     Timeline(Timeline),
     /// A project folder: project.json, its timelines, files and snapshots
     Project(Project),
+    /// Media tools apart from timelines and projects, and the models they run
+    #[command(subcommand, arg_required_else_help = true)]
+    Media(Media),
     /// The guides: how to write scenes and timelines, and how the commands behave
     ///
     /// Without a topic, lists them. A guide is long; --section prints one of its parts.
@@ -72,6 +75,40 @@ pub enum Command {
     Update {
         /// The release to install in place of the latest, such as 0.1.0
         version: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum Media {
+    /// The models media tools run, installed in ~/.valle/models or $VALLE_MODELS_DIR
+    #[command(subcommand, arg_required_else_help = true)]
+    Model(Model),
+}
+
+#[derive(Subcommand)]
+pub enum Model {
+    /// Each model: what it is for, its size, and whether it is installed and where
+    List,
+    /// Download models, or take them from a folder that holds them
+    ///
+    /// Each file is checked against its SHA-256 before it is installed. A download that stops
+    /// picks up where it was the next time. With --from, a folder of the model's files, such as
+    /// a Hugging Face or ModelScope snapshot, is checked and linked or copied in.
+    #[command(after_help = "Examples:\n  \
+        valle media model install qwen3-asr-0.6b qwen3-forced-aligner-0.6b\n  \
+        valle media model install qwen3-asr-0.6b --source modelscope\n  \
+        valle media model install qwen3-asr-0.6b --from ~/models/Qwen3-ASR-0.6B")]
+    Install {
+        /// The models, by ID, as `valle media model list` names them
+        #[arg(required = true, value_name = "MODEL")]
+        models: Vec<String>,
+        /// Where to download from: huggingface (at $HF_ENDPOINT when it is set), hf-mirror or
+        /// modelscope
+        #[arg(long, default_value = "huggingface", conflicts_with = "from")]
+        source: String,
+        /// A folder that holds the model's files, in place of downloading them; one model only
+        #[arg(long, value_name = "FOLDER")]
+        from: Option<PathBuf>,
     },
 }
 

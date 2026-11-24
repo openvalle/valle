@@ -5,6 +5,7 @@ mod args;
 mod cli;
 mod docs;
 mod http;
+mod media;
 mod motion;
 mod picture;
 mod project;
@@ -24,7 +25,7 @@ use clap::error::ErrorKind;
 use serde_json::{Value, json};
 use valle_engine::gpu::Gpu;
 
-use cli::{Cli, Command, Motion, ProjectCommand, Timeline};
+use cli::{Cli, Command, Media, Motion, ProjectCommand, Timeline};
 
 /// Scene code runs on the thread that loads it, which needs more than the 12 MiB stack QuickJS
 /// is given.
@@ -267,6 +268,7 @@ fn run(cli: Cli) -> Result<Value, Failure> {
         Command::Timeline(Timeline::Studio { file, serve }) => {
             studio::run("timeline", Some(file), serve, events)
         }
+        Command::Media(Media::Model(model)) => media::model(model, json),
         Command::Docs { topic, section } => docs::run(topic, section),
         Command::Update { version } => update::run(version, json),
         Command::Project(p) => match p.command {
