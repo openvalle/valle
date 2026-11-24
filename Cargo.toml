@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/valle-cli", "crates/valle-engine", "crates/valle-native", "crates/valle-project", "crates/valle-timeline", "crates/valle-web", "xtask"]
+members = ["crates/valle-cli", "crates/valle-engine", "crates/valle-media", "crates/valle-native", "crates/valle-project", "crates/valle-timeline", "crates/valle-web", "xtask"]
 
 [workspace.package]
 version = "0.1.4"
@@ -63,6 +63,9 @@ taffy = { version = "0.15.1", default-features = false, features = ["std", "flex
 unicode-segmentation = "1.13.3"
 # FFmpeg 7, 8 or 9, loaded at run time: encoding, decoding, containers and color conversion.
 valle-ffmpeg = { version = "0.1.0", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling"] }
+# Speech recognition and word timestamps: the model catalog alone, Qwen3 on the CPU where
+# `qwen3` is on.
+valle-asr = { version = "0.3.0", default-features = false }
 # Blocking HTTPS over rustls with ring and the Mozilla roots, gzip decoded.
 ureq = { version = "3.5.1", default-features = false, features = ["rustls", "gzip"] }
 # Color glyphs (COLR) rasterized on the CPU, with no SIMD level picked at run time.
