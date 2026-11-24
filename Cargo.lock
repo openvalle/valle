@@ -2643,6 +2643,7 @@ name = "valle-media"
 version = "0.1.4"
 dependencies = [
  "ring",
+ "ureq",
  "valle-asr",
 ]
 

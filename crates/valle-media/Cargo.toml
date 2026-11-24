@@ -9,4 +9,5 @@ publish.workspace = true
 
 [dependencies]
 ring.workspace = true
+ureq.workspace = true
 valle-asr.workspace = true
