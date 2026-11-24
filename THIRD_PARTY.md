@@ -42,6 +42,21 @@ in `Cargo.lock` and `bun.lock`.
 | [rfd](https://github.com/PolyMeilex/rfd) | Studio's system save dialog | MIT |
 | [webpki-roots](https://github.com/rustls/webpki-roots) | Mozilla's root certificates | CDLA-Permissive-2.0 |
 
+## Media
+
+What `valle media` runs. Its models are not part of the executable: `valle media model install`
+downloads them, unmodified, from Hugging Face or ModelScope.
+
+| Project | Use | License |
+| --- | --- | --- |
+| [valle-asr](https://github.com/openvalle/valle-asr) | Speech recognition and word times on the CPU | Apache-2.0 |
+| [Qwen3-ASR-0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) and [Qwen3-ForcedAligner-0.6B](https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B) | The models it runs, downloaded at the revisions it was tested with | Apache-2.0 |
+| [Candle](https://github.com/huggingface/candle), with [gemm](https://github.com/sarah-quinones/gemm) | The models' tensors and matrix products; on macOS through Apple's Accelerate | MIT or Apache-2.0 |
+| [Tokenizers](https://github.com/huggingface/tokenizers) | The models' text tokens | Apache-2.0 |
+| [safetensors](https://github.com/huggingface/safetensors) and [memmap2](https://github.com/RazrFalcon/memmap2-rs) | Reading the models' weights from their files | Apache-2.0; memmap2 MIT or Apache-2.0 |
+| [Rayon](https://github.com/rayon-rs/rayon) | Running the models' work on every core | MIT or Apache-2.0 |
+| [thiserror](https://github.com/dtolnay/thiserror) | valle-asr's errors | MIT or Apache-2.0 |
+
 ## Browser
 
 The engine in the browser, `@openvalle/engine`, and Studio, which the executable embeds.

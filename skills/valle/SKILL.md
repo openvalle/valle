@@ -40,10 +40,17 @@ Do not retry these; tell the user:
   explains. On macOS that is `brew install ffmpeg`; elsewhere, `valle docs cli --section ffmpeg`.
   Frames and storyboards render without it.
 - `gpu`: report the message.
+- `model`: a media model is not installed; see captions below.
 
 To let the user watch or adjust the work, give them `valle project studio` in a project, or
 `valle motion studio FILE` and `valle timeline studio FILE`. Studio writes files when they
 save: read a file again before you change it.
+
+For captions of what is said in footage, run `valle media transcribe FILE -o FILE.transcript.json`
+and make the caption clips from its words as `valle docs media --section captions-from-a-transcript`
+says. It needs models of about 3.7 GB: when it fails with code `model`, tell the user the size
+and the `hint`'s command, and run it only once they agree. Read the text back to them where
+names or terms could be misheard.
 
 When the user has reviewed an edit and asks you to work through the notes, run
 `valle project notes list --open --json`. Each note has `now`, where it is in the timeline

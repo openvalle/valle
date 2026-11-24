@@ -12,7 +12,7 @@ pub struct Guide {
     pub content: &'static str,
 }
 
-pub const GUIDES: [Guide; 5] = [
+pub const GUIDES: [Guide; 6] = [
     Guide {
         topic: "start",
         title: "Start here: the workflow, the commands, and how to read their results",
@@ -32,6 +32,11 @@ pub const GUIDES: [Guide; 5] = [
         topic: "project",
         title: "Project folders: files, checks, snapshots and renders",
         content: include_str!("../../../docs/project.md"),
+    },
+    Guide {
+        topic: "media",
+        title: "Media tools: transcribing speech with word times, and the models they run",
+        content: include_str!("../../../docs/media.md"),
     },
     Guide {
         topic: "cli",

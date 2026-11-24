@@ -47,6 +47,17 @@ path. Rendering does not consume or depend on a previous check.
 
 `-C FOLDER` works on that project instead of the current folder's.
 
+## Media
+
+| Command | What it does |
+| --- | --- |
+| `valle media model list` | The models media tools run: what each is for, its size, whether it is installed |
+| `valle media model install MODEL…` | Downloads models, `--source huggingface\|hf-mirror\|modelscope`, or takes one `--from` a folder |
+| `valle media transcribe FILE [-o OUT]` | What is said in a video or sound file, with each word's time, as JSON |
+
+They stand apart from timelines and projects; `valle docs media` explains them, and how a
+transcript becomes captions.
+
 ## Updating
 
 | Command | What it does |
@@ -183,6 +194,8 @@ about each time with its ETag and Last-Modified, and the cached copy is used whe
 server says it is current, or when the server cannot be reached.
 | `VALLE_FFMPEG_DIR` | The folder of FFmpeg's shared libraries; see FFmpeg |
 | `VALLE_HOME` | The folder of `settings.json`, `~/.valle` unless set |
+| `VALLE_MODELS_DIR` | The folder `valle media` models are installed in; `~/.valle/models` unless set |
+| `HF_ENDPOINT` | Where `valle media model install` finds Hugging Face, as Hugging Face's tools read it |
 | `WGPU_BACKEND`, `WGPU_ADAPTER_NAME` | Choose another GPU backend or adapter |
 | `VALLE_RELEASES` | Where `valle update` finds releases: a mirror of `https://github.com/openvalle/valle/releases` |
 | `VALLE_LAVAPIPE` | A lavapipe driver to use instead of the built-in one |

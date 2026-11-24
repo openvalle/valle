@@ -7,7 +7,7 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
-const DOCS: [&str; 5] = ["start", "motion", "timeline", "project", "cli"];
+const DOCS: [&str; 6] = ["start", "motion", "timeline", "project", "media", "cli"];
 
 // A concurrent spawn can inherit the copy's open writer until exec, making Linux refuse to
 // execute the copied file with ETXTBSY even after copy returns. Keep these tests apart.
