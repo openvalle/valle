@@ -218,7 +218,8 @@ not supported: declare the font resource explicitly.
 Built-in fonts, used without declaring them: Noto Sans (the default, and `sans-serif`), Noto
 Serif (`serif`), Noto Sans Mono (`monospace`), Noto Sans SC and KR for Chinese and Korean, Noto
 Color Emoji, and Noto Sans Symbols 2, Math and Symbols for symbols such as ▲ ✓ → ★ ☺ that a
-text's fonts do not have. They are downloaded once into the cache on first use.
+text's fonts do not have. Box-drawing characters and blocks such as ┌ ─ │ █ ░ fall back to
+Noto Sans Mono, so that they join. They are downloaded once into the cache on first use.
 
 Other fonts are resources of kind `font`, used by their name in `fontFamily`:
 
