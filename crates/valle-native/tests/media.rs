@@ -399,3 +399,72 @@ fn short_resampled_clips_keep_their_samples_and_mono_balance() {
         );
     }
 }
+
+#[test]
+fn differences_find_the_frame_a_shot_cuts_on() {
+    let dir = Folder::new("cuts");
+    let path = dir.0.join("cut.mp4");
+    let mut writer = media::writer(&path, &options(Codec::H264)).unwrap();
+    // 12 frames of one picture changing a little, then 12 of another: a cut at 1.5 s.
+    for index in 0..24u8 {
+        let base = if index < 12 { 40 + index } else { 210 - index };
+        let frame: Vec<u8> = (0..64 * 32)
+            .flat_map(|_| [base, base / 2, 255 - base, 255])
+            .collect();
+        writer.push(&frame).unwrap();
+    }
+    writer.finish().unwrap();
+    drop(writer);
+    let differences = media::differences(&path).unwrap().unwrap();
+    assert_eq!(differences.len(), 23);
+    let (at, most) = differences
+        .iter()
+        .copied()
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .unwrap();
+    assert_eq!(at, 12 * TICKS_PER_SECOND / 8);
+    assert!(most > 30.0, "{most}");
+    assert!(
+        differences.iter().filter(|d| d.0 != at).all(|d| d.1 < 2.0),
+        "{differences:?}"
+    );
+
+    let sound = dir.0.join("sound.wav");
+    wav(&sound, RATE, 1, &[0; 64]);
+    assert_eq!(media::differences(&sound).unwrap(), None);
+}
+
+#[test]
+fn sound_blocks_give_what_the_whole_decode_does() {
+    let dir = Folder::new("blocks");
+    let path = dir.0.join("sound.wav");
+    let stereo: Vec<i16> = (0..30_000).flat_map(|i| [i as i16, -(i as i16)]).collect();
+    wav(&path, 44_100, 2, &stereo);
+    let whole = media::sound_at(&path, RATE, 2).unwrap().unwrap();
+    let mut blocks = Vec::new();
+    let mut counts = Vec::new();
+    let found = media::sound_blocks(&path, RATE, &|n| n, &mut |block, n| {
+        blocks.extend_from_slice(block);
+        counts.push(n);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(found, Some(2));
+    assert!(counts.len() > 1 && counts.iter().all(|&n| n == 2));
+    assert_eq!(blocks, whole);
+    // The count is the file's own, which the caller can mix down.
+    let mono = media::sound_blocks(&path, RATE, &|n| n.min(1), &mut |_, n| {
+        assert_eq!(n, 1);
+        Ok(())
+    });
+    assert_eq!(mono.unwrap(), Some(1));
+    let video = dir.0.join("video.mp4");
+    let mut writer = media::writer(&video, &options(Codec::H264)).unwrap();
+    writer.push(&picture(0, false)).unwrap();
+    writer.finish().unwrap();
+    drop(writer);
+    assert_eq!(
+        media::sound_blocks(&video, RATE, &|n| n, &mut |_, _| Ok(())).unwrap(),
+        None
+    );
+}

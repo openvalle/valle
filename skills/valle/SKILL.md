@@ -46,6 +46,10 @@ To let the user watch or adjust the work, give them `valle project studio` in a 
 `valle motion studio FILE` and `valle timeline studio FILE`. Studio writes files when they
 save: read a file again before you change it.
 
+Before cutting footage, run `valle media inspect FILE --json`: it gives where the shots cut,
+where it is silent and how loud it is, and `--sheet FILE.png` draws frames across it to look
+at. It reads every frame the first time, then answers from its cache.
+
 For captions of what is said in footage, run `valle media transcribe FILE -o FILE.transcript.json`
 and make the caption clips from its words as `valle docs media --section captions-from-a-transcript`
 says. It needs models of about 3.7 GB: when it fails with code `model`, tell the user the size

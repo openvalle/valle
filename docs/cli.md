@@ -51,6 +51,7 @@ path. Rendering does not consume or depend on a previous check.
 
 | Command | What it does |
 | --- | --- |
+| `valle media inspect FILE` | Where a video or sound file cuts, where it is silent and how loud it is; `--sheet OUT.png` draws frames across it |
 | `valle media model list` | The models media tools run: what each is for, its size, whether it is installed |
 | `valle media model install MODEL…` | Downloads models, `--source huggingface\|hf-mirror\|modelscope`, or takes one `--from` a folder |
 | `valle media transcribe FILE [-o OUT]` | What is said in a video or sound file, with each word's time, as JSON |

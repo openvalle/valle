@@ -83,6 +83,33 @@ pub enum Media {
     /// The models media tools run, installed in ~/.valle/models or $VALLE_MODELS_DIR
     #[command(subcommand, arg_required_else_help = true)]
     Model(Model),
+    /// Where a video or sound file cuts, where it is silent and how loud it is, as JSON
+    ///
+    /// Decodes every frame and all of the sound once; the result is kept in the cache and used
+    /// again while the file is unchanged, with any thresholds. Times are seconds into the file.
+    /// --sheet draws frames across the file into a PNG, as --storyboard does.
+    #[command(after_help = "Examples:\n  \
+        valle media inspect interview.mp4\n  \
+        valle media inspect interview.mp4 --silence-below -35 --silence-min 0.3\n  \
+        valle media inspect trailer.mov --sheet trailer.png --samples 24")]
+    Inspect {
+        /// A video or sound file FFmpeg reads
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        /// Silence is every 10 ms under this level, in dBFS
+        #[arg(long, value_name = "DB", default_value_t = -40.0, allow_hyphen_values = true)]
+        silence_below: f64,
+        /// The shortest silence given, in seconds
+        #[arg(long, value_name = "SECONDS", default_value_t = 0.5)]
+        silence_min: f64,
+        /// Draw frames across the file into this .png, each with its time
+        #[arg(long, value_name = "OUT")]
+        sheet: Option<PathBuf>,
+        /// How many frames the sheet shows, the first and last among them
+        #[arg(long, value_name = "N", default_value_t = 12, requires = "sheet",
+            value_parser = clap::value_parser!(u32).range(1..=100))]
+        samples: u32,
+    },
     /// What is said in a video or sound file, with each word's time, as JSON
     ///
     /// Runs on the CPU with Qwen3-ASR and, for word times, Qwen3-ForcedAligner, which `valle

@@ -1,14 +1,59 @@
 # Media tools
 
-`valle media` works on media files by themselves, apart from timelines and projects: what is
-said in a video or sound file, with each word's time. Its results are files to read and use
-in a timeline as the edit needs.
+`valle media` works on media files by themselves, apart from timelines and projects: where a
+video or sound file cuts, where it is silent and how loud it is, and what is said in it, with
+each word's time. Its results are to read and use in a timeline as the edit needs.
 
 ```sh
+valle media inspect interview.mp4                          # cuts, silences and loudness
 valle media model list                                     # what is installed, and where
 valle media model install qwen3-asr-0.6b qwen3-forced-aligner-0.6b
 valle media transcribe interview.mp4 -o interview.transcript.json
 ```
+
+## Inspecting
+
+`valle media inspect FILE` reads a video or sound file through once: every frame and all of
+its sound. It needs FFmpeg as for rendering video, and no model. What it measures is kept in
+`~/.valle/cache/inspect` (`$VALLE_CACHE_DIR/inspect`) and used again while the file is
+unchanged, so another threshold, or a sheet, does not read the file again.
+
+| Option | What it does |
+| --- | --- |
+| `--silence-below DB` | Silence is every 10 ms under this level, in dBFS; `-40` unless given |
+| `--silence-min SECONDS` | The shortest silence given; `0.5` unless given |
+| `--sheet OUT.png` | Draws frames from the first to the last into a PNG, each with its timecode and frame number, as `--storyboard` does |
+| `--samples N` | How many frames the sheet shows, up to 100; `12` unless given |
+
+```json
+{
+  "status": "ok",
+  "file": "interview.mp4",
+  "duration": 653.887, "width": 2560, "height": 1440, "fps": "30000/1001", "audio": true,
+  "cached": false,
+  "cuts": [{ "time": 3.003, "difference": 29.9 }, { "time": 7.074, "difference": 26.5 }],
+  "silences": [{ "start": 225.49, "end": 226.16, "level": -52.2 }],
+  "loudness": { "integrated": -16.8, "truePeak": 0.1, "seconds": [-18.2, -15.9, null] }
+}
+```
+
+- Times are seconds into the file, as in a transcript.
+- A cut's `time` is when the first frame of the new shot starts. `difference` is how much
+  that frame differs from the one before, from 0 to 100. A cut is a frame that changes a lot
+  more than the frames around it. Fades and dissolves change each frame a little and are not
+  cuts. Of two within half a second, such as a flash, the one that changes more is given.
+- A silence's `level` is its mean level in dBFS, `-120` for digital silence. Pauses in speech
+  are usually under -40 dBFS in a quiet room. Where the room is noisy, raise
+  `--silence-below`, to `-35` or `-30`; to find short pauses between sentences, lower
+  `--silence-min` to `0.3`.
+- `loudness` is as EBU R128 measures it: `integrated` in LUFS over the whole file, `truePeak`
+  in dBTP, and `seconds`, the loudness of each second, `null` where it is under -70 LUFS.
+  Online video is usually mixed to about -14 LUFS, and broadcast to -23; a `truePeak` over
+  -1 dBTP can clip once encoded.
+- A file with no video has no `cuts`, width or height, and no sheet; one with no sound has no
+  `silences` or `loudness`. A list with nothing in it is left out.
+- On an Apple silicon laptop, 10 minutes of 1440p video take about a minute and a half the
+  first time.
 
 ## Models
 

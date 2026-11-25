@@ -1,5 +1,6 @@
 //! A file's sound through one FFmpeg version's API: its best audio stream decoded and resampled
-//! to 32-bit float samples, interleaved, at a rate and channel count the caller picks.
+//! to 32-bit float samples, interleaved, at a rate and channel count the caller picks, whole or
+//! a block at a time.
 
 use std::path::Path;
 
@@ -11,6 +12,23 @@ use crate::media::RATE;
 /// The sound of the file at `path`, interleaved, `channels` of them at `rate`; none when it has
 /// no audio.
 pub fn decode(path: &Path, rate: u32, channels: u16) -> Result<Option<Vec<f32>>, String> {
+    let mut out = Vec::new();
+    let found = blocks(path, rate, &|_| channels, &mut |block, _| {
+        out.extend_from_slice(block);
+        Ok(())
+    })?;
+    Ok(found.map(|_| out))
+}
+
+/// The sound of the file at `path` a block at a time, interleaved at `rate`, as many channels as
+/// `channels` makes of the file's own count: each block with that count. Gives the count, or none
+/// when it has no audio.
+pub fn blocks(
+    path: &Path,
+    rate: u32,
+    channels: &dyn Fn(u16) -> u16,
+    each: &mut crate::media::Blocks,
+) -> Result<Option<u16>, String> {
     let bad = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
     let mut input = format::input(path).map_err(|e| bad(&e))?;
     let Some(stream) = input.streams().best(media::Type::Audio) else {
@@ -20,11 +38,12 @@ pub fn decode(path: &Path, rate: u32, channels: u16) -> Result<Option<Vec<f32>>,
     let context =
         codec::context::Context::from_parameters(stream.parameters()).map_err(|e| bad(&e))?;
     let mut decoder = context.decoder().audio().map_err(|e| bad(&e))?;
-    let output = ChannelLayout::default(i32::from(channels));
+    let source = decoder.channels().max(1);
+    let count = channels(source);
+    let output = ChannelLayout::default(i32::from(count));
     let packed = format::Sample::F32(format::sample::Type::Packed);
     let mut resampler: Option<software::resampling::Context> = None;
-    let mut out = Vec::new();
-    let mut take = |decoded: &mut frame::Audio, out: &mut Vec<f32>| -> Result<(), String> {
+    let mut take = |decoded: &mut frame::Audio| -> Result<(), String> {
         // Its channels in the usual order, which files that name no layout have too.
         let layout = ChannelLayout::default(i32::from(decoded.channels()));
         decoded.set_channel_layout(layout);
@@ -46,14 +65,13 @@ pub fn decode(path: &Path, rate: u32, channels: u16) -> Result<Option<Vec<f32>>,
         let room = decoded.samples() as u64 * u64::from(rate) / u64::from(decoded.rate().max(1));
         let mut converted = frame::Audio::new(packed, room as usize + 1024, output);
         r.run(decoded, &mut converted).map_err(|e| bad(&e))?;
-        out.extend_from_slice(converted.plane::<f32>(0));
-        Ok(())
+        each(converted.plane::<f32>(0), count)
     };
     let mut sent = false;
     loop {
         let mut decoded = frame::Audio::empty();
         if decoder.receive_frame(&mut decoded).is_ok() {
-            take(&mut decoded, &mut out)?;
+            take(&mut decoded)?;
             continue;
         }
         if sent {
@@ -79,10 +97,10 @@ pub fn decode(path: &Path, rate: u32, channels: u16) -> Result<Option<Vec<f32>>,
             if rest.samples() == 0 {
                 break;
             }
-            out.extend_from_slice(rest.plane::<f32>(0));
+            each(rest.plane::<f32>(0), count)?;
         }
     }
-    Ok(Some(out))
+    Ok(Some(count))
 }
 
 /// Streaming stereo f32 rate conversion for video and WAV exports.

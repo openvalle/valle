@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use valle_media::download::{self, Source};
+use valle_media::inspect;
 use valle_media::models::{self, ModelSpec};
 use valle_media::transcribe::{self as asr, SAMPLE_RATE, Transcript};
 use valle_native::media;
@@ -193,6 +194,298 @@ pub fn transcribe(
         "segments": segments,
         "summary": format!("Wrote {} segments to {}\n{text}", segments, output.display()),
     }))
+}
+
+/// What counts as silence: every 10 ms under `below` dBFS, for at least `min` seconds.
+pub struct Thresholds {
+    pub below: f64,
+    pub min: f64,
+}
+
+pub fn inspect(
+    file: &Path,
+    thresholds: &Thresholds,
+    sheet: Option<(&Path, u32)>,
+    quiet: bool,
+) -> Result<Value, Failure> {
+    if !thresholds.min.is_finite() || thresholds.min < 0.01 {
+        return Err(Failure::new("usage", "--silence-min is 0.01 s or more"));
+    }
+    if !thresholds.below.is_finite() || thresholds.below >= 0.0 {
+        return Err(Failure::new(
+            "usage",
+            "--silence-below is a level under 0 dBFS, such as -40",
+        ));
+    }
+    if sheet.is_some_and(|(o, _)| o.extension().is_none_or(|e| !e.eq_ignore_ascii_case("png"))) {
+        return Err(Failure::new("usage", "--sheet is a .png file"));
+    }
+    let info = media::probe(file).map_err(|e| Failure::new("video", e))?;
+    if sheet.is_some() && info.size.is_none() {
+        return Err(Failure::new(
+            "usage",
+            format!("{} has no video to draw a sheet of", file.display()),
+        ));
+    }
+    let (measured, cached) = measured(file, quiet)?;
+    let duration = info
+        .duration
+        .map(|t| t as f64 / media::TICKS_PER_SECOND as f64);
+    let mut value = json!({
+        "status": "ok",
+        "file": file.display().to_string(),
+        "duration": duration.map(|d| round(d, 3)),
+        "width": info.size.map(|s| s[0]),
+        "height": info.size.map(|s| s[1]),
+        "fps": info.fps.map(|[n, d]| if d == 1 { n.to_string() } else { format!("{n}/{d}") }),
+        "audio": info.audio,
+        "cached": cached,
+    });
+    let mut lines = vec![shape(file, &info, duration)];
+    if let Some(differences) = &measured.differences {
+        let cuts = inspect::cuts(differences);
+        lines.push(match cuts.is_empty() {
+            true => "No cuts".into(),
+            false => format!(
+                "{}: {}",
+                crate::motion::counted(cuts.len(), "cut"),
+                listed(cuts.iter().map(|c| format!("{:.2}", c.time)))
+            ),
+        });
+        value["cuts"] = cuts
+            .iter()
+            .map(|c| json!({ "time": round(c.time, 3), "difference": round(c.difference, 1) }))
+            .collect();
+    }
+    if let Some(sound) = &measured.sound {
+        let silences = inspect::silences(sound, thresholds.below, thresholds.min);
+        let under = format!(
+            "under {} dBFS for {} s or more",
+            thresholds.below, thresholds.min
+        );
+        lines.push(match silences.is_empty() {
+            true => format!("No silence {under}"),
+            false => format!(
+                "{} {under}: {}",
+                crate::motion::counted(silences.len(), "silence"),
+                listed(
+                    silences
+                        .iter()
+                        .map(|s| format!("{:.2}–{:.2}", s.start, s.end))
+                )
+            ),
+        });
+        value["silences"] = silences
+            .iter()
+            .map(|s| {
+                json!({ "start": round(s.start, 3), "end": round(s.end, 3), "level": round(s.level.max(-120.0), 1) })
+            })
+            .collect();
+        let integrated = inspect::integrated(sound);
+        let peak = inspect::true_peak(sound);
+        lines.push(match (integrated, peak) {
+            (Some(l), Some(p)) => format!("Loudness {l:.1} LUFS, true peak {p:.1} dBTP"),
+            (None, Some(p)) => format!("Too quiet to measure loudness; true peak {p:.1} dBTP"),
+            _ => "Silent throughout".into(),
+        });
+        value["loudness"] = json!({
+            "integrated": integrated.map(|l| round(l, 1)),
+            "truePeak": peak.map(|p| round(p, 1)),
+            "seconds": inspect::each_second(sound).iter().map(|s| s.map(|l| round(l, 1))).collect::<Vec<_>>(),
+        });
+    }
+    if let Some((out, samples)) = sheet {
+        let layout = contact_sheet(file, &info, out, samples)?;
+        lines.push(format!(
+            "Sheet of {} frames in {}",
+            layout["cells"].as_array().map_or(0, Vec::len),
+            out.display()
+        ));
+        value["sheet"] = layout;
+    }
+    value["summary"] = lines.join("\n").into();
+    Ok(value)
+}
+
+/// What inspecting a file measures, apart from any threshold.
+struct Measured {
+    /// Each frame after the first, by when it starts in seconds, with how much it differs from
+    /// the one before; none without video.
+    differences: Option<Vec<(f64, f64)>>,
+    sound: Option<inspect::Sound>,
+}
+
+/// The file's measures, from the cache while the file is unchanged, and whether they were.
+fn measured(file: &Path, quiet: bool) -> Result<(Measured, bool), Failure> {
+    let cache = cache_path(file);
+    if let Some(found) = cache.as_ref().and_then(|p| read_cache(p)) {
+        return Ok((found, true));
+    }
+    if !quiet {
+        eprintln!("Inspecting {}", file.display());
+    }
+    let failed = |e| Failure::new("video", e);
+    let differences = media::differences(file).map_err(failed)?.map(|d| {
+        d.into_iter()
+            .map(|(t, d)| (t as f64 / media::TICKS_PER_SECOND as f64, d))
+            .collect()
+    });
+    // Measured as stereo, a file of more channels mixed down to it.
+    let mut meter: Option<inspect::Meter> = None;
+    let found = media::sound_blocks(file, inspect::RATE, &|n| n.min(2), &mut |block, n| {
+        meter
+            .get_or_insert_with(|| inspect::Meter::new(n))
+            .feed(block);
+        Ok(())
+    })
+    .map_err(failed)?;
+    let sound = found.map(|n| meter.unwrap_or_else(|| inspect::Meter::new(n)).finish());
+    let measured = Measured { differences, sound };
+    if let Some(path) = cache {
+        // A cache that cannot be written is measured again next time.
+        let _ = write_cache(&path, &measured);
+    }
+    Ok((measured, false))
+}
+
+/// Where a file's measures are kept: by its full path, size and time of change, and this Valle.
+fn cache_path(file: &Path) -> Option<std::path::PathBuf> {
+    let full = std::fs::canonicalize(file).ok()?;
+    let meta = std::fs::metadata(&full).ok()?;
+    let changed = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    let key = format!(
+        "{}\n{}\n{}\n{}",
+        full.display(),
+        meta.len(),
+        changed.as_nanos(),
+        env!("CARGO_PKG_VERSION")
+    );
+    let digest = ring::digest::digest(&ring::digest::SHA256, key.as_bytes());
+    let name: String = digest.as_ref()[..16]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let dir = valle_native::urls::global_dir().ok()?.join("inspect");
+    Some(dir.join(format!("{name}.json")))
+}
+
+fn read_cache(path: &Path) -> Option<Measured> {
+    let value: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    let numbers =
+        |v: &Value| -> Option<Vec<f64>> { v.as_array()?.iter().map(Value::as_f64).collect() };
+    let differences = match &value["differences"] {
+        Value::Null => None,
+        v => Some(
+            v.as_array()?
+                .iter()
+                .map(|p| Some((p[0].as_f64()?, p[1].as_f64()?)))
+                .collect::<Option<Vec<_>>>()?,
+        ),
+    };
+    let sound = match &value["sound"] {
+        Value::Null => None,
+        v => Some(inspect::Sound {
+            levels: numbers(&v["levels"])?
+                .into_iter()
+                .map(|l| l as f32)
+                .collect(),
+            steps: numbers(&v["steps"])?,
+            peak: v["peak"].as_f64()?,
+        }),
+    };
+    Some(Measured { differences, sound })
+}
+
+fn write_cache(path: &Path, measured: &Measured) -> std::io::Result<()> {
+    let value = json!({
+        "differences": measured.differences.as_ref().map(|d| d.iter().map(|(t, d)| json!([t, d])).collect::<Vec<_>>()),
+        "sound": measured.sound.as_ref().map(|s| json!({ "levels": s.levels, "steps": s.steps, "peak": s.peak })),
+    });
+    let dir = path.parent().expect("in the cache's folder");
+    std::fs::create_dir_all(dir)?;
+    // Written whole, then moved in, so a reader never sees half of it.
+    let part = path.with_extension(format!("{}.part", std::process::id()));
+    std::fs::write(&part, value.to_string())?;
+    std::fs::rename(&part, path)
+}
+
+/// `samples` frames from the first to the last of the file's video, drawn into a storyboard at
+/// `out`; its layout.
+fn contact_sheet(
+    file: &Path,
+    info: &media::Info,
+    out: &Path,
+    samples: u32,
+) -> Result<Value, Failure> {
+    let (Some(size), Some(duration)) = (info.size, info.duration) else {
+        return Err(Failure::new(
+            "usage",
+            format!("{} has no video to draw a sheet of", file.display()),
+        ));
+    };
+    let [n, d] = info.fps.unwrap_or([30, 1]);
+    let fps = valle_timeline::time::Rate::new(i64::from(n), i64::from(d))
+        .map_err(|e| Failure::new("video", e))?;
+    let count = fps.frames_in(valle_timeline::time::Tick(duration)).max(1);
+    let n = i64::from(samples).min(count);
+    let indices: Vec<i64> = match n {
+        1 => vec![0],
+        _ => (0..n)
+            .map(|i| {
+                ((i128::from(i) * i128::from(count - 1) + i128::from((n - 1) / 2))
+                    / i128::from(n - 1)) as i64
+            })
+            .collect(),
+    };
+    let mut reader = media::reader(file, None).map_err(|e| Failure::new("video", e))?;
+    let mut board = crate::picture::Storyboard::new(size, &indices, fps)?;
+    for (k, &i) in indices.iter().enumerate() {
+        let at = fps.frame_start(i).map_err(|e| Failure::new("video", e))?;
+        let pixels = reader.frame(at.0).map_err(|e| Failure::new("video", e))?;
+        board.paint(k, &pixels);
+        crate::progress(k + 1, indices.len());
+    }
+    let (gpu, _) = crate::gpu()?;
+    board.label(&crate::picture::Labels::new(&gpu, crate::motion::fonts())?);
+    crate::picture::write_png(out, board.size, &board.pixels)?;
+    let mut layout = board.layout;
+    layout["file"] = out.display().to_string().into();
+    Ok(layout)
+}
+
+/// The file's length, size, rate and whether it has sound, as one line.
+fn shape(file: &Path, info: &media::Info, duration: Option<f64>) -> String {
+    let mut parts = vec![file.display().to_string()];
+    if let Some(d) = duration {
+        parts.push(format!("{d:.2} s"));
+    }
+    if let Some([w, h]) = info.size {
+        parts.push(format!("{w}×{h}"));
+    }
+    if let Some([n, d]) = info.fps {
+        parts.push(format!("{} fps", round(f64::from(n) / f64::from(d), 3)));
+    }
+    parts.push(if info.audio { "sound" } else { "no sound" }.into());
+    parts.join(", ")
+}
+
+/// Items in a line: the first 10, and how many more.
+fn listed(items: impl ExactSizeIterator<Item = String>) -> String {
+    let more = items.len().saturating_sub(10);
+    let mut text: Vec<String> = items.take(10).collect();
+    if more > 0 {
+        text.push(format!("and {more} more"));
+    }
+    text.join(", ")
+}
+
+fn round(v: f64, places: i32) -> f64 {
+    let scale = 10f64.powi(places);
+    (v * scale).round() / scale
 }
 
 /// A transcript as written: times in seconds into the file, as a timeline gives them.

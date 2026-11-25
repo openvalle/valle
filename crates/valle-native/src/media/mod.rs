@@ -135,6 +135,44 @@ pub fn sound_at(path: &Path, rate: u32, channels: u16) -> Result<Option<Vec<f32>
     }
 }
 
+/// What takes a file's sound a block at a time: its samples, and how many channels they have.
+pub type Blocks<'a> = dyn FnMut(&[f32], u16) -> Result<(), String> + 'a;
+
+/// The sound of the file at `path` a block at a time, as `sound_at` decodes it, to `each`:
+/// interleaved 32-bit float samples at `rate`, as many channels as `channels` makes of the
+/// file's own count, which each block gives too. Gives that count, or none when it has no audio.
+pub fn sound_blocks(
+    path: &Path,
+    rate: u32,
+    channels: &dyn Fn(u16) -> u16,
+    each: &mut Blocks,
+) -> Result<Option<u16>, String> {
+    let checked = |n: u16| {
+        let n = channels(n);
+        assert!((1..=8).contains(&n), "1 to 8 channels, not {n}");
+        n
+    };
+    if rate == 0 {
+        return Err(format!("cannot decode sound at {rate} Hz"));
+    }
+    match version()? {
+        Version::V7 => v7::sound::blocks(path, rate, &checked, each),
+        Version::V8 => v8::sound::blocks(path, rate, &checked, each),
+        Version::V9 => v9::sound::blocks(path, rate, &checked, each),
+    }
+}
+
+/// How much each frame of the video at `path` differs from the one before, from 0 to 100, by
+/// when it starts in ticks, for finding where its shots cut: every frame is decoded. None when
+/// it has no video.
+pub fn differences(path: &Path) -> Result<Option<Vec<(i64, f64)>>, String> {
+    match version()? {
+        Version::V7 => v7::scenes::differences(path),
+        Version::V8 => v8::scenes::differences(path),
+        Version::V9 => v9::scenes::differences(path),
+    }
+}
+
 /// A video to write.
 #[derive(Clone, Debug)]
 pub struct Options {

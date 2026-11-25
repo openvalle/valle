@@ -269,6 +269,21 @@ fn run(cli: Cli) -> Result<Value, Failure> {
             studio::run("timeline", Some(file), serve, events)
         }
         Command::Media(Media::Model(model)) => media::model(model, json),
+        Command::Media(Media::Inspect {
+            file,
+            silence_below,
+            silence_min,
+            sheet,
+            samples,
+        }) => media::inspect(
+            &file,
+            &media::Thresholds {
+                below: silence_below,
+                min: silence_min,
+            },
+            sheet.as_deref().map(|out| (out, samples)),
+            json,
+        ),
         Command::Media(Media::Transcribe {
             file,
             output,
