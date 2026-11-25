@@ -996,7 +996,7 @@ fn fresh(ids: &mut HashSet<String>, id: &str) -> String {
 }
 
 /// The text of `root`, if it is a valid document.
-fn checked(root: Value) -> Result<String, Error> {
+pub(crate) fn checked(root: Value) -> Result<String, Error> {
     Document::read_edit(&root)?;
     let mut text = String::new();
     print(&root, 0, 0, true, &mut text);
@@ -1106,7 +1106,7 @@ fn track_at(root: &mut Value, doc: &Document, named: &str, placed: bool) -> Resu
 }
 
 /// Seconds as JSON, rounded off past a millionth of a frame's worth of float noise.
-fn seconds(s: f64) -> Value {
+pub(crate) fn seconds(s: f64) -> Value {
     let rounded = (s * 1e9).round() / 1e9;
     match rounded.fract() == 0.0 && rounded.abs() < 1e15 {
         true => Value::from(rounded as i64),
@@ -1125,7 +1125,7 @@ fn split(at: &str) -> Result<(String, usize), Error> {
 }
 
 /// The value at `path` in `root`: keys by `.`, list items by `[n]`.
-fn find<'a>(root: &'a mut Value, path: &str) -> Result<&'a mut Value, Error> {
+pub(crate) fn find<'a>(root: &'a mut Value, path: &str) -> Result<&'a mut Value, Error> {
     let mut here = root;
     for part in path.split('.') {
         let (key, indices) = part.split_once('[').map_or((part, ""), |(k, i)| (k, i));

@@ -275,6 +275,9 @@ pub enum Timeline {
         #[arg(long, value_name = "JSON|@FILE")]
         op: String,
     },
+    /// Put an SRT or VTT file on a caption track, or write a caption track out as one
+    #[command(subcommand, arg_required_else_help = true)]
+    Captions(Captions),
     /// Open Studio in the browser on the document
     ///
     /// Studio is served from 127.0.0.1 until stopped.
@@ -324,6 +327,52 @@ Editing conventions:
 
 An edit checks its sources' bounds before writing; one that fails leaves the file unchanged.
 An empty timeline can be edited and queried, not rendered.";
+
+#[derive(Subcommand)]
+pub enum Captions {
+    /// Each cue of an .srt or .vtt file as a caption clip, written only if the result is valid
+    ///
+    /// The cues go on a new caption track, or with --track in place of that caption track's
+    /// clips, keeping its style. Times are snapped to frames; a cue that runs into the next is
+    /// shortened to meet it. Styling is dropped: tags such as <i>, VTT cue settings and SRT's
+    /// {\an8}. With --clip, the times are in the file that clip plays, as a transcript's are:
+    /// each caption is anchored to the clip, and cues outside it are left out.
+    #[command(after_help = "Examples:\n  \
+        valle timeline captions import edit.timeline.json talk.srt\n  \
+        valle timeline captions import edit.timeline.json talk.vtt --track subs --clip interview")]
+    Import {
+        /// The timeline: a .timeline.json file
+        #[arg(value_name = "TIMELINE")]
+        file: String,
+        /// The subtitles: an .srt or .vtt file
+        #[arg(value_name = "SUBTITLES")]
+        subtitles: PathBuf,
+        /// A caption track, by id or path, whose clips the cues replace
+        #[arg(long, value_name = "TRACK")]
+        track: Option<String>,
+        /// A clip, by id or path, whose file the cue times are in
+        #[arg(long, value_name = "CLIP")]
+        clip: Option<String>,
+    },
+    /// A caption track's clips as an .srt or .vtt file, at their times in the timeline
+    ///
+    /// The first caption track, or --track. Disabled clips are left out; a clip of runs is
+    /// written as its whole text.
+    #[command(after_help = "Examples:\n  \
+        valle timeline captions export edit.timeline.json edit.srt\n  \
+        valle timeline captions export edit.timeline.json edit.vtt --track subs")]
+    Export {
+        /// The timeline: a .timeline.json file
+        #[arg(value_name = "TIMELINE")]
+        file: String,
+        /// Where to write: an .srt or .vtt file
+        #[arg(value_name = "OUT")]
+        output: PathBuf,
+        /// The caption track, by id or path
+        #[arg(long, value_name = "TRACK")]
+        track: Option<String>,
+    },
+}
 
 #[derive(Group)]
 #[command(arg_required_else_help = true)]

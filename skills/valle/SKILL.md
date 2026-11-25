@@ -54,7 +54,8 @@ For captions of what is said in footage, run `valle media transcribe FILE -o FIL
 and make the caption clips from its words as `valle docs media --section captions-from-a-transcript`
 says. It needs models of about 3.7 GB: when it fails with code `model`, tell the user the size
 and the `hint`'s command, and run it only once they agree. Read the text back to them where
-names or terms could be misheard.
+names or terms could be misheard. An `.srt` or `.vtt` the user has goes on with
+`valle timeline captions import`, and `export` writes a caption track out as one.
 
 When the user has reviewed an edit and asks you to work through the notes, run
 `valle project notes list --open --json`. Each note has `now`, where it is in the timeline

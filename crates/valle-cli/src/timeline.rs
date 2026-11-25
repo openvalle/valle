@@ -1,6 +1,6 @@
 //! `valle timeline check` and `valle timeline render`: a document lowered to the scene it plays
-//! as, which the Motion commands then check and draw; `valle timeline query`; and `valle
-//! timeline edit`.
+//! as, which the Motion commands then check and draw; `valle timeline query`; `valle timeline
+//! edit`; and `valle timeline captions`, SRT and VTT in and out.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -13,6 +13,7 @@ use valle_engine::time::Tick;
 use valle_engine::timeline::{self, Host, Lowered};
 use valle_native::media;
 use valle_timeline::query::Filter;
+use valle_timeline::subtitles;
 
 use crate::Failure;
 use crate::args::Args;
@@ -55,6 +56,85 @@ pub fn edit(file: &str, op: &str) -> Result<Value, Failure> {
         .map_err(|e| Failure::new("timeline", e))?;
     let summary = format!("edited {path}\n{}", edited.summary());
     Ok(json!({ "status": "ok", "summary": summary, "file": path, "changes": edited.changes }))
+}
+
+/// The cues of `subtitles` as caption clips in the document, written back only if it is valid.
+pub fn import_captions(
+    file: &str,
+    subtitles: &Path,
+    track: Option<&str>,
+    clip: Option<&str>,
+) -> Result<Value, Failure> {
+    let path = file.replace('\\', "/");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| Failure::new("timeline", format!("{path}: {e}")))?;
+    let source = subtitles.display().to_string();
+    let bytes =
+        std::fs::read(subtitles).map_err(|e| Failure::new("usage", format!("{source}: {e}")))?;
+    let cues = String::from_utf8(bytes)
+        .map_err(|_| "not UTF-8 text".to_string())
+        .and_then(|t| subtitles::read(&t))
+        .map_err(|e| {
+            Failure::new("usage", format!("{source}: {e}")).hint("an .srt or .vtt file, in UTF-8")
+        })?;
+    let (edited, done) = subtitles::import(&text, &cues, track, clip)
+        .map_err(|e| Failure::new("timeline", format!("{path}: {e}")))?;
+    let root =
+        serde_json::from_str(&edited).map_err(|e| Failure::new("timeline", e.to_string()))?;
+    let doc =
+        valle_timeline::Document::read_edit(&root).map_err(|e| Failure::new("timeline", e))?;
+    if doc.duration > Tick::ZERO {
+        lower_document(&path, &doc)?;
+    }
+    valle_project::write(Path::new(&path), edited.as_bytes(), true)
+        .map_err(|e| Failure::new("timeline", e))?;
+    let mut summary = format!(
+        "{} captions from {source} on {} of {path}",
+        done.captions, done.track
+    );
+    if done.shortened > 0 {
+        summary += &format!("\n{} shortened to meet the next", done.shortened);
+    }
+    if done.left_out > 0 {
+        summary += &format!(
+            "\n{} left out: under a frame, or outside the clip",
+            done.left_out
+        );
+    }
+    Ok(json!({
+        "status": "ok",
+        "summary": summary,
+        "file": path,
+        "track": done.track,
+        "captions": done.captions,
+        "shortened": done.shortened,
+        "leftOut": done.left_out,
+    }))
+}
+
+/// A caption track of the document written out as an .srt or .vtt file.
+pub fn export_captions(file: &str, output: &Path, track: Option<&str>) -> Result<Value, Failure> {
+    let out = output.display().to_string();
+    let format = subtitles::Format::of(&out).ok_or_else(|| {
+        Failure::new("usage", format!("{out}: not an .srt or .vtt file"))
+            .hint("name the file .srt or .vtt")
+    })?;
+    let args = Args {
+        file: file.to_string(),
+        ..Args::default()
+    };
+    let (path, _, doc) = document(&args, true)?;
+    let (at, cues) = subtitles::export(&doc, track)
+        .map_err(|e| Failure::new("timeline", format!("{path}: {e}")))?;
+    valle_project::write(output, subtitles::write(&cues, format).as_bytes(), true)
+        .map_err(|e| Failure::new("usage", format!("{out}: {e}")))?;
+    Ok(json!({
+        "status": "ok",
+        "summary": format!("{} captions from {at} of {path} in {out}", cues.len()),
+        "file": out,
+        "track": at,
+        "captions": cues.len(),
+    }))
 }
 
 /// What the frame at `at` seconds draws at `point`, or in `region`, fractions of the canvas.

@@ -1,5 +1,6 @@
 //! Timeline edits through the CLI: query addresses are usable by edit, linked edits are
-//! atomic, and an empty document is still an editing document.
+//! atomic, an empty document is still an editing document, and captions go in and out as SRT
+//! and VTT.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -25,6 +26,23 @@ impl Timeline {
             .args(["timeline", command])
             .arg(&self.0)
             .args(args)
+            .arg("--json")
+            .output()
+            .unwrap();
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            output.status.success(),
+            result["status"] == "ok",
+            "{result}"
+        );
+        result
+    }
+
+    fn captions(&self, args: &[&str]) -> Value {
+        let output = Command::new(VALLE)
+            .args(["timeline", "captions", args[0]])
+            .arg(&self.0)
+            .args(&args[1..])
             .arg("--json")
             .output()
             .unwrap();
@@ -249,4 +267,55 @@ export default function Scene() {
 
     let result = timeline.run("pick", &["--at", "5", "--point", "0.5,0.5"]);
     assert_eq!(result["status"], "error", "{result}");
+}
+
+#[test]
+fn captions_come_in_from_srt_and_go_out_as_vtt() {
+    let timeline = Timeline::new(
+        "captions",
+        json!({
+            "canvas": {"width": 64, "height": 36, "fps": 25},
+            "tracks": {"visual": [{"id": "story", "items": [
+                {"id": "card", "kind": "solid", "color": "black", "duration": 6}
+            ]}]}
+        }),
+    );
+    let dir = timeline.0.parent().unwrap();
+    let srt = dir.join("in.srt");
+    std::fs::write(
+        &srt,
+        "1\r\n00:00:00,400 --> 00:00:02,000\r\n<i>Hello</i>\r\nthere\r\n\r\n\
+         2\r\n00:00:02,000 --> 00:00:04,000\r\nAgain\r\n",
+    )
+    .unwrap();
+    let imported = timeline.captions(&["import", srt.to_str().unwrap()]);
+    assert_eq!(imported["captions"], 2);
+    assert_eq!(imported["track"], "tracks.caption[0]");
+    assert_eq!(timeline.run("check", &[])["status"], "ok");
+    let vtt = dir.join("out.vtt");
+    let exported = timeline.captions(&["export", vtt.to_str().unwrap()]);
+    assert_eq!(exported["captions"], 2);
+    assert_eq!(
+        std::fs::read_to_string(&vtt).unwrap(),
+        "WEBVTT\n\n00:00:00.400 --> 00:00:02.000\nHello\nthere\n\n\
+         00:00:02.000 --> 00:00:04.000\nAgain\n\n"
+    );
+
+    // Errors leave the file as it was.
+    let before = timeline.text();
+    let story = timeline.captions(&["import", srt.to_str().unwrap(), "--track", "story"]);
+    assert!(
+        story["message"]
+            .as_str()
+            .unwrap()
+            .contains("not a caption track"),
+        "{story}"
+    );
+    std::fs::write(&srt, "1\nsoon --> later\nHi\n").unwrap();
+    let bad = timeline.captions(&["import", srt.to_str().unwrap()]);
+    assert_eq!(bad["code"], "usage", "{bad}");
+    assert!(bad["message"].as_str().unwrap().contains("line 2"), "{bad}");
+    assert_eq!(timeline.text(), before);
+    let wrong = timeline.captions(&["export", dir.join("out.txt").to_str().unwrap()]);
+    assert_eq!(wrong["code"], "usage", "{wrong}");
 }

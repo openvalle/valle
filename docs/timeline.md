@@ -333,6 +333,24 @@ A caption track's clips each show a caption, as `text` or as timed `runs`:
 - Instead of `style`, `presenter: { "component": … }` draws the captions with your own Motion
   scene, whose role is `captionPresenter`.
 
+Subtitle files go in and out as SRT and VTT:
+
+```sh
+valle timeline captions import edit.timeline.json talk.srt                  # a new caption track
+valle timeline captions import edit.timeline.json talk.vtt --track subs --clip interview
+valle timeline captions export edit.timeline.json edit.srt --track subs
+```
+
+- Import makes a `text` clip of each cue, its lines joined by line breaks, on a new caption
+  track, or with `--track` in place of that track's clips, keeping its `style`. Times snap to
+  frames, and a cue that runs into the next is shortened to meet it. Styling is dropped:
+  tags such as `<i>`, VTT cue settings and SRT's `{\an8}`.
+- With `--clip`, the cue times are in the file that clip plays, as a subtitle file made for
+  the footage is: each caption is anchored to the clip, and cues outside it are left out.
+  A clip with a `timeMap` is refused.
+- Export writes the first caption track, or `--track`, at its clips' times in the timeline;
+  disabled clips are left out, and a clip of runs is written as its whole text.
+
 ## Adjustments
 
 An adjustment track's clips change what is drawn below them while they play:

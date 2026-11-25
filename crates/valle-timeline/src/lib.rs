@@ -12,6 +12,7 @@
 
 pub mod edit;
 pub mod query;
+pub mod subtitles;
 pub mod time;
 pub mod timecode;
 

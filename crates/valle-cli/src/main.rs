@@ -25,7 +25,7 @@ use clap::error::ErrorKind;
 use serde_json::{Value, json};
 use valle_engine::gpu::Gpu;
 
-use cli::{Cli, Command, Media, Motion, ProjectCommand, Timeline};
+use cli::{Captions, Cli, Command, Media, Motion, ProjectCommand, Timeline};
 
 /// Scene code runs on the thread that loads it, which needs more than the 12 MiB stack QuickJS
 /// is given.
@@ -264,6 +264,23 @@ fn run(cli: Cli) -> Result<Value, Failure> {
         Command::Timeline(Timeline::Edit { file, op }) => {
             scene_file(&file, true, "edit")?;
             timeline::edit(&file, &op)
+        }
+        Command::Timeline(Timeline::Captions(Captions::Import {
+            file,
+            subtitles,
+            track,
+            clip,
+        })) => {
+            scene_file(&file, true, "edit")?;
+            timeline::import_captions(&file, &subtitles, track.as_deref(), clip.as_deref())
+        }
+        Command::Timeline(Timeline::Captions(Captions::Export {
+            file,
+            output,
+            track,
+        })) => {
+            scene_file(&file, true, "query")?;
+            timeline::export_captions(&file, &output, track.as_deref())
         }
         Command::Timeline(Timeline::Studio { file, serve }) => {
             studio::run("timeline", Some(file), serve, events)
