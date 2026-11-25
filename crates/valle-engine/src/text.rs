@@ -1280,9 +1280,9 @@ impl Text {
             let mut builder = (self.layouts).ranged_builder(&mut self.fonts, text, 1.0, false);
             let family = FontFamily::List(Cow::Borrowed(&families));
             builder.push_default(StyleProperty::FontFamily(family));
-            let last = symbols_last(&families);
-            for range in symbols(text) {
-                let family = FontFamily::List(Cow::Borrowed(&last));
+            let last = [false, true].map(|negated| symbols_last(&families, negated));
+            for (range, negated) in symbols(text) {
+                let family = FontFamily::List(Cow::Borrowed(&last[negated as usize]));
                 builder.push(StyleProperty::FontFamily(family), range);
             }
             let first = emoji_first(&families);
@@ -1416,7 +1416,9 @@ impl Text {
                 .map(|p| families(&p.font.family, &self.named))
                 .collect::<Result<Vec<_>, _>>()?;
             let firsts: Vec<_> = families.iter().map(|f| emoji_first(f)).collect();
-            let lasts: Vec<_> = families.iter().map(|f| symbols_last(f)).collect();
+            let lasts: Vec<_> = (families.iter())
+                .map(|f| [false, true].map(|negated| symbols_last(f, negated)))
+                .collect();
             let mut sizes: Option<Vec<(Range<usize>, f32)>> = None;
             let layout = loop {
                 let mut builder =
@@ -1528,8 +1530,8 @@ impl Text {
                         let axes = StyleProperty::FontVariations(variations(font));
                         builder.push(axes, range.clone());
                     }
-                    for symbols in symbols(&string[range.clone()]) {
-                        let family = FontFamily::List(Cow::Borrowed(&lasts[k]));
+                    for (symbols, negated) in symbols(&string[range.clone()]) {
+                        let family = FontFamily::List(Cow::Borrowed(&lasts[k][negated as usize]));
                         let at = range.start + symbols.start..range.start + symbols.end;
                         builder.push(StyleProperty::FontFamily(family), at);
                     }
@@ -1957,28 +1959,52 @@ fn symbol(c: char) -> bool {
         && !emoji(c)
 }
 
+/// Whether `c` is a negated relation or arrow, such as ≠ or ∉, one of the characters whose
+/// canonical decomposition ends in U+0338. Noto Sans and Noto Serif have none of them and
+/// shaping draws them as their base and U+0338, which Noto Serif and the italics put beside an
+/// equals sign instead of over it.
+fn negated(c: char) -> bool {
+    "↚↛↮⇍⇎⇏∄∉∌∤∦≁≄≇≉≠≢≭≮≯≰≱≴≵≸≹⊀⊁⊄⊅⊈⊉⊬⊭⊮⊯⋠⋡⋢⋣⋪⋫⋬⋭\u{2ADC}".contains(c)
+}
+
 /// The runs of symbols in `text`, which fall back to the `SYMBOLS` fonts after the fonts the
-/// text names. Only they do, as Noto Sans Math has Arabic letters it cannot join.
-fn symbols(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {
+/// text names, and whether they are of `negated` ones. Only they do, as Noto Sans Math has
+/// Arabic letters it cannot join.
+fn symbols(text: &str) -> impl Iterator<Item = (Range<usize>, bool)> + '_ {
     let mut chars = text.char_indices().peekable();
     std::iter::from_fn(move || {
-        let (start, _) = chars.find(|&(_, c)| symbol(c))?;
+        let (start, first) = chars.find(|&(_, c)| symbol(c))?;
         let mut end = text.len();
         while let Some(&(i, c)) = chars.peek() {
-            if !symbol(c) {
+            if !symbol(c) || negated(c) != negated(first) {
                 end = i;
                 break;
             }
             chars.next();
         }
-        Some(start..end)
+        Some((start..end, negated(first)))
     })
 }
 
-/// `families` with the `SYMBOLS` fonts last.
-fn symbols_last(families: &[FontFamilyName<'static>]) -> Vec<FontFamilyName<'static>> {
+/// `families` with the `SYMBOLS` fonts last; for `negated` symbols, Noto Sans Math also before
+/// the built-in serif and sans-serif, which have them only as a base and U+0338.
+fn symbols_last(
+    families: &[FontFamilyName<'static>],
+    negated: bool,
+) -> Vec<FontFamilyName<'static>> {
     let symbols = SYMBOLS.map(|i| FontFamilyName::named(BUILT_IN[i].name));
-    families.iter().cloned().chain(symbols).collect()
+    let mut out: Vec<_> = families.iter().cloned().chain(symbols.clone()).collect();
+    if negated {
+        let text = |f: &FontFamilyName| {
+            matches!(
+                f,
+                FontFamilyName::Generic(GenericFamily::Serif | GenericFamily::SansSerif)
+            )
+        };
+        let at = out.iter().position(text).unwrap_or(out.len());
+        out.insert(at, symbols[1].clone());
+    }
+    out
 }
 
 /// The characters of `text` that ask to show as an emoji with the selector VS16, as graphemes,
@@ -2653,6 +2679,25 @@ mod tests {
         assert_eq!(faces("▲, A")[1..], [sans, sans, sans]);
         // ✓ is text, not an emoji, unless VS16 asks for one.
         assert_ne!(faces("✓\u{FE0F}")[0], shapes[0]);
+        // ≠ is one glyph of Noto Sans Math, not = and U+0338 of Noto Sans or Noto Serif, in
+        // every style; ≤ still falls back after them.
+        let serif = Font {
+            family: Rc::new([Family::Serif]),
+            ..font(16.0)
+        };
+        let italic = Font {
+            style: FontStyle::Italic,
+            ..font(16.0)
+        };
+        let math = arrows[0];
+        for font in [font(16.0), serif, italic] {
+            let lines = t.lines(&plain("a≠≤b", &font), 1000.0).unwrap();
+            let faces: Vec<_> = (lines.glyphs.iter())
+                .map(|g| t.faces()[g.face as usize].data.id())
+                .collect();
+            assert_eq!(faces.len(), 4);
+            assert_eq!(faces[1..3], [math, math]);
+        }
     }
 
     #[test]
