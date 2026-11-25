@@ -70,9 +70,10 @@ The engine in the browser, `@openvalle/engine`, and Studio, which the executable
 ## Fonts
 
 No font is bundled in Valle's executable. The built-in ones, Noto Sans, Noto Sans Italic, Noto
-Serif, Noto Serif Italic, Noto Sans Mono, Noto Sans SC, Noto Sans KR and Noto Color Emoji, are
-downloaded from [Google Fonts](https://fonts.google.com/noto) the first time text needs them,
-unmodified; they are under the SIL Open Font License 1.1.
+Serif, Noto Serif Italic, Noto Sans Mono, Noto Sans SC, Noto Sans KR, Noto Color Emoji, Noto Sans
+Symbols 2, Noto Sans Math and Noto Sans Symbols, are downloaded from
+[Google Fonts](https://fonts.google.com/noto) the first time text needs them, unmodified; they
+are under the SIL Open Font License 1.1.
 
 The tests prepare unmodified Noto Sans and Noto Sans Italic files in `tests/resources/`
 from the same pinned definitions and download cache. These generated files are not

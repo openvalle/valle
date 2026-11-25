@@ -1,8 +1,9 @@
 # Fixed test resources
 
-`NotoSans.ttf`, `NotoSansItalic.ttf` and `NotoSansSC.ttf` are generated, ignored files used by both
-the Rust text renderer and the browser's `@font-face`. Their URLs and SHA-256
-hashes come directly from `BUILT_IN` in
+`NotoSans.ttf`, `NotoSansItalic.ttf`, `NotoSansSC.ttf`, `NotoColorEmoji.ttf` and the symbol
+fonts `NotoSansSymbols2.ttf`, `NotoSansMath.ttf` and `NotoSansSymbols.ttf` are generated,
+ignored files used by both the Rust text renderer and the browser's `@font-face`. Their URLs
+and SHA-256 hashes come directly from `BUILT_IN` in
 [`text.rs`](../../crates/valle-engine/src/text.rs). The SIL Open Font License 1.1
 is retained in `OFL.txt`.
 `NotoSansHebrew.ttf` is also generated and ignored: its pinned Google Fonts URL

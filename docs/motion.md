@@ -216,8 +216,9 @@ quote names containing spaces. System UI font keywords such as `caption` are
 not supported: declare the font resource explicitly.
 
 Built-in fonts, used without declaring them: Noto Sans (the default, and `sans-serif`), Noto
-Serif (`serif`), Noto Sans Mono (`monospace`), Noto Sans SC and KR for Chinese and Korean, and
-Noto Color Emoji. They are downloaded once into the cache on first use.
+Serif (`serif`), Noto Sans Mono (`monospace`), Noto Sans SC and KR for Chinese and Korean, Noto
+Color Emoji, and Noto Sans Symbols 2, Math and Symbols for symbols such as ▲ ✓ → ★ ☺ that a
+text's fonts do not have. They are downloaded once into the cache on first use.
 
 Other fonts are resources of kind `font`, used by their name in `fontFamily`:
 

@@ -19,6 +19,9 @@ pub fn prepare() -> Result<(), String> {
                 "NotoSansItalic.ttf",
                 "NotoSansSC.ttf",
                 "NotoColorEmoji.ttf",
+                "NotoSansSymbols2.ttf",
+                "NotoSansMath.ttf",
+                "NotoSansSymbols.ttf",
             ] {
                 let font = BUILT_IN
                     .iter()

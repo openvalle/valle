@@ -439,7 +439,7 @@ pub struct BuiltIn {
 }
 
 /// The built-in fonts, which the host gives by their entries here.
-pub const BUILT_IN: [BuiltIn; 8] = [
+pub const BUILT_IN: [BuiltIn; 11] = [
     BuiltIn {
         name: "Noto Sans",
         file: "NotoSans.ttf",
@@ -495,6 +495,27 @@ pub const BUILT_IN: [BuiltIn; 8] = [
         url: "https://fonts.gstatic.com/s/notocoloremoji/v50/Yq6P-KqIXTD0t4D9z1ESnKM3-HpFab5s79iz64w.ttf",
         sha256: "d8c8a5e2eaecf93bf46be895640139d344ace174e2cdb6b0d988f7e83fd97844",
         size: 25_347_176,
+    },
+    BuiltIn {
+        name: "Noto Sans Symbols 2",
+        file: "NotoSansSymbols2.ttf",
+        url: "https://fonts.gstatic.com/s/notosanssymbols2/v25/I_uyMoGduATTei9eI8daxVHDyfisHr71ypM.ttf",
+        sha256: "f56f4b90e7653ee69d88593c337bd9bb3cad6e4c0d1b4ef55bf0424ec8cc7c95",
+        size: 1_227_692,
+    },
+    BuiltIn {
+        name: "Noto Sans Math",
+        file: "NotoSansMath.ttf",
+        url: "https://fonts.gstatic.com/s/notosansmath/v19/7Aump_cpkSecTWaHRlH2hyV5UHkG.ttf",
+        sha256: "3cbaf44af13f592bc7f7172a50edab4c73ac2f3d19af2d697a01ebd3288e322d",
+        size: 783_548,
+    },
+    BuiltIn {
+        name: "Noto Sans Symbols",
+        file: "NotoSansSymbols.ttf",
+        url: "https://fonts.gstatic.com/s/notosanssymbols/v47/rP2up3q65FkAtHfwd-eIS2brbDN6gxP34F9jRRCe4W3gfQ8gag.ttf",
+        sha256: "11096421f41ef548175a671cd2a29f1150fcc59845e82ab211d82fa3ec2e3482",
+        size: 183_620,
     },
 ];
 
@@ -1259,6 +1280,11 @@ impl Text {
             let mut builder = (self.layouts).ranged_builder(&mut self.fonts, text, 1.0, false);
             let family = FontFamily::List(Cow::Borrowed(&families));
             builder.push_default(StyleProperty::FontFamily(family));
+            let last = symbols_last(&families);
+            for range in symbols(text) {
+                let family = FontFamily::List(Cow::Borrowed(&last));
+                builder.push(StyleProperty::FontFamily(family), range);
+            }
             let first = emoji_first(&families);
             for range in presented(text) {
                 let family = FontFamily::List(Cow::Borrowed(&first));
@@ -1390,6 +1416,7 @@ impl Text {
                 .map(|p| families(&p.font.family, &self.named))
                 .collect::<Result<Vec<_>, _>>()?;
             let firsts: Vec<_> = families.iter().map(|f| emoji_first(f)).collect();
+            let lasts: Vec<_> = families.iter().map(|f| symbols_last(f)).collect();
             let mut sizes: Option<Vec<(Range<usize>, f32)>> = None;
             let layout = loop {
                 let mut builder =
@@ -1500,6 +1527,11 @@ impl Text {
                     if !font.variations.is_empty() {
                         let axes = StyleProperty::FontVariations(variations(font));
                         builder.push(axes, range.clone());
+                    }
+                    for symbols in symbols(&string[range.clone()]) {
+                        let family = FontFamily::List(Cow::Borrowed(&lasts[k]));
+                        let at = range.start + symbols.start..range.start + symbols.end;
+                        builder.push(StyleProperty::FontFamily(family), at);
                     }
                     for emoji in presented(&string[range.clone()]) {
                         let family = FontFamily::List(Cow::Borrowed(&firsts[k]));
@@ -1883,8 +1915,8 @@ pub type Fallback = (usize, &'static [[u8; 4]], fn(char) -> bool);
 /// The built-in fonts text falls back to when its fonts do not have a character: by the scripts
 /// they are the fallback of, and the characters that need them. Noto Sans SC has Han, kana and
 /// bopomofo, but no Hangul. Shaping takes an emoji's font from the `emoji` family, after those
-/// its text names.
-pub const FALLBACKS: [Fallback; 3] = [
+/// its text names, and a symbol's from the `SYMBOLS` fonts, which have no script.
+pub const FALLBACKS: [Fallback; 6] = [
     (5, &[*b"Hani", *b"Hira", *b"Kana", *b"Bopo"], |c| {
         matches!(c,
             '\u{2E80}'..='\u{2FFF}' | '\u{3000}'..='\u{312F}' | '\u{31A0}'..='\u{4DBF}'
@@ -1897,14 +1929,56 @@ pub const FALLBACKS: [Fallback; 3] = [
             | '\u{AC00}'..='\u{D7FF}')
     }),
     (7, &[], emoji),
+    (8, &[], symbol),
+    (9, &[], symbol),
+    (10, &[], symbol),
 ];
 
-/// Whether `c` may show as an emoji: a pictograph, a regional indicator, or the selector that
-/// asks for an emoji (VS16).
+/// Whether `c` may show as an emoji: one that shows as an emoji by default, such as a pictograph
+/// or a regional indicator, or the selector that asks for an emoji (VS16). Shaping takes the
+/// emoji font for no other character, so the others, such as ✓ and ☺, are symbols.
 fn emoji(c: char) -> bool {
+    use icu_properties::CodePointSetData;
+    use icu_properties::props::EmojiPresentation;
+    c == '\u{FE0F}' || CodePointSetData::new::<EmojiPresentation>().contains(c)
+}
+
+/// The built-in fonts of symbols, by their entries in `BUILT_IN`: Noto Sans Symbols 2 has
+/// shapes, dingbats and Braille; Noto Sans Math arrows and mathematical operators and letters;
+/// Noto Sans Symbols enclosed numbers and the rest of the miscellaneous symbols.
+const SYMBOLS: [usize; 3] = [8, 9, 10];
+
+/// Whether `c` is a symbol the `SYMBOLS` fonts have, such as an arrow, a shape, a check mark or
+/// a mathematical letter, and not an emoji.
+fn symbol(c: char) -> bool {
     matches!(c,
-        '\u{231A}'..='\u{23FF}' | '\u{2600}'..='\u{27BF}' | '\u{2B05}'..='\u{2B55}'
-        | '\u{FE0F}' | '\u{1F000}'..='\u{1FAFF}')
+        '\u{20D0}'..='\u{20FF}' | '\u{2190}'..='\u{2BFF}' | '\u{1D400}'..='\u{1D7FF}'
+        | '\u{1F000}'..='\u{1FBFF}')
+        && !emoji(c)
+}
+
+/// The runs of symbols in `text`, which fall back to the `SYMBOLS` fonts after the fonts the
+/// text names. Only they do, as Noto Sans Math has Arabic letters it cannot join.
+fn symbols(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {
+    let mut chars = text.char_indices().peekable();
+    std::iter::from_fn(move || {
+        let (start, _) = chars.find(|&(_, c)| symbol(c))?;
+        let mut end = text.len();
+        while let Some(&(i, c)) = chars.peek() {
+            if !symbol(c) {
+                end = i;
+                break;
+            }
+            chars.next();
+        }
+        Some(start..end)
+    })
+}
+
+/// `families` with the `SYMBOLS` fonts last.
+fn symbols_last(families: &[FontFamilyName<'static>]) -> Vec<FontFamilyName<'static>> {
+    let symbols = SYMBOLS.map(|i| FontFamilyName::named(BUILT_IN[i].name));
+    families.iter().cloned().chain(symbols).collect()
 }
 
 /// The characters of `text` that ask to show as an emoji with the selector VS16, as graphemes,
@@ -2556,6 +2630,29 @@ mod tests {
             "'ไ' (U+0E44): no font has it; declare a font resource that does, such as one for \
          Thai or Arabic text"
         );
+    }
+
+    #[test]
+    fn symbols_fall_back_to_the_symbol_fonts_in_any_script() {
+        let mut t = text();
+        let mut faces = |s: &str| {
+            let lines = t.lines(&plain(s, &font(16.0)), 1000.0).unwrap();
+            let faces = lines
+                .glyphs
+                .iter()
+                .map(|g| t.faces()[g.face as usize].data.id());
+            faces.collect::<Vec<_>>()
+        };
+        let sans = faces("A")[0];
+        // Shapes and check marks in Noto Sans Symbols 2, arrows in Noto Sans Math, ☺ in Noto
+        // Sans Symbols, after Latin, Cyrillic or Han; the characters around stay in theirs.
+        let [shapes, arrows, smile] = ["A▲✓", "Ж→", "ä☺"].map(|s| faces(s)[1..].to_vec());
+        assert!(shapes[0] == shapes[1] && shapes[0] != sans);
+        assert!(arrows[0] != sans && arrows[0] != shapes[0] && smile[0] != arrows[0]);
+        assert_eq!(faces("中▲")[1], shapes[0]);
+        assert_eq!(faces("▲, A")[1..], [sans, sans, sans]);
+        // ✓ is text, not an emoji, unless VS16 asks for one.
+        assert_ne!(faces("✓\u{FE0F}")[0], shapes[0]);
     }
 
     #[test]
