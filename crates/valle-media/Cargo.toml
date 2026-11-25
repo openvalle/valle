@@ -12,3 +12,8 @@ ring.workspace = true
 serde_json.workspace = true
 ureq.workspace = true
 valle-asr = { workspace = true, features = ["qwen3"] }
+
+# Apple Silicon runs speech recognition on the GPU with the model's BF16 weights. Intel
+# Macs, Linux and Windows keep the CPU.
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+valle-asr = { workspace = true, features = ["qwen3", "metal"] }

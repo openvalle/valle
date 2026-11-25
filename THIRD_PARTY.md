@@ -49,9 +49,9 @@ downloads them, unmodified, from Hugging Face or ModelScope.
 
 | Project | Use | License |
 | --- | --- | --- |
-| [valle-asr](https://github.com/openvalle/valle-asr) | Speech recognition and word times on the CPU | Apache-2.0 |
+| [valle-asr](https://github.com/openvalle/valle-asr) | Speech recognition and word times, on the GPU on Apple Silicon and the CPU elsewhere | Apache-2.0 |
 | [Qwen3-ASR-0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) and [Qwen3-ForcedAligner-0.6B](https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B) | The models it runs, downloaded at the revisions it was tested with | Apache-2.0 |
-| [Candle](https://github.com/huggingface/candle), with [gemm](https://github.com/sarah-quinones/gemm) | The models' tensors and matrix products; on macOS through Apple's Accelerate | MIT or Apache-2.0 |
+| [Candle](https://github.com/huggingface/candle), with [gemm](https://github.com/sarah-quinones/gemm) | The models' tensors and matrix products; on Apple Silicon's GPU through Metal, on Intel Macs through Apple's Accelerate | MIT or Apache-2.0 |
 | [Tokenizers](https://github.com/huggingface/tokenizers) | The models' text tokens | Apache-2.0 |
 | [safetensors](https://github.com/huggingface/safetensors) and [memmap2](https://github.com/RazrFalcon/memmap2-rs) | Reading the models' weights from their files | Apache-2.0; memmap2 MIT or Apache-2.0 |
 | [Rayon](https://github.com/rayon-rs/rayon) | Running the models' work on every core | MIT or Apache-2.0 |
