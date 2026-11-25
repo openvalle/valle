@@ -265,7 +265,7 @@ pub enum Timeline {
         #[arg(long, value_name = "X,Y,W,H")]
         region: Option<String>,
     },
-    /// Edit it as Studio does: set, move, trim, delete or add a clip
+    /// Edit it as Studio does: set, move, trim, delete, add, split, insert or cut clips
     #[command(after_help = EDIT_EXAMPLES, after_long_help = EDITING)]
     Edit {
         /// The timeline: a .timeline.json file
@@ -291,6 +291,7 @@ const EDIT_EXAMPLES: &str = "\
 Examples:
   valle timeline edit edit.timeline.json --op '{\"op\":\"move\",\"clip\":\"shot\",\"start\":3}'
   valle timeline edit edit.timeline.json --op '{\"op\":\"trim\",\"clip\":\"shot\",\"duration\":4}'
+  valle timeline edit edit.timeline.json --op '{\"op\":\"cut-ranges\",\"track\":\"story\",\"ranges\":[[4.2,5.1]]}'
   valle timeline edit edit.timeline.json --op @edit.json
 
 Run with --help for the editing conventions.";
@@ -299,6 +300,7 @@ const EDITING: &str = "\
 Examples:
   valle timeline edit edit.timeline.json --op '{\"op\":\"move\",\"clip\":\"shot\",\"start\":3}'
   valle timeline edit edit.timeline.json --op '{\"op\":\"trim\",\"clip\":\"shot\",\"duration\":4}'
+  valle timeline edit edit.timeline.json --op '{\"op\":\"cut-ranges\",\"track\":\"story\",\"ranges\":[[4.2,5.1]]}'
   valle timeline edit edit.timeline.json --op @edit.json
 
 Editing conventions:
@@ -310,9 +312,15 @@ Editing conventions:
   set id                   updates every anchor that names the clip
   set track                with track in place of clip: a track's own field, such as enabled
   delete                   also removes adjacent transitions and clips anchored to it
+  split                    { clip, at }: the second part is id-2, its source further in
+  ripple-delete            { clip }: a delete that moves the track's later clips back
+  insert                   { track, at, clip }: the clip without a start; later clips move on
+  cut-ranges               { track, ranges: [[start, end], …] }: spans taken out of the
+                           track's clips and closed up; anchored captions and sounds go too
   add                      appends to a track; tracks.<kind>[n] makes a track when n is the
                            number of tracks of that kind (0 for the first)
-  start / head / duration  seconds, snapped to the timeline's frames
+  start / head / duration / at / ranges
+                           seconds, snapped to the timeline's frames
 
 An edit checks its sources' bounds before writing; one that fails leaves the file unchanged.
 An empty timeline can be edited and queried, not rendered.";

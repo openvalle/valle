@@ -19,15 +19,32 @@
 //!   clips anchored to it (including through other anchors) are deleted too.
 //! - `{ "op": "add", "track", "clip" }`: a clip at the end of a track's sequence, or among its
 //!   placed clips.
+//! - `{ "op": "split", "clip", "at" }`: in two at `at` seconds of the timeline. The second part
+//!   is `id-2` (or the next number free), its source further in; keyframes and caption runs are
+//!   cut where it is, and clips anchored to it follow the part they start on.
+//! - `{ "op": "ripple-delete", "clip" }`: a delete that also moves the track's later clips, and
+//!   what is anchored to them, back by its length.
+//! - `{ "op": "insert", "track", "at", "clip" }`: the clip, without a start, at `at` seconds;
+//!   a clip there is split, and the track's later clips move on by the new one's length.
+//! - `{ "op": "cut-ranges", "track", "ranges": [[start, end], …] }`: those spans of the
+//!   timeline taken out of the track's clips, the rest closed up. Clips anchored to the track's
+//!   clips, such as captions and sounds, are cut and moved with them; a caption left with no run
+//!   is removed.
+//!
+//! Those four cut and move the track's clips and their followers only; other clips stay where
+//! they are. A sequence is written again: gaps where it is empty, and its transitions where
+//! their two clips still meet and are long enough.
 //!
 //! The text written back is indented JSON, its keys in the order they were written; a value
 //! that fits its line stays on one.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::{Map, Value};
 
 use crate::{Document, Error};
+
+const OPS: &str = "set, move, trim, delete, add, split, ripple-delete, insert or cut-ranges";
 
 /// `text` with `op` done.
 pub fn apply(text: &str, op: &Value) -> Result<String, Error> {
@@ -35,9 +52,8 @@ pub fn apply(text: &str, op: &Value) -> Result<String, Error> {
     let doc = Document::read_edit(&root)?;
     let fps = doc.canvas.fps.as_f64();
     let snap = |s: f64| (s * fps).round() / fps;
-    let name = op["op"]
-        .as_str()
-        .ok_or("op: set, move, trim, delete or add")?;
+    let near = 0.5 / fps;
+    let name = op["op"].as_str().ok_or(format!("op: {OPS}"))?;
     let number = |k: &str| {
         op[k]
             .as_f64()
@@ -60,6 +76,84 @@ pub fn apply(text: &str, op: &Value) -> Result<String, Error> {
         list.as_array_mut()
             .ok_or("the track's list is not an array")?
             .push(clip);
+        return checked(root);
+    }
+    if name == "insert" || name == "cut-ranges" {
+        let named = op["track"]
+            .as_str()
+            .ok_or_else(|| format!("{name} needs track: an id or path such as tracks.visual[0]"))?;
+        if name == "cut-ranges" {
+            let track = (doc.tracks.iter())
+                .find(|t| t.id == named || t.at == named)
+                .ok_or_else(|| format!("no track {named}"))?;
+            let ranges = (op["ranges"].as_array())
+                .filter(|l| !l.is_empty())
+                .ok_or("cut-ranges needs ranges: [[start, end], …] in seconds")?;
+            let mut cut = Vec::new();
+            for (i, r) in ranges.iter().enumerate() {
+                let span = match r.as_array().map(Vec::as_slice) {
+                    Some([s, e]) => s.as_f64().zip(e.as_f64()),
+                    _ => None,
+                };
+                match span {
+                    Some((s, e)) if s >= 0.0 && e > s => cut.push((snap(s), snap(e))),
+                    _ => {
+                        return Err(format!(
+                            "ranges[{i}]: [start, end] in seconds, from 0, the end after the start"
+                        ));
+                    }
+                }
+            }
+            cut.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut removed: Vec<(f64, f64)> = Vec::new();
+            for (s, e) in cut {
+                match removed.last_mut() {
+                    Some(last) if s <= last.1 + near => last.1 = last.1.max(e),
+                    _ if e - s > near => removed.push((s, e)),
+                    _ => {}
+                }
+            }
+            let roots = track.clips.iter().map(|c| c.id.as_str()).collect();
+            let change = Retime {
+                removed,
+                inserted: None,
+                cuts: Vec::new(),
+                fps,
+            };
+            retime(&mut root, &doc, &change, &roots, &HashSet::new(), None)?;
+            return checked(root);
+        }
+        let at = snap(number("at")?);
+        if at < 0.0 {
+            return Err("insert: at is 0 seconds or more".into());
+        }
+        let mut clip = op["clip"].clone();
+        let o = object(&mut clip, "clip")?;
+        if o.contains_key("start") {
+            return Err("insert puts the clip at `at`, so it has no start".into());
+        }
+        let length = (o.get("duration").and_then(Value::as_f64))
+            .filter(|d| *d > 0.0)
+            .ok_or("insert: the clip has a duration, seconds above 0")?;
+        let path = track_at(&mut root, &doc, named, false)?;
+        o.insert("duration".into(), seconds(snap(length)));
+        if find(&mut root, &path)?.get("items").is_none() {
+            o.insert("start".into(), seconds(at));
+        }
+        // The track may be new.
+        let doc = Document::read_edit(&root)?;
+        let track = (doc.tracks.iter())
+            .find(|t| t.at == path)
+            .ok_or_else(|| format!("no track {named}"))?;
+        let roots = track.clips.iter().map(|c| c.id.as_str()).collect();
+        let change = Retime {
+            removed: Vec::new(),
+            inserted: Some((at, snap(length))),
+            cuts: vec![at],
+            fps,
+        };
+        let added = Some((path.as_str(), clip));
+        retime(&mut root, &doc, &change, &roots, &HashSet::new(), added)?;
         return checked(root);
     }
     if name == "set" && op.get("clip").is_none() && op.get("track").is_some() {
@@ -122,6 +216,39 @@ pub fn apply(text: &str, op: &Value) -> Result<String, Error> {
             }
         }
         "delete" => delete(&mut root, &doc, &clip.id)?,
+        "split" => {
+            let cut = snap(number("at")?);
+            let (start, end) = (clip.start.seconds(), clip.end().seconds());
+            if cut <= start + near || cut >= end - near {
+                return Err(format!(
+                    "{at} plays from {} to {} s: split it at a time between",
+                    seconds(start),
+                    seconds(end)
+                ));
+            }
+            let change = Retime {
+                removed: Vec::new(),
+                inserted: None,
+                cuts: vec![cut],
+                fps,
+            };
+            let roots = HashSet::from([clip.id.as_str()]);
+            retime(&mut root, &doc, &change, &roots, &HashSet::new(), None)?;
+        }
+        "ripple-delete" => {
+            let track = (doc.tracks.iter())
+                .find(|t| t.clips.iter().any(|c| c.at == at))
+                .unwrap();
+            let gone = followers(&doc, [clip.id.as_str()]);
+            let roots = track.clips.iter().map(|c| c.id.as_str()).collect();
+            let change = Retime {
+                removed: vec![(clip.start.seconds(), clip.end().seconds())],
+                inserted: None,
+                cuts: Vec::new(),
+                fps,
+            };
+            retime(&mut root, &doc, &change, &roots, &gone, None)?;
+        }
         "move" if op.get("track").is_some() => {
             let to = op["track"].as_str().ok_or("track: an id or path")?;
             let from = (doc.tracks.iter())
@@ -277,7 +404,7 @@ pub fn apply(text: &str, op: &Value) -> Result<String, Error> {
             }
             o.insert("duration".into(), seconds(duration));
         }
-        other => return Err(format!("op {other}: set, move, trim, delete or add")),
+        other => return Err(format!("op {other}: {OPS}")),
     }
     checked(root)
 }
@@ -428,23 +555,8 @@ fn records(doc: &Document, root: &mut Value) -> Result<Vec<(Vec<String>, Value, 
 }
 
 /// Delete the clip, its dependent clips and transitions, preserving unrelated identities.
-fn delete(root: &mut Value, doc: &Document, id: &str) -> Result<(), Error> {
-    let mut removed = HashSet::from([id]);
-    loop {
-        let before = removed.len();
-        for clip in doc.tracks.iter().flat_map(|t| &t.clips) {
-            if clip
-                .anchor
-                .as_ref()
-                .is_some_and(|(to, _)| removed.contains(to.as_str()))
-            {
-                removed.insert(clip.id.as_str());
-            }
-        }
-        if removed.len() == before {
-            break;
-        }
-    }
+fn delete<'a>(root: &mut Value, doc: &'a Document, id: &'a str) -> Result<(), Error> {
+    let removed = followers(doc, [id]);
     for track in &doc.tracks {
         let mut indices = BTreeSet::new();
         for clip in &track.clips {
@@ -475,6 +587,412 @@ fn delete(root: &mut Value, doc: &Document, id: &str) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// The clips `roots` and those anchored to them, also through other anchors.
+fn followers<'a>(doc: &'a Document, roots: impl IntoIterator<Item = &'a str>) -> HashSet<&'a str> {
+    let mut out: HashSet<&str> = roots.into_iter().collect();
+    loop {
+        let before = out.len();
+        for clip in doc.tracks.iter().flat_map(|t| &t.clips) {
+            if (clip.anchor.as_ref()).is_some_and(|(to, _)| out.contains(to.as_str())) {
+                out.insert(clip.id.as_str());
+            }
+        }
+        if out.len() == before {
+            return out;
+        }
+    }
+}
+
+/// What an edit does to the timeline's time: spans taken out, a length put in at a time, and
+/// times the edited clips are cut at. Times are seconds on the frames.
+struct Retime {
+    /// In order and apart.
+    removed: Vec<(f64, f64)>,
+    /// The time and the length.
+    inserted: Option<(f64, f64)>,
+    cuts: Vec<f64>,
+    fps: f64,
+}
+
+impl Retime {
+    fn near(&self) -> f64 {
+        0.5 / self.fps
+    }
+
+    /// Where a time that is kept goes.
+    fn time(&self, t: f64) -> f64 {
+        let near = self.near();
+        let out: f64 = (self.removed.iter())
+            .filter(|r| r.1 <= t + near)
+            .map(|r| r.1 - r.0)
+            .sum();
+        let pushed = match self.inserted {
+            Some((at, length)) if t >= at - near => length,
+            _ => 0.0,
+        };
+        t - out + pushed
+    }
+
+    /// The parts of the span from `a` to `b` that are kept, cut where the time jumps, and at the
+    /// cuts with `cut`.
+    fn parts(&self, a: f64, b: f64, cut: bool) -> Vec<(f64, f64)> {
+        let near = self.near();
+        let mut parts = vec![(a, b)];
+        for &(s, e) in &self.removed {
+            parts = (parts.into_iter())
+                .flat_map(|(x, y)| match s < y && e > x {
+                    true => vec![(x, s), (e, y)],
+                    false => vec![(x, y)],
+                })
+                .collect();
+        }
+        let mut edges: Vec<f64> = self.inserted.map(|i| i.0).into_iter().collect();
+        if cut {
+            edges.extend(&self.cuts);
+        }
+        for at in edges {
+            parts = (parts.into_iter())
+                .flat_map(|(x, y)| match at > x + near && at < y - near {
+                    true => vec![(x, at), (at, y)],
+                    false => vec![(x, y)],
+                })
+                .collect();
+        }
+        parts.retain(|(x, y)| y - x > near);
+        parts
+    }
+}
+
+/// A part of a clip an edit keeps: where it was, where it starts now, its id and its JSON.
+struct Part {
+    from: f64,
+    to: f64,
+    start: f64,
+    id: String,
+    raw: Value,
+}
+
+/// Does `change` to the clips `roots` and those anchored to them, deletes `gone`, and puts
+/// `added` on the track at its path at the inserted time. A cut clip's first part keeps its id
+/// and the others take new ones; a clip anchored to a cut one follows the part it starts on.
+/// Sequences are written again: gaps where the time is empty, and transitions where their two
+/// clips still meet.
+fn retime<'a>(
+    root: &mut Value,
+    doc: &'a Document,
+    change: &Retime,
+    roots: &HashSet<&'a str>,
+    gone: &HashSet<&'a str>,
+    added: Option<(&str, Value)>,
+) -> Result<(), Error> {
+    let near = change.near();
+    let moving: HashSet<&str> = (followers(doc, roots.iter().copied()).difference(gone))
+        .copied()
+        .collect();
+    let clips = || doc.tracks.iter().flat_map(|t| &t.clips);
+    let mut ids: HashSet<String> = clips().map(|c| c.id.clone()).collect();
+    let mut parts: HashMap<&str, Vec<Part>> = HashMap::new();
+    for clip in clips().filter(|c| moving.contains(c.id.as_str())) {
+        let (start, end) = (clip.start.seconds(), clip.end().seconds());
+        let raw = find(root, &clip.at)?.clone();
+        let mut list = Vec::new();
+        for (a, b) in change.parts(start, end, roots.contains(clip.id.as_str())) {
+            let Some(raw) = part(&raw, clip, a - start, b - a, near)? else {
+                continue;
+            };
+            let id = match list.is_empty() {
+                true => clip.id.clone(),
+                false => fresh(&mut ids, &clip.id),
+            };
+            let start = change.time(a);
+            list.push(Part {
+                from: a,
+                to: b,
+                start,
+                id,
+                raw,
+            });
+        }
+        parts.insert(clip.id.as_str(), list);
+    }
+    // Each part's start as written: from the part of its anchor it starts on, else seconds.
+    let mut starts = Vec::new();
+    for clip in clips().filter(|c| moving.contains(c.id.as_str())) {
+        for (i, p) in parts[clip.id.as_str()].iter().enumerate() {
+            let start = match &clip.anchor {
+                Some((to, offset)) => {
+                    let target = match parts.get(to.as_str()) {
+                        Some(list) => (list.iter().rev())
+                            .find(|t| t.from <= p.from + near)
+                            .or(list.first())
+                            .map(|t| (t.id.clone(), t.start)),
+                        None => doc.clip(to).map(|t| (t.id.clone(), t.start.seconds())),
+                    };
+                    let from = doc.clip(to).map_or(0.0, |t| t.start.seconds());
+                    // The offset as written, moved as far as the part moved from its anchor.
+                    let moved = |at: f64| from - clip.start.seconds() + p.start - at;
+                    match target {
+                        // Written as it was.
+                        Some((id, at)) if id == *to && moved(at).abs() < 1e-9 => Value::Null,
+                        Some((id, at)) => serde_json::json!({
+                            "clip": id,
+                            "offset": seconds(offset.seconds() + moved(at)),
+                        }),
+                        // What it was anchored to is gone.
+                        None => seconds(p.start),
+                    }
+                }
+                None => match p.raw.get("start").and_then(Value::as_f64) {
+                    Some(written) => seconds(written + p.start - clip.start.seconds()),
+                    None => Value::Null,
+                },
+            };
+            starts.push((clip.id.as_str(), i, start));
+        }
+    }
+    for (id, i, start) in starts {
+        let p = &mut parts.get_mut(id).unwrap()[i];
+        let o = object(&mut p.raw, &p.id)?;
+        o.insert("id".into(), p.id.clone().into());
+        if !start.is_null() {
+            o.insert("start".into(), start);
+        }
+    }
+    let mut added = added;
+    for track in &doc.tracks {
+        let here = added.as_ref().is_some_and(|a| a.0 == track.at);
+        let touched = (track.clips.iter())
+            .any(|c| moving.contains(c.id.as_str()) || gone.contains(c.id.as_str()));
+        if !touched && !here {
+            continue;
+        }
+        let sequence = find(root, &track.at)?.get("items").is_some();
+        // Each clip or part: its start and length, its JSON, its clip in the track, and whether
+        // it begins and ends that clip.
+        let mut entries: Vec<(f64, f64, Value, Option<usize>, bool, bool)> = Vec::new();
+        let mut order: Vec<usize> = (0..track.clips.len()).collect();
+        order.sort_by_key(|&n| track.clips[n].index);
+        for n in order {
+            let clip = &track.clips[n];
+            let (start, end) = (clip.start.seconds(), clip.end().seconds());
+            if gone.contains(clip.id.as_str()) {
+                continue;
+            }
+            match parts.remove(clip.id.as_str()) {
+                Some(list) => {
+                    for p in list {
+                        let (first, last) = (p.from <= start + near, p.to >= end - near);
+                        entries.push((p.start, p.to - p.from, p.raw, Some(n), first, last));
+                    }
+                }
+                None => {
+                    // Generated ids depend on array indices, which shift.
+                    let mut raw = find(root, &clip.at)?.clone();
+                    if !clip.named {
+                        raw["id"] = clip.id.clone().into();
+                    }
+                    entries.push((start, end - start, raw, Some(n), true, true));
+                }
+            }
+        }
+        if here {
+            let (_, raw) = added.take().unwrap();
+            let (at, length) = change.inserted.unwrap_or_default();
+            entries.push((at, length, raw, None, true, true));
+        }
+        if !sequence {
+            let list = entries.into_iter().map(|e| e.2).collect();
+            find(root, &track.at)?["clips"] = Value::Array(list);
+            continue;
+        }
+        let mut between = HashMap::new();
+        for t in &track.transitions {
+            between.insert((t.from, t.to), (find(root, &t.at)?.clone(), t));
+        }
+        entries.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut items = Vec::new();
+        let mut end = 0.0;
+        let mut before: Option<(Option<usize>, bool, f64)> = None;
+        for (start, length, mut raw, clip, first, last) in entries {
+            if start < end - near {
+                return Err(format!("{}: the edit overlaps its clips", track.at));
+            }
+            if start > end + near {
+                items.push(serde_json::json!({ "gap": seconds(start - end) }));
+            } else if let Some((Some(from), true, previous)) = before
+                && let (Some(to), true) = (clip, first)
+                && let Some((raw, t)) = between.get(&(from, to))
+                && t.in_offset.seconds() <= previous + near
+                && t.out_offset.seconds() <= length + near
+            {
+                items.push(raw.clone());
+            }
+            object(&mut raw, &track.at)?.shift_remove("start");
+            items.push(raw);
+            end = start + length;
+            before = Some((clip, last, length));
+        }
+        find(root, &track.at)?["items"] = Value::Array(items);
+    }
+    Ok(())
+}
+
+/// The part of `clip`, written as `raw`, from `head` seconds into it and `length` long: its
+/// source, keyframes and caption runs on the part's own time. None for a caption with no
+/// words in it.
+fn part(
+    raw: &Value,
+    clip: &crate::Clip,
+    head: f64,
+    length: f64,
+    near: f64,
+) -> Result<Option<Value>, Error> {
+    let mut v = raw.clone();
+    if head <= near && length >= clip.duration.seconds() - near {
+        return Ok(Some(v));
+    }
+    let o = object(&mut v, &clip.at)?;
+    if head > near {
+        if o.contains_key("timeMap") {
+            return Err(format!(
+                "{} maps its time: cut its timeMap by hand",
+                clip.at
+            ));
+        }
+        if ["src", "component"].iter().any(|k| o.contains_key(*k)) {
+            let rate = o.get("rate").and_then(Value::as_f64).unwrap_or(1.0);
+            let from = o.get("trimStart").and_then(Value::as_f64).unwrap_or(0.0);
+            o.insert("trimStart".into(), seconds(from + head * rate));
+        }
+    }
+    o.insert("duration".into(), seconds(length));
+    for k in [
+        "position", "size", "scale", "rotation", "opacity", "gain", "pan",
+    ] {
+        if let Some(a) = o.get_mut(k) {
+            cut_keys(a, head, length, near);
+        }
+    }
+    // A Motion clip's props, and its effects'.
+    let mut props: Vec<&mut Value> = Vec::new();
+    for (k, v) in o.iter_mut() {
+        match (k.as_str(), v) {
+            ("props", p) => props.push(p),
+            ("effects", Value::Array(effects)) => {
+                props.extend(effects.iter_mut().filter_map(|e| e.get_mut("props")));
+            }
+            _ => {}
+        }
+    }
+    for p in props {
+        for a in p.as_object_mut().into_iter().flat_map(|p| p.values_mut()) {
+            cut_keys(a, head, length, near);
+        }
+    }
+    if let Some(Value::Array(runs)) = o.get_mut("runs") {
+        runs.retain_mut(|r| {
+            let (Some(s), Some(e)) = (r["start"].as_f64(), r["end"].as_f64()) else {
+                return true;
+            };
+            let (s, e) = (s - head, e - head);
+            r["start"] = seconds(s.max(0.0));
+            r["end"] = seconds(e.min(length));
+            e > near && s < length - near
+        });
+        if runs.is_empty() {
+            return Ok(None);
+        }
+    }
+    Ok(Some(v))
+}
+
+/// Keyframes, `{ keyframes, interpolation }`, from `head` seconds on and `length` long: those
+/// outside dropped, and a key at each edge a stretch goes through. Its value is where the
+/// stretch is there, linearly: on an eased stretch the cut part moves a little differently.
+/// Other values stay as they are.
+fn cut_keys(v: &mut Value, head: f64, length: f64, near: f64) {
+    let Some(o) = v.as_object_mut().filter(|o| o.contains_key("keyframes")) else {
+        return;
+    };
+    let step = o.get("interpolation").and_then(Value::as_str) == Some("step");
+    let Some(keys) = o["keyframes"].as_array().filter(|k| !k.is_empty()) else {
+        return;
+    };
+    let time = |k: &Value| k[0].as_f64().unwrap_or(0.0) - head;
+    // The value at a time of the part, and the easing of the stretch it is on.
+    let at = |t: f64| match keys.iter().position(|k| time(k) > t) {
+        None => (keys[keys.len() - 1][1].clone(), None),
+        Some(0) => (keys[0][1].clone(), None),
+        Some(i) => {
+            let (a, b) = (&keys[i - 1], &keys[i]);
+            let f = (t - time(a)) / (time(b) - time(a));
+            let value = match step {
+                true => a[1].clone(),
+                false => mix(&a[1], &b[1], f),
+            };
+            (value, a.get(2).cloned())
+        }
+    };
+    let mut out: Vec<Value> = Vec::new();
+    for k in keys {
+        let t = time(k);
+        if (-near..=length + near).contains(&t) {
+            let mut k = k.clone();
+            k[0] = seconds(t.clamp(0.0, length));
+            out.push(k);
+        }
+    }
+    if out
+        .first()
+        .is_none_or(|k| k[0].as_f64().unwrap_or(0.0) > near)
+    {
+        let (value, easing) = at(0.0);
+        out.insert(
+            0,
+            Value::Array([0.into(), value].into_iter().chain(easing).collect()),
+        );
+    }
+    let last = out[out.len() - 1][0].as_f64().unwrap_or(0.0);
+    if last < length - near && keys.iter().any(|k| time(k) > length + near) {
+        out.push(Value::Array(vec![seconds(length), at(length).0]));
+    }
+    // An easing is of the stretch leaving a key, so the last has none.
+    if let Some(Value::Array(k)) = out.last_mut() {
+        k.truncate(2);
+    }
+    o.insert("keyframes".into(), Value::Array(out));
+}
+
+/// `f` of the way from `a` to `b`: numbers, lists and objects of numbers; else `a`.
+fn mix(a: &Value, b: &Value, f: f64) -> Value {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => {
+            let (x, y) = (x.as_f64().unwrap_or(0.0), y.as_f64().unwrap_or(0.0));
+            seconds(x + (y - x) * f)
+        }
+        (Value::Array(x), Value::Array(y)) if x.len() == y.len() => {
+            Value::Array(x.iter().zip(y).map(|(x, y)| mix(x, y, f)).collect())
+        }
+        (Value::Object(x), Value::Object(y)) => Value::Object(
+            (x.iter())
+                .map(|(k, v)| (k.clone(), y.get(k).map_or(v.clone(), |w| mix(v, w, f))))
+                .collect(),
+        ),
+        _ => a.clone(),
+    }
+}
+
+/// An id from `id` that no clip has: `id-2`, `id-3`, …
+fn fresh(ids: &mut HashSet<String>, id: &str) -> String {
+    let base = &id[..id.len().min(58)];
+    let new = (2..)
+        .map(|n| format!("{base}-{n}"))
+        .find(|c| !ids.contains(c))
+        .unwrap();
+    ids.insert(new.clone());
+    new
 }
 
 /// The text of `root`, if it is a valid document.
@@ -1202,5 +1720,181 @@ mod tests {
         assert_eq!(clip.at, "tracks.visual[1].clips[0]");
         assert_eq!(clip.start.seconds(), 1.0);
         assert!(clip.named);
+    }
+
+    const TALK: &str = r#"{
+      "canvas": {"width":64,"height":36,"fps":30},
+      "resources": {"talk":"talk.mp4","music":"music.wav"},
+      "tracks": {
+        "visual": [{"id":"story","items":[
+          {"id":"talk","kind":"video","src":"talk","duration":10,"trimStart":2,
+           "opacity":{"keyframes":[[0,0],[2,1],[9,1,"ease-in"],[10,0]]}},
+          {"transition":"fade","inOffset":0.5,"outOffset":0.5},
+          {"id":"end","kind":"solid","color":"black","duration":2}
+        ]}],
+        "audio": [{"clips":[{"id":"music","src":"music","start":0,"duration":12}]}],
+        "caption": [{"clips":[
+          {"id":"one","start":{"clip":"talk","offset":1},"duration":3,"runs":[
+            {"text":"Hello ","start":0,"end":1},{"text":"um ","start":1,"end":2},
+            {"text":"world","start":2,"end":3}]},
+          {"id":"two","start":{"clip":"talk","offset":6},"duration":2,"text":"Later"}
+        ]}]
+      }
+    }"#;
+
+    fn clip_json<'a>(doc: &'a Value, id: &str) -> &'a Value {
+        for (_, list) in doc["tracks"].as_object().unwrap() {
+            for t in list.as_array().unwrap() {
+                let clips = t.get("items").or(t.get("clips")).unwrap();
+                if let Some(c) = clips.as_array().unwrap().iter().find(|c| c["id"] == id) {
+                    return c;
+                }
+            }
+        }
+        panic!("no clip {id}")
+    }
+
+    #[test]
+    fn splitting_cuts_a_clip_in_two_with_its_source_keys_and_followers() {
+        let edited = report(TALK, &json!({"op":"split","clip":"talk","at":4})).unwrap();
+        let doc = crate::parse(&edited.text).unwrap();
+        let (a, b) = (doc.clip("talk").unwrap(), doc.clip("talk-2").unwrap());
+        assert_eq!((a.start.seconds(), a.duration.seconds()), (0.0, 4.0));
+        assert_eq!((b.start.seconds(), b.duration.seconds()), (4.0, 6.0));
+        assert_eq!(doc.tracks[0].transitions.len(), 1);
+        assert_eq!(
+            doc.tracks[0].clips[doc.tracks[0].transitions[0].from].id,
+            "talk-2"
+        );
+        let root: Value = serde_json::from_str(&edited.text).unwrap();
+        let second = clip_json(&root, "talk-2");
+        assert_eq!(second["trimStart"], json!(6));
+        assert_eq!(
+            second["opacity"]["keyframes"],
+            json!([[0, 1], [5, 1, "ease-in"], [6, 0]])
+        );
+        assert_eq!(
+            clip_json(&root, "talk")["opacity"]["keyframes"],
+            json!([[0, 0], [2, 1], [4, 1]])
+        );
+        // A caption follows the part it starts on, at the same time.
+        assert_eq!(
+            clip_json(&root, "one")["start"],
+            json!({"clip":"talk","offset":1})
+        );
+        assert_eq!(
+            clip_json(&root, "two")["start"],
+            json!({"clip":"talk-2","offset":2})
+        );
+        assert_eq!(doc.clip("two").unwrap().start.seconds(), 6.0);
+        let added: Vec<_> = (edited.changes.iter())
+            .filter(|c| c["action"] == "added" && c["kind"] == "clip")
+            .collect();
+        assert_eq!(added.len(), 1, "{}", edited.summary());
+        assert_eq!(added[0]["after"]["id"], "talk-2");
+        for at in [0.0, 10.0, 11.0] {
+            let op = json!({"op":"split","clip":"talk","at":at});
+            assert!(
+                apply(TALK, &op)
+                    .unwrap_err()
+                    .contains("split it at a time between")
+            );
+        }
+        // A placed clip: the second part starts where it was cut.
+        let text = apply(TALK, &json!({"op":"split","clip":"music","at":3})).unwrap();
+        let doc = crate::parse(&text).unwrap();
+        assert_eq!(doc.clip("music-2").unwrap().start.seconds(), 3.0);
+        assert_eq!(doc.clip("music").unwrap().end().seconds(), 3.0);
+    }
+
+    #[test]
+    fn cutting_ranges_closes_up_the_track_and_what_hangs_on_it() {
+        let op = json!({"op":"cut-ranges","track":"story","ranges":[[2,3],[6.5,7.5],[2.5,3.2]]});
+        let text = apply(TALK, &op).unwrap();
+        let doc = crate::parse(&text).unwrap();
+        // 2–3.2 and 6.5–7.5 come out: 2.2 s.
+        let talk = doc.clip("talk").unwrap();
+        assert_eq!((talk.start.seconds(), talk.duration.seconds()), (0.0, 2.0));
+        let middle = doc.clip("talk-2").unwrap();
+        assert_eq!(middle.start.seconds(), 2.0);
+        assert!((middle.duration.seconds() - 3.3).abs() < 1e-9);
+        let last = doc.clip("talk-3").unwrap();
+        assert!((last.start.seconds() - 5.3).abs() < 1e-9);
+        assert!((doc.clip("end").unwrap().start.seconds() - 7.8).abs() < 1e-9);
+        assert_eq!(doc.tracks[0].transitions.len(), 1);
+        let root: Value = serde_json::from_str(&text).unwrap();
+        assert!((clip_json(&root, "talk-2")["trimStart"].as_f64().unwrap() - 5.2).abs() < 1e-9);
+        // The caption over the cut loses the word in it, in two parts.
+        let one = clip_json(&root, "one");
+        assert_eq!(one["runs"], json!([{"text":"Hello ","start":0,"end":1}]));
+        let rest = clip_json(&root, "one-2");
+        assert_eq!(rest["start"], json!({"clip":"talk-2","offset":0}));
+        assert!((rest["runs"][0]["end"].as_f64().unwrap() - 0.8).abs() < 1e-9);
+        assert_eq!(rest["runs"][0]["text"], "world");
+        // Placed on its own, the music stays.
+        assert_eq!(doc.clip("music").unwrap().duration.seconds(), 12.0);
+        // A range over a whole caption takes it out.
+        let op = json!({"op":"cut-ranges","track":"story","ranges":[[5,9]]});
+        let doc = crate::parse(&apply(TALK, &op).unwrap()).unwrap();
+        assert!(doc.clip("two").is_none());
+        for ranges in [json!([]), json!([[3, 2]]), json!([[-1, 2]]), json!([[1]])] {
+            let op = json!({"op":"cut-ranges","track":"story","ranges":ranges});
+            assert!(apply(TALK, &op).is_err(), "{ranges}");
+        }
+    }
+
+    #[test]
+    fn ripple_deleting_closes_up_placed_clips_and_their_followers() {
+        let text = json!({"canvas":{"width":64,"height":36,"fps":30},"tracks":{
+            "visual":[{"clips":[
+                {"id":"a","kind":"solid","color":"red","start":0,"duration":2},
+                {"id":"b","kind":"solid","color":"green","start":2,"duration":1},
+                {"id":"c","kind":"solid","color":"blue","start":4,"duration":1}
+            ]}],
+            "caption":[{"clips":[
+                {"id":"on-b","text":"b","start":{"clip":"b"},"duration":1},
+                {"id":"on-c","text":"c","start":{"clip":"c","offset":0.5},"duration":0.5}
+            ]}]
+        }})
+        .to_string();
+        let edited = report(&text, &json!({"op":"ripple-delete","clip":"b"})).unwrap();
+        let doc = crate::parse(&edited.text).unwrap();
+        assert!(doc.clip("b").is_none() && doc.clip("on-b").is_none());
+        assert_eq!(doc.clip("c").unwrap().start.seconds(), 3.0);
+        assert_eq!(doc.clip("on-c").unwrap().start.seconds(), 3.5);
+        let removed = (edited.changes.iter()).filter(|c| c["action"] == "removed");
+        assert_eq!(removed.count(), 2);
+        // In a sequence it is a delete.
+        let rippled = apply(LINKED, &json!({"op":"ripple-delete","clip":"b"})).unwrap();
+        let deleted = apply(LINKED, &json!({"op":"delete","clip":"b"})).unwrap();
+        assert_eq!(
+            crate::parse(&rippled).unwrap().duration,
+            crate::parse(&deleted).unwrap().duration
+        );
+    }
+
+    #[test]
+    fn inserting_pushes_the_track_and_its_followers_on() {
+        let clip = json!({"id":"new","kind":"solid","color":"white","duration":1.5});
+        let op = json!({"op":"insert","track":"story","at":4,"clip":clip});
+        let text = apply(TALK, &op).unwrap();
+        let doc = crate::parse(&text).unwrap();
+        assert_eq!(doc.clip("new").unwrap().start.seconds(), 4.0);
+        assert_eq!(doc.clip("talk").unwrap().end().seconds(), 4.0);
+        assert_eq!(doc.clip("talk-2").unwrap().start.seconds(), 5.5);
+        assert_eq!(doc.clip("end").unwrap().start.seconds(), 11.5);
+        assert_eq!(doc.clip("two").unwrap().start.seconds(), 7.5);
+        assert_eq!(doc.clip("one").unwrap().start.seconds(), 1.0);
+        // At the end of a sequence, after a gap; on placed clips, with a start.
+        let op = json!({"op":"insert","track":"story","at":14,"clip":clip});
+        let root: Value = serde_json::from_str(&apply(TALK, &op).unwrap()).unwrap();
+        assert_eq!(root["tracks"]["visual"][0]["items"][3], json!({"gap":2}));
+        let music = json!({"id":"sting","src":"music","duration":1});
+        let op = json!({"op":"insert","track":"tracks.audio[0]","at":12,"clip":music});
+        let doc = crate::parse(&apply(TALK, &op).unwrap()).unwrap();
+        assert_eq!(doc.clip("sting").unwrap().start.seconds(), 12.0);
+        let placed = json!({"id":"x","kind":"solid","color":"red","start":1,"duration":1});
+        let op = json!({"op":"insert","track":"story","at":1,"clip":placed});
+        assert!(apply(TALK, &op).unwrap_err().contains("no start"));
     }
 }

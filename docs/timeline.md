@@ -368,6 +368,27 @@ valle timeline edit edit.timeline.json --op '{"op":"set","track":"music","field"
 valle timeline edit --help    # every op and its rules
 ```
 
+These cut and close up, as an editor's blade and ripple tools do:
+
+| Op | What it does |
+| --- | --- |
+| `{"op":"split","clip":"shot","at":4}` | Cuts the clip in two at 4 s of the timeline; the second part is `shot-2` |
+| `{"op":"ripple-delete","clip":"shot"}` | Deletes the clip and moves the track's later clips back by its length |
+| `{"op":"insert","track":"story","at":4,"clip":{…}}` | Puts the clip, without a `start`, at 4 s; a clip there is split, later ones move on |
+| `{"op":"cut-ranges","track":"story","ranges":[[4.2,5.1],[9,9.6]]}` | Takes those spans out of the track's clips and closes up |
+
+A cut part's source starts further in, and its keyframes and caption runs are cut where it
+is. Clips anchored to the track's clips, such as captions, sounds and titles, are cut and
+moved with them, and anchor to the part they start on; a caption with no word left is
+removed. Other clips stay where they are. A sequence is written again, with gaps where it is
+empty; a transition stays where its two clips still meet and are long enough for it. A clip
+with a `timeMap` is not cut: cut its map by hand.
+
+To take out the pauses in a talk, give `cut-ranges` the `silences` that
+`valle media inspect` finds, as clip times: `trimStart` to `trimStart + duration × rate` of the
+file is the clip, and a time `t` in the file is `start + (t − trimStart) / rate` on the
+timeline. Leave about 0.1 s of each pause at both sides, so the words do not run together.
+
 The result lists changed clips with their start and end times in seconds, plus removed
 transitions and clips deleted through anchors. With `--json`, `changes` contains `kind`
 (`clip`, `transition` or `track`), `action` (`added`, `updated`, `removed`), and `before`/`after`
