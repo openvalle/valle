@@ -493,11 +493,10 @@ impl<'a> Drawing<'a> {
             || s.isolate
             || matches!(c.element, Element::Svg { .. }) && needs_isolation(&items)
         {
-            items = vec![Item::Group {
-                opacity: s.opacity as f32,
-                blend: s.blend,
-                items,
-            }];
+            // One shape in one color takes the opacity into its color, with no layer.
+            items = super::group(s.opacity as f32, s.blend, items)
+                .into_iter()
+                .collect();
         }
         match local {
             Some(matrix) => out.push(Item::Transform { matrix, items }),

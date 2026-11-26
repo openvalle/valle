@@ -2132,7 +2132,9 @@ impl<'a> Renderer<'a> {
             .get(face as usize)
             .ok_or("engine bug: a glyph names a face that is not there")?;
         // Where it paints in the text's color, the color opaque, in 8 bits.
-        let foreground = [0, 1, 2].map(|c| (color[c].clamp(0.0, 1.0) * 255.0).round() as u8);
+        // The text's color is premultiplied; its opacity is applied when the image is drawn.
+        let a = if color[3] > 0.0 { color[3] } else { 1.0 };
+        let foreground = [0, 1, 2].map(|c| ((color[c] / a).clamp(0.0, 1.0) * 255.0).round() as u8);
         let key = (face, id, ppem.to_bits(), foreground);
         self.used.insert(key);
         let raster =

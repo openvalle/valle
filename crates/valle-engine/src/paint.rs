@@ -2477,37 +2477,21 @@ fn overlap(a: Rect, b: Rect) -> Option<Rect> {
     })
 }
 
-/// `items` as one layer at `opacity`, blended by `blend`. Unblended, a layer of one rectangle or
-/// ring is it at the opacity; and a layer of one unblended layer is that layer at both
-/// opacities.
-fn group(opacity: f32, blend: Blend, items: Vec<Item>) -> Option<Item> {
+/// `items` as one layer at `opacity`, blended by `blend`. Unblended, a layer of one shape in one
+/// color is it at the opacity (see `faded`); and a layer of one unblended layer is that layer at
+/// both opacities.
+fn group(opacity: f32, blend: Blend, mut items: Vec<Item>) -> Option<Item> {
     if opacity <= 0.0 || items.is_empty() {
         return None;
     }
     let normal = blend == Blend::Normal;
+    if let [item] = items.as_mut_slice()
+        && normal
+        && faded(item, opacity)
+    {
+        return items.pop();
+    }
     Some(match <[Item; 1]>::try_from(items) {
-        Ok([Item::Rect { rect, radii, color }]) if normal => Item::Rect {
-            rect,
-            radii,
-            color: color.map(|c| c * opacity),
-        },
-        Ok(
-            [
-                Item::Ring {
-                    rect,
-                    radii,
-                    inner,
-                    inner_radii,
-                    colors,
-                },
-            ],
-        ) if normal => Item::Ring {
-            rect,
-            radii,
-            inner,
-            inner_radii,
-            colors: colors.map(|c| c.map(|v| v * opacity)),
-        },
         Ok(
             [
                 Item::Group {
@@ -2532,6 +2516,21 @@ fn group(opacity: f32, blend: Blend, items: Vec<Item>) -> Option<Item> {
             items,
         },
     })
+}
+
+/// Takes `opacity` into `item`'s color, if it covers each px once in one color: a rectangle,
+/// a ring, a filled path or a single glyph, as transformed as it may be. Otherwise it needs a
+/// layer of its own, and is left as it was.
+fn faded(item: &mut Item, opacity: f32) -> bool {
+    let fade = |color: &mut [f32; 4]| *color = color.map(|c| c * opacity);
+    match item {
+        Item::Rect { color, .. } | Item::Path { color, .. } => fade(color),
+        Item::Glyphs { color, glyphs, .. } if glyphs.len() == 1 => fade(color),
+        Item::Ring { colors, .. } => colors.iter_mut().for_each(fade),
+        Item::Transform { items, .. } if items.len() == 1 => return faded(&mut items[0], opacity),
+        _ => return false,
+    }
+    true
 }
 
 /// Removing a group boundary changes which image a descendant backdrop reads.
@@ -2602,6 +2601,43 @@ mod tests {
                 opacity: 0.25,
                 blend: Blend::Normal,
                 items: Vec::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn opacity_of_one_shape_in_one_color_goes_into_its_color() {
+        let path = |color| Item::Path {
+            path: crate::svg::ellipse([0.0; 2], [1.0; 2]).unwrap(),
+            even_odd: false,
+            color,
+        };
+        let moved = |items| Item::Transform {
+            matrix: Matrix::affine([2.0, 0.0, 0.0, 2.0, 5.0, 5.0]),
+            items,
+        };
+        let red = [1.0, 0.0, 0.0, 1.0];
+        let faded = [0.5, 0.0, 0.0, 0.5];
+        assert_eq!(
+            group(0.5, Blend::Normal, vec![moved(vec![path(red)])]),
+            Some(moved(vec![path(faded)]))
+        );
+        // Two shapes may overlap, and a blend reads what is under it: both keep their layer.
+        let two = vec![path(red), path(red)];
+        assert_eq!(
+            group(0.5, Blend::Normal, two.clone()),
+            Some(Item::Group {
+                opacity: 0.5,
+                blend: Blend::Normal,
+                items: two,
+            })
+        );
+        assert_eq!(
+            group(0.5, Blend::Multiply, vec![path(red)]),
+            Some(Item::Group {
+                opacity: 0.5,
+                blend: Blend::Multiply,
+                items: vec![path(red)],
             })
         );
     }
