@@ -261,6 +261,9 @@ fn filtered(v: Out) -> vec4f {
   var result = x;
   switch (op) {
     case 0u: { return a; }
+    // Into the primitive's color space for a blur of the CSS kind, and out of it after.
+    case 16u: { return x; }
+    case 17u: { return output(a, linear); }
     case 1u: { return vec4f(0.0, 0.0, 0.0, a.a); }
     case 2u: { return vec4f(h[2].rgb * h[2].a, h[2].a); }
     case 3u: { return sample_at(first, v.pos.xy - h[2].xy); }

@@ -1,6 +1,6 @@
 //! SVG filter graphs share intermediate GPU targets and release them after their last reader.
 use super::Step;
-use super::plan::{Plan, Reach};
+use super::plan::{Plan, Reach, shrinks};
 use crate::layout::Rect;
 use crate::paint::Matrix;
 use crate::svg::filter::{Graph, Operation, SOURCES, Transfer};
@@ -88,6 +88,36 @@ impl Plan {
             );
         }
         layer
+    }
+
+    /// A Gaussian blur of `amounts` user units along x and y. A large one the same both ways
+    /// in target px goes through a smaller copy, as a CSS blur does, in the primitive's color
+    /// space: what is past the frame's edge is its edge px rather than transparent.
+    fn graph_blur(
+        &mut self,
+        layer: usize,
+        amounts: [f64; 2],
+        pass: Pass,
+        filter_region: [f64; 4],
+    ) -> usize {
+        let [x, y, _] = pass.matrix.0;
+        let sigma = (amounts[0] * x[0].abs()) as f32;
+        let aligned = x[1] == 0.0 && y[0] == 0.0;
+        if !aligned || sigma != (amounts[1] * y[1].abs()) as f32 || !shrinks(sigma) {
+            return self.graph_kernel(layer, (8, false), amounts, pass, filter_region);
+        }
+        let into = Pass {
+            region: filter_region,
+            ..pass
+        };
+        let working = self.graph_pass([layer; 2], 16, into, &[], &[]);
+        let mut reach = self.bound(working);
+        let first = self.targets;
+        let blurred = self.blurred(working, sigma, None, &mut reach);
+        for t in first..self.targets {
+            self.bounds[t] = reach;
+        }
+        self.graph_pass([blurred; 2], 17, pass, &[], &[])
     }
 
     pub(super) fn svg_filter(
@@ -411,9 +441,8 @@ impl Plan {
                     &[],
                     &transfers(&n.transfer),
                 ),
-                Operation::Blur(v) => self.graph_kernel(
+                Operation::Blur(v) => self.graph_blur(
                     a,
-                    (8, false),
                     [v[0] * units[0], v[1] * units[1]],
                     Pass {
                         linear,
@@ -889,6 +918,78 @@ mod tests {
         let mut both = node(op, &[SOURCES, SOURCES + 1]);
         both.linear = false;
         vec![flood(a), flood(b), both]
+    }
+
+    #[test]
+    fn filter_graph_large_blur_through_a_smaller_copy_matches_the_kernel() {
+        if !std::env::var("VALLE_TEST_LAYERS")
+            .unwrap_or_default()
+            .split(',')
+            .any(|v| v == "gpu")
+        {
+            return;
+        }
+        let gpu = valle_native::gpu::adapter(None)
+            .and_then(|a| Gpu::with(a.adapter))
+            .unwrap();
+        let mut renderer = Renderer::new(&gpu, 160, 160);
+        let source = Item::Rect {
+            rect: rect([60., 60., 40., 40.]),
+            radii: [[0.; 2]; 4],
+            color: work([1., 0.25, 0., 1.]),
+        };
+        let mut blur = |sigma: [f64; 2], linear| {
+            let mut n = node(Operation::Blur(sigma), &[0]);
+            n.linear = linear;
+            let Item::FilterGraph {
+                graph,
+                images,
+                items,
+                ..
+            } = graph(vec![n], vec![source.clone()])
+            else {
+                unreachable!()
+            };
+            let mut graph = (*graph).clone();
+            graph.definition.region = [0., 0., 160., 160.].map(|units| Length {
+                units,
+                percent: 0.,
+                em: 0.,
+            });
+            let item = Item::FilterGraph {
+                graph: Rc::new(graph),
+                images,
+                bbox: [0., 0., 160., 160.],
+                viewport: [160., 160.],
+                items,
+            };
+            renderer.render(&[item], &[], &[], &[]).unwrap()
+        };
+        // 16 px each way goes through the copy; a hair more along y keeps the kernel.
+        assert!(shrinks(16.));
+        for linear in [false, true] {
+            let copy = blur([16.; 2], linear);
+            let kernel = blur([16., 16.0001], linear);
+            // Straight colors of a px nearly clear say little: compare them premultiplied.
+            let premultiplied = |p: &[u8]| {
+                p.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .flat_map(|c| {
+                        let a = u32::from(c[3]);
+                        [0, 1, 2]
+                            .map(|k| (u32::from(c[k]) * a / 255) as u8)
+                            .into_iter()
+                            .chain([c[3]])
+                    })
+                    .collect::<Vec<u8>>()
+            };
+            let (copy, kernel) = (premultiplied(&copy), premultiplied(&kernel));
+            let worst = (copy.iter().zip(&kernel))
+                .map(|(a, b)| a.abs_diff(*b))
+                .max();
+            assert!(worst <= Some(2), "linear {linear}: off by {worst:?}");
+        }
     }
 
     #[test]

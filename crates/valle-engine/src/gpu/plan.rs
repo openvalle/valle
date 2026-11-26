@@ -126,6 +126,27 @@ struct Smaller {
     sigma: [f32; 2],
 }
 
+/// The variance left for a smaller copy of blocks `b` px across to blur by, in its px², for a
+/// blur of `sigma` px: averaging the blocks and drawing them back linearly blur by
+/// (3 b² − 1) / 12 px² between them.
+fn within(sigma: f32, b: f32) -> f32 {
+    (sigma * sigma - (3.0 * b * b - 1.0).max(0.0) / 12.0).max(0.0) / (b * b)
+}
+
+/// How many px across the blocks of a smaller copy are for a blur of `sigma` px, 1 for no copy.
+fn block(sigma: f32) -> u32 {
+    let mut by = 1;
+    while by < MOST && within(sigma, (2 * by) as f32) >= LEAST * LEAST {
+        by *= 2;
+    }
+    by
+}
+
+/// Whether a blur of `sigma` px goes through a smaller copy.
+pub(super) fn shrinks(sigma: f32) -> bool {
+    block(sigma) > 1
+}
+
 impl Smaller {
     /// The copy for a blur of `sigma` px drawn within `clip` on a target of `size`, if the blur
     /// is large enough for one. Within `bounds`, its px divide them evenly, so that it mirrors
@@ -133,14 +154,8 @@ impl Smaller {
     /// back from, and those its blur reaches from them: a block past the target's edge is its
     /// edge px, as every block after it is, so the copy ends there.
     fn of(sigma: f32, clip: [f32; 4], bounds: Option<[f32; 4]>, size: [u32; 2]) -> Option<Smaller> {
-        // Averaging blocks `b` px across and drawing them back linearly blur by
-        // (3 b² − 1) / 12 px² between them; the copy's own blur is the rest, in its px.
-        let within =
-            |b: f32| (sigma * sigma - (3.0 * b * b - 1.0).max(0.0) / 12.0).max(0.0) / (b * b);
-        let mut by = 1;
-        while by < MOST && within((2 * by) as f32) >= LEAST * LEAST {
-            by *= 2;
-        }
+        let within = |b: f32| within(sigma, b);
+        let by = block(sigma);
         if by == 1 {
             return None;
         }
