@@ -43,6 +43,9 @@ mod plan;
 mod video;
 use plan::{Plan, Reach, Seen, Under};
 
+/// Layers in a frame past which a GPU that gives up on it likely gave up for them.
+const MANY_LAYERS: usize = 256;
+
 const WORK: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 const OUTPUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -656,6 +659,8 @@ pub struct Renderer<'a> {
     /// Layer textures: all of them, and the free ones.
     pool: Vec<Surface>,
     free: Vec<usize>,
+    /// How many layers the last frame drew in, the frame itself among them.
+    targets: usize,
     /// The pipelines of the shaders authors wrote, and the layouts of their own bindings, by
     /// program.
     programs: HashMap<u64, (wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
@@ -740,6 +745,7 @@ impl<'a> Renderer<'a> {
             shown: Vec::new(),
             pool: Vec::new(),
             free: Vec::new(),
+            targets: 0,
             programs: HashMap::new(),
         }
     }
@@ -877,7 +883,7 @@ impl<'a> Renderer<'a> {
         mapped
             .recv()
             .map_err(|e| format!("engine bug: readback: {e}"))?
-            .map_err(|e| format!("GPU readback: {e}"))?;
+            .map_err(|e| dropped(e, self.targets))?;
         self.pixels()
     }
 
@@ -1114,6 +1120,7 @@ impl<'a> Renderer<'a> {
             self.plan(items, 0, at, faces, &mut plan, &mut atlas)?;
         }
         let gpu = self.gpu;
+        self.targets = plan.targets;
         drop(planning);
         let uploading = crate::perf::span("draw.upload");
         let device = &gpu.device;
@@ -2538,6 +2545,22 @@ struct Kept {
 /// fills by even-odd.
 type Grid = ([usize; 2], u32, bool);
 
+/// What a readback that failed with `e` says of a frame drawn in `targets` layers: the GPU gave
+/// up on the frame. A frame of many layers is the likely cause, and what makes them is what to
+/// change.
+fn dropped(e: impl std::fmt::Display, targets: usize) -> Error {
+    let mut message = format!("GPU readback: {e}: the GPU gave up on the frame");
+    if targets > MANY_LAYERS {
+        message += &format!(
+            ", which draws in {targets} layers. An element with opacity that is more than one \
+             shape (a fill and a stroke, or a group), a blend, a filter, a mask or a clip draws \
+             in a layer of its own: use fillOpacity and strokeOpacity in place of opacity, or \
+             fewer of these"
+        );
+    }
+    message
+}
+
 /// A free texture from the pool of layer textures, or a new one.
 fn take(gpu: &Gpu, pool: &mut Vec<Surface>, free: &mut Vec<usize>, size: [u32; 2]) -> usize {
     free.pop().unwrap_or_else(|| {
@@ -2614,6 +2637,16 @@ fn extend(runs: &mut Vec<Run>, next: Run) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_readback_of_many_layers_says_what_makes_them() {
+        let few = dropped("lost", 3);
+        assert_eq!(few, "GPU readback: lost: the GPU gave up on the frame");
+        let many = dropped("lost", 1402);
+        assert!(many.starts_with(&few), "{many}");
+        assert!(many.contains("1402 layers"), "{many}");
+        assert!(many.contains("fillOpacity"), "{many}");
+    }
 
     #[test]
     fn cached_paths_match_fresh_pixels_across_scale_and_fill_changes() {
