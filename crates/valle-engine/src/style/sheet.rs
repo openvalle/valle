@@ -146,9 +146,20 @@ impl Geometry {
         let shape = self.template.as_ref()
             .filter(|g| !g.parts.iter().any(|p| matches!(p, Part::Expr(e) if frame.late.is_some_and(|late| late[*e as usize]))))
             .map(|g| g.resolve(frame.values));
+        let each_frame = (self.attributes.iter()).any(|(_, p)| matches!(p, Prop::Expr(_)));
         let c = svg::computed(self.tag, &list, shape)
-            .map_err(|e| format!("<{}> {e}", self.tag.name()))?;
+            .map_err(|e| format!("<{}> {}", self.tag.name(), per_frame(e, each_frame)))?;
         Ok(Rc::new(c))
+    }
+}
+
+/// `e`, refusing a value of a frame, which with `each_frame` is worked out each frame. Such a
+/// value that is negative most likely comes from an easing that overshoots, which a clamp keeps
+/// at 0.
+pub(crate) fn per_frame(e: String, each_frame: bool) -> String {
+    match each_frame && e.ends_with("is negative") {
+        true => format!("{e}; if it overshoots as it eases, keep it from 0 with Math.max(0, …)"),
+        false => e,
     }
 }
 
@@ -449,8 +460,15 @@ impl Sheet {
                     Prop::Const(v) => v,
                     Prop::Expr(e) => &frame.values[*e as usize],
                 };
-                super::cascade::apply(&mut d, *field, &presented(v, *attribute), parent)
-                    .map_err(|e| format!("{}: {what}: {e}", b.place))?;
+                super::cascade::apply(&mut d, *field, &presented(v, *attribute), parent).map_err(
+                    |e| {
+                        format!(
+                            "{}: {what}: {}",
+                            b.place,
+                            per_frame(e, matches!(prop, Prop::Expr(_)))
+                        )
+                    },
+                )?;
             }
             Cow::Owned(d)
         };
@@ -476,7 +494,13 @@ impl Sheet {
                         Prop::Expr(e) => &frame.values[*e as usize],
                     };
                     super::cascade::apply(&mut d, field[axis], &presented(v, *attribute), parent)
-                        .map_err(|e| format!("{}: {what}: {e}", b.place))?;
+                        .map_err(|e| {
+                        format!(
+                            "{}: {what}: {}",
+                            b.place,
+                            per_frame(e, matches!(prop, Prop::Expr(_)))
+                        )
+                    })?;
                 }
                 Cow::Owned(d)
             } else {
@@ -1154,6 +1178,20 @@ mod tests {
     use crate::testing::styles::{
         CANVAS, auto_px, error, num, one, px, resources, sheet, styles, text, view,
     };
+
+    #[test]
+    fn a_negative_value_worked_out_each_frame_says_to_clamp_it() {
+        let negative = "-2 is negative".to_string();
+        assert_eq!(per_frame(negative.clone(), false), negative);
+        let hinted = per_frame(negative.clone(), true);
+        assert!(hinted.starts_with(&negative), "{hinted}");
+        assert!(hinted.contains("Math.max(0, …)"), "{hinted}");
+        let other = "red is not a length".to_string();
+        assert_eq!(per_frame(other.clone(), true), other);
+        // A constant written negative is a mistake, not an overshoot.
+        let e = error(&[("padding", num(-1.0))]);
+        assert!(e.ends_with("style padding: -1 is negative"), "{e}");
+    }
 
     #[test]
     fn paint_order_inherits_completes_omitted_parts_and_rejects_duplicates() {

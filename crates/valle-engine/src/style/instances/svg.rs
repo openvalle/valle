@@ -197,7 +197,10 @@ impl Table {
                 {
                     computed
                         .set(name, &local[*e as usize], &mut scratch)
-                        .map_err(|e| format!("{}: attribute {name}: {e}", self.place))?;
+                        .map_err(|e| {
+                            let e = crate::style::sheet::per_frame(e, true);
+                            format!("{}: attribute {name}: {e}", self.place)
+                        })?;
                 }
             }
             if computed.inherit_opacity {
