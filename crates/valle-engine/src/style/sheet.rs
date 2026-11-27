@@ -941,8 +941,16 @@ fn bind(
             && !field.textual()
             && !field.inline_box()
         {
+            // What a unit of a split text takes, it could take that way.
+            let instead = match field.on_units() {
+                true => {
+                    "; to fade, move or filter part of a text, split the Text and style its units \
+                     with perUnit, or fade a Span with a color's alpha"
+                }
+                false => "",
+            };
             return Err(format!(
-                "{place}: {what}: a <Span> is part of a text, not a box, so it takes text properties, background, padding and border"
+                "{place}: {what}: a <Span> is part of a text, not a box, so it takes text properties, background, padding and border{instead}"
             ));
         }
         if tag.is_some_and(|t| t != Tag::Svg)
@@ -1411,6 +1419,13 @@ mod tests {
                 .unwrap_err()
                 .contains("a unit of a split text")
         );
+        tree[1] = span(&[("opacity", num(0.5))]);
+        let e = styles(tree.clone(), &[]).unwrap_err();
+        assert!(
+            e.contains("style opacity: a <Span> is part of a text"),
+            "{e}"
+        );
+        assert!(e.contains("perUnit"), "{e}");
         tree[1] = span(&[("width", num(1.0))]);
         let e = styles(tree, &[]).unwrap_err();
         assert!(
